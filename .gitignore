@@ -1,0 +1,28 @@
+# Local secrets and machine-specific configuration
+*.env
+.env
+.env.*
+!.env.example
+config/local*.toml
+config/*.local.toml
+config/*.secrets.toml
+
+# Runtime memory generated during local tests
+memory/sessions/*
+memory/archive/*
+memory/core/*
+!memory/sessions/README.md
+!memory/archive/README.md
+!memory/core/README.md
+
+# Common build/cache output
+target/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
