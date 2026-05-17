@@ -7,6 +7,7 @@
 pub mod archive;
 pub mod config;
 pub mod core_store;
+pub mod engine;
 pub mod error;
 pub mod event;
 pub mod file_storage;
@@ -19,5 +20,6 @@ pub mod storage;
 pub mod tasks;
 pub mod types;
 
+pub use engine::{EngineOptions, EventScoringConfig, MemoryEngine};
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;

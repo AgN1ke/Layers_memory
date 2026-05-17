@@ -2,7 +2,7 @@
 
 Memory Engine is planned as a separate Rust-based memory core for reusable long-term memory.
 
-The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current work is still in the preparation stage: repository structure, rules, configuration boundaries, prompt governance, and memory layout.
+The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current work has moved from preparation into the first Rust MVP slice: typed contracts, storage boundaries, and the initial `MemoryEngine::ingest()` facade.
 
 ## Main Documents
 
@@ -16,8 +16,8 @@ The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current
 ## Current Structure
 
 - `docs/` - strategy and research notes.
-- `src/` - Rust crate source layout and contract types.
-- `tests/` - serialization and contract-level tests.
+- `src/` - Rust crate source layout, contract types, storage, and the first `MemoryEngine` facade.
+- `tests/` - serialization, contract-level, and engine ingest tests.
 - `config/` - configuration examples and local configuration rules.
 - `prompts/` - prompt files when they actually exist.
 - `memory/` - local runtime memory layout for sessions, archive, and core.

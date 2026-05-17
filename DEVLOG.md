@@ -852,3 +852,86 @@ Contribution terms спеціально широкі, бо якщо власни
 
 **Наступні кроки:**
 Закомітити `docs/local-development.md`, `README.md` і цей запис у внутрішній `main`. `github-code` не оновлювати, бо зміна стосується внутрішньої документації.
+
+### Запис 18
+
+**Час:** 2026-05-17 22:15:15 +03:00
+
+**Проблематика:**
+Після контрактів, storage і локального середовища в коді ще не було людського публічного входу в бібліотеку. Щоб користувач або адаптер не складав `StoredEvent` руками, ядру потрібен facade `MemoryEngine`, який приймає `IngestEvent`, сам генерує `event_id`, ставить `received_at`, рахує базову вагу і записує подію через storage.
+
+**Задум:**
+Зробити вузький наступний крок за MVP-планом: закрити прийом події і запис у файлову сесію. Не чіпати sleep-stage-2, LLM, провайдерів, моделі або промпти, бо промпт має зʼявлятися тільки разом із реальною функцією, яка його виконує.
+
+**Що робили:**
+Додано новий модуль `src/engine.rs`.
+
+Оновлено `src/lib.rs`, щоб публічно експортувати:
+
+- `MemoryEngine`;
+- `EngineOptions`;
+- `EventScoringConfig`.
+
+Оновлено `src/README.md`, щоб у структурі модулів було видно `engine.rs`.
+
+Додано залежність `time` для коректного UTC RFC3339 timestamp у `received_at`.
+
+Додано інтеграційні тести `tests/engine_ingest.rs`.
+
+**Що зроблено:**
+`MemoryEngine<S: Storage>` тепер має:
+
+- `new(storage)`;
+- `with_options(storage, options)`;
+- `storage()`;
+- `storage_mut()`;
+- `into_storage()`;
+- `ingest(event)`;
+- `pending_tasks()`.
+
+`ingest()`:
+
+- перевіряє `schema_version == event.v1`;
+- перевіряє, що `type`, `source`, `timestamp` і `session_id` не порожні;
+- генерує `event_id`;
+- генерує `received_at` у RFC3339 UTC;
+- рахує deterministic `initial_weight`;
+- формує `weight_reason` для людського/debug аудиту;
+- записує `StoredEvent` у `memory/sessions/<session_id>/events.jsonl` через `Storage`.
+
+`EventScoringConfig` винесено в окрему структуру з налаштовуваними полями:
+
+- `base_weight`;
+- `tag_bonus`;
+- `theme_bonus`;
+- `link_bonus`;
+- `medium_floor`;
+- `high_floor`;
+- `critical_floor`.
+
+Це зберігає принцип: ваги і поведінка не заховані випадково в коді виклику, а мають видиму структуру налаштування.
+
+Тести перевіряють:
+
+- `MemoryEngine::ingest()` реально створює файли сесії;
+- `session.json` оновлюється;
+- `events.jsonl` отримує `StoredEvent`;
+- `session.md` містить людський перегляд події;
+- неправильна версія схеми відхиляється помилкою.
+
+**Проблеми чи виклики:**
+Для timestamp потрібен коректний RFC3339 UTC. Використано crate `time`, щоб не писати формат часу вручну.
+
+Sleep і recall навмисно не реалізовано в цьому кроці. Наступним логічним кроком буде sleep-stage-1: алгоритмічний preliminary `ArchiveEntry` і `PendingTask` `sleep_compression`. Саме там уже треба буде уважно вирішити питання `prompts/sleep_compression.md`, бо поява реальної LLM-задачі означатиме появу реального prompt-файлу.
+
+**Фідбек користувача:**
+Користувач попросив робити наступне за планом.
+
+**Перевірки:**
+
+- `cargo fmt --check` проходить;
+- `cargo test` проходить: 8 тестів успішні;
+- `cargo clippy --all-targets -- -D warnings` проходить.
+
+**Наступні кроки:**
+Закомітити зміни в `main`, потім оновити `github-code` кодовими файлами, тестами і `Cargo.lock`. Внутрішні `DEVLOG.md` і `HISTORY.md` у GitHub code-only гілку не додавати.
