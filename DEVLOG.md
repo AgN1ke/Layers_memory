@@ -445,3 +445,69 @@ Line endings нормалізуються через `.gitattributes`: Rust, Mar
 
 **Наступні кроки:**
 Зробити initial commit і після нього перевірити `git status --short --branch`. Після цього повернутися до технічного плану: `cargo fmt` / `cargo test` у Rust-середовищі, потім `MemoryEngine` facade.
+
+### Запис 9
+
+**Час:** 2026-05-17 21:29:18 +03:00
+
+**Проблематика:**
+Користувач уточнив, що хоче пушити проєкт на GitHub, але на GitHub не мають потрапити внутрішні docs-файли. Поточна локальна гілка `main` уже містить `docs/`, `DEVLOG.md`, `HISTORY.md`, `memory/`, `prompts/`, `config/` і дослідницькі матеріали в initial commit. Якщо пушити `main`, документація потрапить не тільки в робоче дерево GitHub, а й в історію.
+
+**Задум:**
+Не переписувати локальний `main`, бо він потрібний як повний внутрішній робочий репозиторій. Замість цього створити окрему publish-гілку без батьківської історії, яка містить тільки кодовий набір файлів і яку можна пушити на GitHub як `main`.
+
+**Що робили:**
+Через Git plumbing створено orphan commit для гілки `github-code`.
+
+У цей commit додано тільки:
+
+- `.gitattributes`;
+- `.gitignore`;
+- `Cargo.toml`;
+- `src/`;
+- `tests/`.
+
+Не додано:
+
+- `docs/`;
+- `DEVLOG.md`;
+- `HISTORY.md`;
+- `README.md`;
+- `config/`;
+- `memory/`;
+- `prompts/`.
+
+**Що зроблено:**
+Створено гілку:
+
+```text
+github-code -> f88b2b0 Initial code-only Memory Engine crate
+```
+
+Перевірка `git ls-tree -r --name-only github-code` показала, що в гілці є тільки кодовий набір файлів:
+
+- `.gitattributes`;
+- `.gitignore`;
+- `Cargo.toml`;
+- `src/...`;
+- `tests/contracts_serialization.rs`.
+
+Поточна робоча гілка лишається `main`, тобто внутрішні документи не видалені локально.
+
+**Проблеми чи виклики:**
+`gh` CLI не встановлений, а GitHub remote ще не заданий. Тому пуш на GitHub потребує URL існуючого репозиторію або окремого створення репозиторію на GitHub.
+
+Перший plumbing-виклик для `git commit-tree` був помилковий: tree SHA було передано не як аргумент. Це не змінило `main`. Другий виклик створив правильний orphan commit.
+
+**Фідбек користувача:**
+Користувач прямо задав нову вимогу: на GitHub має потрапляти тільки код, без наших docs-файлів.
+
+**Наступні кроки:**
+Отримати GitHub repository URL. Після цього:
+
+```bash
+git remote add origin <repo-url>
+git push -u origin github-code:main
+```
+
+Саме `github-code:main`, а не `main:main`, щоб на GitHub не потрапили docs і їхня історія.
