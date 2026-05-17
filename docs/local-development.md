@@ -128,6 +128,39 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+## Як Запустити Живий Термінал Памʼяті
+
+Інтерактивний runner:
+
+```powershell
+$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+cargo run --bin memory_terminal -- memory
+```
+
+Якщо термінал некоректно показує кирилицю, перед запуском увімкнути UTF-8:
+
+```powershell
+chcp 65001
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+cargo run --bin memory_terminal -- memory
+```
+
+Команди всередині runner:
+
+```text
+/help              показати команди
+/where             показати активну теку памʼяті і сесію
+/session <id>      перемкнути активну сесію
+/sleep             стиснути поточну сесію в preliminary archive memory
+/recall <text>     пошукати archive memory
+/tasks             показати pending LLM tasks
+/exit              вийти
+```
+
+Plain text без `/` записується як `IngestEvent` у поточну сесію.
+
 ## Поточний Очікуваний Результат
 
 На момент запису цього документа локальний цикл проходить:

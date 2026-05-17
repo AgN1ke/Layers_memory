@@ -17,6 +17,10 @@ When a prompt is added, document it here in human language:
 
 ## Current Prompts
 
-No prompts exist yet.
+### `sleep_compression.md`
 
-When the first LLM-backed feature is implemented, add the prompt file here and update this README.
+Used after `MemoryEngine::sleep(session_id)` creates a preliminary archive entry and a `PendingTask` with `prompt_id: "sleep_compression"`.
+
+Human purpose: turn selected session events into one durable memory item with a short gist, narrative, facts, quotes, tags, theme, and weight.
+
+The Rust core does not execute this prompt. The host or adapter reads the prompt file, chooses the provider/model from host configuration, executes the LLM call, and returns `sleep_compression_result.v1` to the engine.

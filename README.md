@@ -42,6 +42,12 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+Run the local memory terminal:
+
+```powershell
+cargo run --bin memory_terminal -- memory
+```
+
 ## Working Rules
 
 - The Rust core must not hardcode LLM providers, model names, or API keys.
