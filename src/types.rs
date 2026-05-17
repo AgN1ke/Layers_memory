@@ -30,33 +30,23 @@ pub struct TimeRange {
     pub end: Timestamp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportanceHint {
     Low,
+    #[default]
     Normal,
     Medium,
     High,
     Critical,
 }
 
-impl Default for ImportanceHint {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessingMode {
     Immediate,
+    #[default]
     DeferToSleep,
-}
-
-impl Default for ProcessingMode {
-    fn default() -> Self {
-        Self::DeferToSleep
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
