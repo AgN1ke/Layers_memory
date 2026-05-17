@@ -50,7 +50,7 @@ pub struct ArchiveEntry {
     pub embedding: Option<Vec<f64>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ArchiveFilters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_range: Option<TimeRange>,

@@ -22,7 +22,7 @@ pub struct RecallQuery {
     pub explain: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RecallFilters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_range: Option<TimeRange>,

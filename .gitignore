@@ -11,9 +11,14 @@ config/*.secrets.toml
 memory/sessions/*
 memory/archive/*
 memory/core/*
+memory/tasks/*
+memory/journal/*
+memory/manifest.json
 !memory/sessions/README.md
 !memory/archive/README.md
 !memory/core/README.md
+!memory/tasks/README.md
+!memory/journal/README.md
 
 # Common build/cache output
 target/

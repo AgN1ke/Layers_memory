@@ -20,6 +20,9 @@ pub mod storage;
 pub mod tasks;
 pub mod types;
 
-pub use engine::{EngineOptions, EventScoringConfig, MemoryEngine};
+pub use engine::{
+    EngineOptions, EventScoringConfig, MemoryEngine, RecallStage1Config, SleepStage1Config,
+    SleepStage1Result,
+};
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;
