@@ -9,6 +9,8 @@ The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current
 - [`docs/strategy.md`](docs/strategy.md) - strategic intent, product boundaries, and human-control principles.
 - [`docs/architecture.md`](docs/architecture.md) - architecture v0.1: terminology, data flows, storage, PendingTask, recall, sleep, adapters, and MVP scope.
 - [`docs/contracts.md`](docs/contracts.md) - data contracts v0.1: JSON/JSONL shapes for events, sessions, archive, core, recall, tasks, manifest, and journal.
+- [`docs/licensing.md`](docs/licensing.md) - Memory Engine non-commercial public license.
+- [`LICENSE.md`](LICENSE.md) - root license file for GitHub publication.
 
 ## Current Structure
 
