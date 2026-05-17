@@ -7,6 +7,7 @@
 ## Модулі
 
 - `lib.rs` - публічний вхід у crate.
+- `engine.rs` - публічний facade `MemoryEngine`: перший людський API поверх storage, починаючи з `ingest()`.
 - `types.rs` - спільні типи: id, timestamp, links, model roles, schema constants.
 - `event.rs` - `IngestEvent` і `StoredEvent`.
 - `file_storage.rs` - перша файлова імплементація `Storage`.
