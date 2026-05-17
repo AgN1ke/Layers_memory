@@ -1,0 +1,48 @@
+# Copy this file to a local ignored file, for example:
+# config/local.llm.toml
+#
+# This is only an example of the configuration shape. Do not put real keys
+# into this example file.
+
+active_provider = "google"
+
+[paths]
+prompts_dir = "prompts"
+memory_dir = "memory"
+
+[providers.openai]
+enabled = false
+api_key_env = "OPENAI_API_KEY"
+# api_key = "" # local-only option if the host project allows direct test keys
+
+[providers.google]
+enabled = true
+api_key_env = "GOOGLE_API_KEY"
+# api_key = ""
+
+[providers.anthropic]
+enabled = false
+api_key_env = "ANTHROPIC_API_KEY"
+# api_key = ""
+
+[providers.kimi]
+enabled = false
+api_key_env = "KIMI_API_KEY"
+# api_key = ""
+
+[providers.deepseek]
+enabled = false
+api_key_env = "DEEPSEEK_API_KEY"
+# api_key = ""
+
+[model_roles.reasoning]
+provider = "google"
+model = "put-reasoning-model-name-here"
+
+[model_roles.balanced]
+provider = "google"
+model = "put-balanced-model-name-here"
+
+[model_roles.fast]
+provider = "google"
+model = "put-fast-cheap-model-name-here"
