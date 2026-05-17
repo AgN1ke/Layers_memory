@@ -12,7 +12,7 @@ use crate::journal::{JournalOperation, JournalState};
 use crate::manifest::Manifest;
 use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
 use crate::storage::Storage;
-use crate::types::{Id, SESSION_SCHEMA_VERSION};
+use crate::types::SESSION_SCHEMA_VERSION;
 use crate::{MemoryEngineError, Result};
 
 #[derive(Debug, Clone)]
@@ -86,7 +86,9 @@ impl FileStorage {
         files
             .into_iter()
             .find(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(archive_id))
-            .ok_or_else(|| MemoryEngineError::Storage(format!("archive entry not found: {archive_id}")))
+            .ok_or_else(|| {
+                MemoryEngineError::Storage(format!("archive entry not found: {archive_id}"))
+            })
     }
 
     fn core_store_path(&self, category: &str) -> PathBuf {

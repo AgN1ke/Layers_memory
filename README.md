@@ -23,6 +23,22 @@ The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current
 - `DEVLOG.md` - development diary and working notes.
 - `HISTORY.md` - important product-level changes and compatibility notes.
 
+## Local Development
+
+Required local tools:
+
+- Rust stable toolchain managed by `rustup`.
+- On Windows: Visual Studio Build Tools 2022 with the C++ build tools workload, because the MSVC Rust target needs `link.exe`.
+
+Useful checks:
+
+```powershell
+cargo fetch
+cargo fmt --check
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
+
 ## Working Rules
 
 - The Rust core must not hardcode LLM providers, model names, or API keys.
