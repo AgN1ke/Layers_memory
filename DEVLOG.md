@@ -1208,3 +1208,85 @@ Python-адаптер тепер є робочою інтеграційною т
 1. Закомітити зміни в локальний `main`. У GitHub-code branch треба обережно: вона раніше містила `Cargo.toml` у корені + `src/` + `tests/`. Тепер реальний код переїхав у `crates/`, тому publish branch треба перебудувати під workspace - або як два crate'и (memory_engine + python_adapter), або як один (memory_engine + pyo3 binding). Це рішення обговорити з власником окремо перед push.
 2. Подумати про ergonomic Python wrapper (json у dict перетворення в одному місці), або через mixed maturin project з `python/memory_engine/__init__.py`, або через `pythonize` crate. Це v0.2 кандидат.
 3. Для реальної інтеграції з Telegram-ботом нічого більше у memory_engine + python_adapter не потрібно. Бот реалізує `HostLlmConfig` за прикладом, тримає свого LLM-клієнта, викликає engine. Це робота поза цим репо.
+
+### Запис 23
+
+**Час:** 2026-05-18 11:59:07 +03:00
+
+**Проблематика:**
+Після Python-адаптера стало зрозуміло, що для живого тесту потрібен не ще один шар у Rust core, а окремий host-застосунок: Telegram bot, який тримає Telegram token, Gemini API key, вибір моделей і LLM-виклики поза ядром. Користувач попросив зробити це просто в окремій папці, щоб потім можна було запускати.
+
+**Задум:**
+Створити `hosts/telegram_gemini_bot/` як простий runnable host. Він має запускатись через PowerShell, питати token/key у терміналі, мати Gemini model mapping за ролями і використовувати `memory_engine` Python adapter.
+
+**Що робили:**
+Додано:
+
+- `hosts/telegram_gemini_bot/bot.py`;
+- `hosts/telegram_gemini_bot/run.ps1`;
+- `hosts/telegram_gemini_bot/README.md`.
+
+Оновлено:
+
+- `.gitignore`;
+- `README.md`;
+- `docs/local-development.md`.
+
+**Що зроблено:**
+Telegram bot host:
+
+- працює через Telegram Bot API long polling (`getUpdates`) і `sendMessage`;
+- на старті питає Telegram bot token і Gemini API key;
+- не зберігає keys у файли;
+- використовує Gemini REST `generateContent`;
+- підключає `memory_engine` Python adapter;
+- на plain text робить `engine.ingest()`;
+- перед відповіддю робить `engine.recall()`;
+- відповідає через Gemini з memory context;
+- має `/sleep`, який створює archive memory і виконує `sleep_compression` через Gemini;
+- має `/recall текст`;
+- має `/tasks`;
+- має `/models`;
+- автоматично запускає sleep, якщо повідомлення містить `запамʼятай`, `памʼятай` або `важливо`.
+
+Model role mapping у host:
+
+- `reasoning` -> `gemini-2.5-pro`;
+- `balanced` -> `gemini-2.5-flash`;
+- `fast` -> `gemini-2.5-flash-lite`;
+- replies -> role `balanced`.
+
+Під час запуску ці model names можна перевизначити через terminal input.
+
+`run.ps1`:
+
+- вмикає UTF-8;
+- перевіряє/створює venv для PyO3 adapter;
+- ставить `maturin` і `pytest`;
+- запускає `maturin develop`;
+- запускає `bot.py`.
+
+Runtime memory bot-а:
+
+```text
+hosts/telegram_gemini_bot/runtime/memory
+```
+
+Ця тека ігнорується git.
+
+**Проблеми чи виклики:**
+Повний live-run без Telegram token і Gemini API key не запускався, щоб не просити секрети в автоматичному режимі. Перевірено синтаксис `bot.py`, імпорт `memory_engine` з venv і `.gitignore` для runtime.
+
+Сегрегація задач по моделях реалізована на правильному рівні: Rust core видає `PendingTask.role_hint`, а host мапить `reasoning/balanced/fast` у конкретні Gemini models. Це відповідає принципу, що core не знає провайдерів, моделей і ключів.
+
+**Фідбек користувача:**
+Користувач попросив зробити простий Telegram bot в окремій папці для подальшого запуску.
+
+**Перевірки:**
+
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py` проходить;
+- `import memory_engine` у `crates/python_adapter/.venv` проходить;
+- `git check-ignore` підтвердив, що `hosts/telegram_gemini_bot/runtime/` і `hosts/*/*.local.toml` ігноряться.
+
+**Наступні кроки:**
+Закомітити host-застосунок у локальний `main`. GitHub-code branch не оновлювати автоматично, поки не вирішено, як публікувати workspace + host examples без внутрішніх docs.

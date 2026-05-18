@@ -34,6 +34,10 @@ crates/python_adapter/dist/
 crates/python_adapter/wheels/
 *.whl
 
+# Host app local runtime
+hosts/*/runtime/
+hosts/*/*.local.toml
+
 # OS/editor noise
 .DS_Store
 Thumbs.db

@@ -109,13 +109,13 @@ cargo fmt --check
 Запустити тести:
 
 ```powershell
-cargo test
+cargo test --workspace
 ```
 
 Запустити clippy як строгий quality gate:
 
 ```powershell
-cargo clippy --all-targets -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Повний локальний цикл для моделі:
@@ -124,8 +124,8 @@ cargo clippy --all-targets -- -D warnings
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 cargo fetch
 cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ## Як Запустити Живий Термінал Памʼяті
@@ -134,7 +134,7 @@ cargo clippy --all-targets -- -D warnings
 
 ```powershell
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-cargo run --bin memory_terminal -- memory
+cargo run -p memory_engine --bin memory_terminal -- memory
 ```
 
 Якщо термінал некоректно показує кирилицю, перед запуском увімкнути UTF-8:
@@ -144,7 +144,7 @@ chcp 65001
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-cargo run --bin memory_terminal -- memory
+cargo run -p memory_engine --bin memory_terminal -- memory
 ```
 
 Команди всередині runner:
@@ -160,6 +160,49 @@ cargo run --bin memory_terminal -- memory
 ```
 
 Plain text без `/` записується як `IngestEvent` у поточну сесію.
+
+## Як Запустити Telegram Gemini Bot
+
+Host-застосунок лежить окремо:
+
+```text
+hosts/telegram_gemini_bot/
+```
+
+Запуск з кореня репозиторію:
+
+```powershell
+.\hosts\telegram_gemini_bot\run.ps1
+```
+
+Скрипт:
+
+- вмикає UTF-8 у Windows console;
+- перевіряє venv `crates/python_adapter/.venv`;
+- ставить/оновлює `maturin` і `pytest`;
+- виконує `maturin develop` для PyO3 adapter;
+- запускає `hosts/telegram_gemini_bot/bot.py`.
+
+Під час запуску bot питає:
+
+- Telegram bot token;
+- Gemini API key;
+- model mapping для ролей `reasoning`, `balanced`, `fast`.
+
+Defaults:
+
+- `reasoning` -> `gemini-2.5-pro`;
+- `balanced` -> `gemini-2.5-flash`;
+- `fast` -> `gemini-2.5-flash-lite`;
+- chatbot replies -> `balanced`.
+
+Runtime memory host-бота:
+
+```text
+hosts/telegram_gemini_bot/runtime/memory
+```
+
+Ця runtime тека ігнорується git.
 
 ## Поточний Очікуваний Результат
 
@@ -242,15 +285,15 @@ C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools
 ```powershell
 git status --short --branch
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-cargo test
+cargo test --workspace
 ```
 
 Після змін у Rust-коді запускати:
 
 ```powershell
 cargo fmt
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Якщо змінюються залежності в `Cargo.toml`, треба оновити і комітити `Cargo.lock`.

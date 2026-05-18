@@ -2,7 +2,7 @@
 
 Memory Engine is planned as a separate Rust-based memory core for reusable long-term memory.
 
-The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current work has moved from preparation into the first Rust MVP slice: typed contracts, storage boundaries, and the initial `MemoryEngine::ingest()` facade.
+The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current work is a Cargo workspace with the Rust memory core, PyO3 Python adapter, and runnable host examples.
 
 ## Main Documents
 
@@ -16,8 +16,9 @@ The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current
 ## Current Structure
 
 - `docs/` - strategy and research notes.
-- `src/` - Rust crate source layout, contract types, storage, and the first `MemoryEngine` facade.
-- `tests/` - serialization, contract-level, and engine ingest tests.
+- `crates/memory_engine/` - Rust memory core.
+- `crates/python_adapter/` - PyO3 adapter exposed to Python as `memory_engine`.
+- `hosts/` - runnable host applications that use Memory Engine without putting provider/model/API-key logic into the Rust core.
 - `config/` - configuration examples and local configuration rules.
 - `prompts/` - prompt files when they actually exist.
 - `memory/` - local runtime memory layout for sessions, archive, and core.
@@ -38,14 +39,20 @@ Useful checks:
 ```powershell
 cargo fetch
 cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Run the local memory terminal:
 
 ```powershell
-cargo run --bin memory_terminal -- memory
+cargo run -p memory_engine --bin memory_terminal -- memory
+```
+
+Run the Telegram + Gemini host bot:
+
+```powershell
+.\hosts\telegram_gemini_bot\run.ps1
 ```
 
 ## Working Rules
