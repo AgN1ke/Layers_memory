@@ -1,0 +1,16 @@
+[package]
+name = "memory_engine_py"
+version.workspace = true
+edition.workspace = true
+license-file = "../../LICENSE.md"
+description = "Python adapter for Memory Engine via PyO3"
+
+[lib]
+name = "memory_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+memory_engine = { path = "../memory_engine" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

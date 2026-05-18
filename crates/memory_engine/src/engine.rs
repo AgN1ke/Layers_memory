@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::archive::{ArchiveEntry, ArchiveFilters, ArchiveStatus};
 use crate::event::{IngestEvent, StoredEvent};
+use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
 use crate::recall::{
     RecallDebug, RecallFilters, RecallItem, RecallQuery, RecallResult, RecallSourceLayer,
 };
@@ -16,11 +18,14 @@ use crate::storage::Storage;
 use crate::tasks::{PendingTask, TaskState, TaskType};
 use crate::types::{
     ImportanceHint, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
-    ARCHIVE_ENTRY_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION,
-    RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION,
-    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
+    CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
+    RECALL_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use crate::{MemoryEngineError, Result};
+
+const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -28,6 +33,7 @@ static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub struct MemoryEngine<S> {
     storage: S,
     options: EngineOptions,
+    manifest_initialized: bool,
 }
 
 impl<S> MemoryEngine<S> {
@@ -36,7 +42,11 @@ impl<S> MemoryEngine<S> {
     }
 
     pub fn with_options(storage: S, options: EngineOptions) -> Self {
-        Self { storage, options }
+        Self {
+            storage,
+            options,
+            manifest_initialized: false,
+        }
     }
 
     pub fn storage(&self) -> &S {
@@ -55,6 +65,7 @@ impl<S> MemoryEngine<S> {
 impl<S: Storage> MemoryEngine<S> {
     pub fn ingest(&mut self, event: IngestEvent) -> Result<StoredEvent> {
         validate_ingest_event(&event)?;
+        self.ensure_manifest()?;
 
         let (initial_weight, weight_reason) = self.options.event_scoring.score_ingest_event(&event);
         let stored = StoredEvent::from_ingest(
@@ -67,6 +78,19 @@ impl<S: Storage> MemoryEngine<S> {
 
         self.storage.append_event(&stored.session_id, &stored)?;
         Ok(stored)
+    }
+
+    fn ensure_manifest(&mut self) -> Result<()> {
+        if self.manifest_initialized {
+            return Ok(());
+        }
+        if !self.storage.manifest_exists()? {
+            let now = now_rfc3339()?;
+            let manifest = default_manifest(&now);
+            self.storage.write_manifest(&manifest)?;
+        }
+        self.manifest_initialized = true;
+        Ok(())
     }
 
     pub fn pending_tasks(&self) -> Result<Vec<PendingTask>> {
@@ -84,6 +108,7 @@ impl<S: Storage> MemoryEngine<S> {
                 "sleep session_id must not be empty".to_string(),
             ));
         }
+        self.ensure_manifest()?;
 
         let session = self.storage.read_session(session_id)?;
         if session.events.is_empty() {
@@ -126,13 +151,9 @@ impl<S: Storage> MemoryEngine<S> {
             });
         }
         result.validate_basic()?;
+        self.ensure_manifest()?;
 
-        let mut task = self
-            .storage
-            .load_tasks()?
-            .into_iter()
-            .find(|task| task.task_id == task_id)
-            .ok_or_else(|| MemoryEngineError::TaskNotFound(task_id.to_string()))?;
+        let mut task = self.storage.load_task(task_id)?;
 
         if task.task_type != TaskType::SleepCompression {
             return Err(MemoryEngineError::Validation(format!(
@@ -140,17 +161,7 @@ impl<S: Storage> MemoryEngine<S> {
             )));
         }
 
-        let mut archive_entry = self
-            .storage
-            .read_archive(&ArchiveFilters::default())?
-            .into_iter()
-            .find(|entry| entry.archive_id == result.archive_id)
-            .ok_or_else(|| {
-                MemoryEngineError::Storage(format!(
-                    "archive entry not found: {}",
-                    result.archive_id
-                ))
-            })?;
+        let mut archive_entry = self.storage.read_archive_entry_by_id(&result.archive_id)?;
 
         let now = now_rfc3339()?;
         archive_entry.updated_at = now.clone();
@@ -180,6 +191,7 @@ impl<S: Storage> MemoryEngine<S> {
 
     pub fn recall(&mut self, query: RecallQuery) -> Result<RecallResult> {
         validate_recall_query(&query)?;
+        self.ensure_manifest()?;
 
         let created_at = query.created_at.clone().map_or_else(now_rfc3339, Ok)?;
         let archive_enabled = query.filters.source_layers.is_empty()
@@ -301,7 +313,7 @@ impl Default for RecallStage1Config {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SleepStage1Result {
     pub archive_entry: ArchiveEntry,
     pub pending_task: PendingTask,
@@ -798,4 +810,32 @@ fn now_rfc3339() -> Result<String> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|err| MemoryEngineError::Storage(format!("failed to format timestamp: {err}")))
+}
+
+fn default_manifest(now: &str) -> Manifest {
+    Manifest {
+        schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
+        engine_version: ENGINE_VERSION.to_string(),
+        storage_id: "default".to_string(),
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+        schema_versions: SchemaVersions {
+            event: EVENT_SCHEMA_VERSION.to_string(),
+            session: SESSION_SCHEMA_VERSION.to_string(),
+            archive_entry: ARCHIVE_ENTRY_SCHEMA_VERSION.to_string(),
+            core_store: CORE_STORE_SCHEMA_VERSION.to_string(),
+            core_fact: CORE_FACT_SCHEMA_VERSION.to_string(),
+            candidate_belief: CANDIDATE_BELIEF_SCHEMA_VERSION.to_string(),
+            pending_task: PENDING_TASK_SCHEMA_VERSION.to_string(),
+            journal_operation: JOURNAL_OPERATION_SCHEMA_VERSION.to_string(),
+        },
+        active_embedding_model_id: None,
+        last_migration_at: None,
+        features: FeatureFlags {
+            recall_stage: RecallStage::Stage1,
+            embeddings_enabled: false,
+            llm_recall_rerank_enabled: false,
+            reflection_enabled: false,
+        },
+    }
 }

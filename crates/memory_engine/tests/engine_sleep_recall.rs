@@ -98,6 +98,125 @@ fn engine_recall_finds_archived_memory_by_text() {
 }
 
 #[test]
+fn engine_recall_returns_complete_entry_after_resume_sleep_compression() {
+    let root =
+        unique_temp_dir("engine_recall_returns_complete_entry_after_resume_sleep_compression");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Я живу в Берліні.",
+        vec!["personal_fact", "location"],
+    );
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+
+    let preliminary_recall = engine
+        .recall(make_recall_query(
+            "Берлін",
+            "2026-05-17T16:30:00.000Z",
+            "recall_preliminary",
+        ))
+        .expect("preliminary recall");
+
+    assert_eq!(preliminary_recall.items.len(), 1);
+    let preliminary_item = &preliminary_recall.items[0];
+    assert!(preliminary_item.gist.starts_with("Попередній спогад"));
+    assert!(preliminary_item
+        .narrative
+        .as_deref()
+        .unwrap_or("")
+        .contains("Попередній архівний спогад"));
+
+    let llm_gist = "Користувач живе в Берліні, Німеччина.";
+    let llm_narrative =
+        "Користувач прямо повідомив, що проживає в Берліні; це стабільний особистий факт.";
+
+    engine
+        .resume_sleep_compression(
+            &sleep_result.pending_task.task_id,
+            SleepCompressionResult {
+                schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                gist: llm_gist.to_string(),
+                narrative: llm_narrative.to_string(),
+                facts: vec![],
+                quotes: vec![],
+                tags: vec!["personal_fact".to_string(), "location".to_string()],
+                theme: Some("personal_background".to_string()),
+                weight: 0.95,
+                links: vec![],
+            },
+        )
+        .expect("resume sleep compression");
+
+    let complete_recall = engine
+        .recall(make_recall_query(
+            "Берлін",
+            "2026-05-17T17:30:00.000Z",
+            "recall_complete",
+        ))
+        .expect("complete recall");
+
+    assert_eq!(complete_recall.items.len(), 1);
+    let complete_item = &complete_recall.items[0];
+    assert_eq!(complete_item.gist, llm_gist);
+    assert_eq!(complete_item.narrative.as_deref(), Some(llm_narrative));
+    assert!(complete_item.weight >= 0.9);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_recall_with_zero_limit_uses_engine_default() {
+    let root = unique_temp_dir("engine_recall_with_zero_limit_uses_engine_default");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    for index in 0..7 {
+        ingest_text(
+            &mut engine,
+            &format!("2026-05-17T16:0{index}:00.000Z"),
+            &format!("Факт номер {index} про Берлін."),
+            vec!["personal_fact", "location"],
+        );
+        engine.sleep("live_session").expect("sleep stage1");
+    }
+
+    let result = engine
+        .recall(make_recall_query(
+            "Берлін",
+            "2026-05-17T18:00:00.000Z",
+            "recall_zero",
+        ))
+        .expect("recall zero limit");
+
+    assert_eq!(
+        result.items.len(),
+        5,
+        "limit==0 must fall back to engine default of 5"
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+fn make_recall_query(query_text: &str, created_at: &str, query_id: &str) -> RecallQuery {
+    RecallQuery {
+        schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+        query_id: Some(query_id.to_string()),
+        created_at: Some(created_at.to_string()),
+        session_id: Some("live_session".to_string()),
+        context: json!({ "recent_text": query_text }),
+        query_text: Some(query_text.to_string()),
+        filters: RecallFilters::default(),
+        limit: 0,
+        include_core: false,
+        explain: true,
+    }
+}
+
+#[test]
 fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
     let root =
         unique_temp_dir("engine_resume_sleep_compression_updates_archive_and_completes_task");

@@ -181,6 +181,10 @@ impl FileStorage {
 }
 
 impl Storage for FileStorage {
+    fn manifest_exists(&self) -> Result<bool> {
+        Ok(self.manifest_path().exists())
+    }
+
     fn read_manifest(&self) -> Result<Manifest> {
         read_json(&self.manifest_path())
     }
@@ -226,6 +230,11 @@ impl Storage for FileStorage {
         atomic_write_json(&path, entry)
     }
 
+    fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry> {
+        let path = self.archive_entry_path_by_id(archive_id)?;
+        read_json(&path)
+    }
+
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>> {
         let mut files = Vec::new();
         collect_json_files(&self.root.join("archive"), &mut files)?;
@@ -258,6 +267,14 @@ impl Storage for FileStorage {
     fn save_task(&mut self, task: &crate::tasks::PendingTask) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.task_path(&task.task_id), task)
+    }
+
+    fn load_task(&self, task_id: &str) -> Result<crate::tasks::PendingTask> {
+        let path = self.task_path(task_id);
+        if !path.exists() {
+            return Err(MemoryEngineError::TaskNotFound(task_id.to_string()));
+        }
+        read_json(&path)
     }
 
     fn load_tasks(&self) -> Result<Vec<crate::tasks::PendingTask>> {

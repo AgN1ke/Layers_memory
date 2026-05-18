@@ -8,6 +8,7 @@ use crate::tasks::PendingTask;
 use crate::Result;
 
 pub trait Storage {
+    fn manifest_exists(&self) -> Result<bool>;
     fn read_manifest(&self) -> Result<Manifest>;
     fn write_manifest(&mut self, manifest: &Manifest) -> Result<()>;
 
@@ -16,6 +17,7 @@ pub trait Storage {
 
     fn write_archive_entry(&mut self, entry: &ArchiveEntry) -> Result<()>;
     fn update_archive_entry(&mut self, archive_id: &str, entry: &ArchiveEntry) -> Result<()>;
+    fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry>;
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>>;
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory>;
@@ -23,6 +25,7 @@ pub trait Storage {
     fn write_candidate_belief(&mut self, candidate: &CandidateBelief) -> Result<()>;
 
     fn save_task(&mut self, task: &PendingTask) -> Result<()>;
+    fn load_task(&self, task_id: &str) -> Result<PendingTask>;
     fn load_tasks(&self) -> Result<Vec<PendingTask>>;
 
     fn begin_journaled_operation(&mut self, operation: &JournalOperation) -> Result<()>;

@@ -1,0 +1,16 @@
+[package]
+name = "memory_engine"
+version.workspace = true
+edition.workspace = true
+license-file = "../../LICENSE.md"
+description = "Reusable three-layer memory engine core"
+
+[lib]
+name = "memory_engine"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }

@@ -656,6 +656,12 @@ CandidateBelief - кандидат на стабільний висновок у
 
 На v0.1 основний recall працює по `archive` і `core`. Пошук у live-session може бути доданий як проста перевірка поточної сесії.
 
+`limit`:
+
+- ціле число `>= 0`;
+- значення `0` явно означає "використати default ядра системи" (на v0.1 - `5`, налаштовується через `RecallStage1Config.default_limit`);
+- будь-яке значення `> 0` обмежує `RecallResult.items` саме цим числом.
+
 ### 8.2 RecallResult
 
 Вихід з `engine.recall(query)`.

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "memory-engine"
+version = "0.1.0"
+description = "Python bindings for Memory Engine, a reusable three-layer memory core"
+requires-python = ">=3.10"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "memory_engine"
+manifest-path = "Cargo.toml"
