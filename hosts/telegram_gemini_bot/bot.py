@@ -36,12 +36,16 @@ RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 MEMORY_DIR = RUNTIME_DIR / "memory"
 LOG_DIR = RUNTIME_DIR / "logs"
 LOG_PATH = LOG_DIR / "bot.log"
+STATE_DIR = RUNTIME_DIR / "state"
+OFFSET_PATH = STATE_DIR / "telegram_offset.json"
 
 DEFAULT_REASONING_MODEL = "gemini-2.5-pro"
 DEFAULT_BALANCED_MODEL = "gemini-2.5-flash"
 DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CHAT_ROLE = "balanced"
-RECENT_CONTEXT_LIMIT = 16
+RECENT_CONTEXT_LIMIT = 40
+SESSION_TRACE_EVENT_LIMIT = 120
+SESSION_TRACE_CHAR_LIMIT = 12000
 
 TELEGRAM_API = "https://api.telegram.org"
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
@@ -179,9 +183,9 @@ def main() -> None:
     log_line("deleteWebhook completed")
     print("Bot is running. Open Telegram and write to your bot.")
     print("Commands: /help, /sleep, /recall text, /tasks, /models")
-    log_line("bot polling started")
+    offset = read_saved_offset()
+    log_line(f"bot polling started offset={offset}")
 
-    offset: int | None = None
     while True:
         try:
             updates = telegram.get_updates(offset)
@@ -197,6 +201,7 @@ def main() -> None:
                 finally:
                     if update_id is not None:
                         offset = update_id + 1
+                        save_offset(offset)
         except KeyboardInterrupt:
             log_line("bot stopped by keyboard interrupt")
             print("\nStopped.")
@@ -263,13 +268,15 @@ def handle_update(
         },
     )
 
-    recent_context = format_recent_session_context(read_session(engine, session_id))
+    session = read_session(engine, session_id)
+    session_trace_context = format_session_trace_context(session)
+    recent_context = format_recent_session_context(session)
     memory_context = format_memory_context(recall(engine, session_id, text, explain=False))
     model = llm_config.chat_model().model
     answer = gemini.generate_text(
         model=model,
         system_instruction=chat_system_instruction(),
-        prompt=chat_prompt(memory_context, recent_context, text),
+        prompt=chat_prompt(memory_context, session_trace_context, recent_context, text),
     )
     telegram.send_message(chat_id, answer)
     ingest_chat_event(
@@ -359,6 +366,32 @@ def recall(engine: memory_engine.MemoryEngine, session_id: str, query_text: str,
 
 def read_session(engine: memory_engine.MemoryEngine, session_id: str) -> dict[str, Any]:
     return json.loads(engine.read_session(session_id))
+
+
+def read_saved_offset() -> int | None:
+    if not OFFSET_PATH.exists():
+        return None
+    try:
+        payload = json.loads(OFFSET_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as err:
+        log_exception("failed to read saved Telegram offset", err)
+        return None
+
+    offset = payload.get("offset")
+    if isinstance(offset, int):
+        return offset
+
+    log_line(f"ignored invalid Telegram offset payload: {payload}")
+    return None
+
+
+def save_offset(offset: int) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "offset": offset,
+        "updated_at": now_rfc3339(),
+    }
+    OFFSET_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def notify_update_error(update: dict[str, Any], telegram: TelegramClient, err: Exception) -> None:
@@ -480,20 +513,53 @@ def log_exception(message: str, err: Exception) -> None:
 
 def chat_system_instruction() -> str:
     return (
-        "You are a concise Telegram assistant. Use recent session context for short-term "
-        "conversation references, follow-up questions, and questions like 'what did we discuss'. "
-        "Use archive memory for older committed memories. If context is empty or irrelevant, "
-        "answer normally. Do not claim you remember things unless they are present in recent "
-        "session context, archive memory, or the current user message."
+        "You are a concise Telegram assistant. Use session topic trace for questions about what "
+        "has been discussed in this chat, including older topics in the current session. Use "
+        "recent session context for short-term references, follow-up questions, and pronouns like "
+        "'they' or 'it'. Use archive memory for older committed memories. If context is empty or "
+        "irrelevant, answer normally. Do not claim you remember things unless they are present in "
+        "session topic trace, recent session context, archive memory, or the current user message."
     )
 
 
-def chat_prompt(memory_context: str, recent_context: str, user_text: str) -> str:
+def chat_prompt(
+    memory_context: str,
+    session_trace_context: str,
+    recent_context: str,
+    user_text: str,
+) -> str:
     return (
+        f"Session topic trace, chronological:\n{session_trace_context}\n\n"
         f"Recent session context, chronological:\n{recent_context}\n\n"
         f"Archive memory context:\n{memory_context}\n\n"
         f"Current user message:\n{user_text}"
     )
+
+
+def format_session_trace_context(session: dict[str, Any]) -> str:
+    events = [
+        event
+        for event in session.get("events", [])
+        if event.get("type") in {"user_message", "assistant_message"}
+    ][-SESSION_TRACE_EVENT_LIMIT:]
+    if not events:
+        return "(no session topic trace)"
+
+    lines = []
+    total_chars = 0
+    for event in events:
+        payload = event.get("payload") or {}
+        text = (payload.get("text") or "").strip()
+        if not text:
+            continue
+        role = format_event_role(event.get("type", "event"))
+        line = f"- {role}: {truncate_chars(text, 220)}"
+        if total_chars + len(line) > SESSION_TRACE_CHAR_LIMIT:
+            lines.append("- ...older session trace omitted by prompt budget")
+            break
+        lines.append(line)
+        total_chars += len(line)
+    return "\n".join(lines) if lines else "(no session topic trace)"
 
 
 def format_recent_session_context(session: dict[str, Any]) -> str:

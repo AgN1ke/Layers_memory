@@ -220,11 +220,19 @@ hosts/telegram_gemini_bot/runtime/logs/bot.log
 
 У log пишуться старт bot-а, polling batches, message id, короткий текст обробленого update і traceback-и помилок. API keys не логуються.
 
+Telegram polling offset host-бота:
+
+```text
+hosts/telegram_gemini_bot/runtime/state/telegram_offset.json
+```
+
+Offset зберігається після кожного обробленого update, щоб після рестарту bot не відповідав повторно на старі Telegram pending updates.
+
 Поточна логіка діалогу:
 
 - plain text користувача зберігається як `user_message`;
-- bot читає останні події сесії через adapter method `read_session`;
-- Gemini отримує recent session context + archive memory context;
+- bot читає поточну сесію через adapter method `read_session`;
+- Gemini отримує ширший `session topic trace`, коротший `recent session context` і archive memory context;
 - відповідь bot-а зберігається як `assistant_message`;
 - archive memory все одно створюється окремо через `/sleep` або auto-sleep keywords.
 

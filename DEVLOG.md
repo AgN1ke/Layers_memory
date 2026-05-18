@@ -1442,3 +1442,59 @@ hosts/telegram_gemini_bot/runtime/logs/bot.log
 
 **Наступні кроки:**
 Перезапустити bot, повторити короткий live-тест і, якщо знову зависне, читати `hosts/telegram_gemini_bot/runtime/logs/bot.log`.
+
+### Запис 27
+
+**Час:** 2026-05-18 12:54:41 +03:00
+
+**Проблематика:**
+Після перезапуску bot спочатку відповів на старі повідомлення, а потім у живій розмові правильно порівняв МіГ-15 і F-86. Але після довгої серії про імʼя "Аврора" і персональні факти на питання "А про літаки?" відповів, що про літаки розмови не було. Причина: recent context був обмежений 16 подіями, тобто приблизно 8 turn-ами, і тема літаків була витіснена з prompt.
+
+Окремо runtime log підтвердив, що попереднє "зависання" не було crash-ем: bot отримав старі pending updates після рестарту і нормально їх обробив.
+
+**Задум:**
+Зробити два різні короткострокові контексти:
+
+- `session topic trace` - ширший trace тем поточної сесії для питань "про що ми говорили?";
+- `recent session context` - останні репліки для локальних follow-up посилань типу "їх", "це", "а як щодо".
+
+Також треба зберігати Telegram polling offset у runtime, щоб після рестарту bot не відповідав повторно на вже оброблені updates.
+
+**Що робили:**
+
+- оновлено `hosts/telegram_gemini_bot/bot.py`;
+- оновлено `hosts/telegram_gemini_bot/README.md`;
+- оновлено `docs/local-development.md`.
+
+**Що зроблено:**
+
+- `RECENT_CONTEXT_LIMIT` збільшено з 16 до 40 подій;
+- додано `SESSION_TRACE_EVENT_LIMIT = 120`;
+- додано `SESSION_TRACE_CHAR_LIMIT = 12000`;
+- prompt тепер містить:
+  - `Session topic trace`;
+  - `Recent session context`;
+  - `Archive memory context`;
+  - current user message;
+- system instruction явно каже використовувати `session topic trace` для питань про те, що обговорювали в поточному чаті;
+- Telegram offset зберігається в:
+
+```text
+hosts/telegram_gemini_bot/runtime/state/telegram_offset.json
+```
+
+Offset оновлюється після кожного обробленого update.
+
+**Проблеми чи виклики:**
+Це не замінює справжню довгострокову памʼять. Для довгих діалогів усе одно треба запускати `/sleep`, щоб теми переходили в archive memory. Але для live-чату тепер не має бути ситуації, де тема випала після 8 turn-ів.
+
+**Фідбек користувача:**
+Користувач показав transcript, де bot памʼятав імʼя "Аврора", імʼя користувача і вік, але не згадав попередню тему про літаки.
+
+**Перевірки:**
+
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `git diff --check` проходить.
+
+**Наступні кроки:**
+Перезапустити bot і повторити тест на довшу сесію: літаки -> риболовля -> імʼя -> персональні факти -> питання "А про літаки?".

@@ -60,10 +60,11 @@
 Plain text без `/`:
 
 1. Зберігається як event.
-2. Читає останні події поточної Telegram-сесії через `read_session`.
-3. Виконує recall по попередній archive memory.
-4. Дає Gemini відповідь з recent session context + archive memory context.
-5. Зберігає відповідь bot-а як `assistant_message`.
+2. Читає поточну Telegram-сесію через `read_session`.
+3. Формує ширший `session topic trace` і коротший `recent session context`.
+4. Виконує recall по попередній archive memory.
+5. Дає Gemini відповідь з session topic trace + recent session context + archive memory context.
+6. Зберігає відповідь bot-а як `assistant_message`.
 
 Якщо повідомлення містить `запам'ятай`, `запамʼятай`, `пам'ятай`, `памʼятай` або `важливо`, bot автоматично робить `/sleep` після відповіді, щоб цей факт одразу став archive memory.
 
@@ -84,6 +85,14 @@ hosts/telegram_gemini_bot/runtime/logs/bot.log
 ```
 
 У log пишуться polling events, оброблені Telegram message id і traceback-и помилок. API keys туди не записуються.
+
+Telegram polling offset зберігається тут:
+
+```text
+hosts/telegram_gemini_bot/runtime/state/telegram_offset.json
+```
+
+Це потрібно, щоб після рестарту bot не відповідав повторно на вже оброблені pending updates.
 
 ## Межі
 
