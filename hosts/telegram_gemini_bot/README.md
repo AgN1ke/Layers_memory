@@ -77,6 +77,14 @@ hosts/telegram_gemini_bot/runtime/memory
 
 Ця тека ігнорується git.
 
+Runtime log лежить тут:
+
+```text
+hosts/telegram_gemini_bot/runtime/logs/bot.log
+```
+
+У log пишуться polling events, оброблені Telegram message id і traceback-и помилок. API keys туди не записуються.
+
 ## Межі
 
 Це простий long-polling bot через Telegram Bot API `getUpdates`/`sendMessage`.

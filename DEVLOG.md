@@ -1393,3 +1393,52 @@ Telegram bot тепер:
 
 **Наступні кроки:**
 Перезапустити bot через `run_gui.ps1` і повторити live-тест: МіГ-15 -> F-86 -> "Порівняй їх" -> "Про що ми говорили?".
+
+### Запис 26
+
+**Час:** 2026-05-18 12:38:54 +03:00
+
+**Проблематика:**
+Після додавання recent session context bot відповів на перші два повідомлення, але перестав відповідати на третє. Перевірка `events.jsonl` показала, що третє повідомлення навіть не було записане в памʼять. Це означає, що проблема не в Gemini-відповіді і не в short-term context, а на рівні Telegram polling/update handling або тихої помилки до `ingest`.
+
+**Задум:**
+Прибрати "чорну коробку" з live-host: додати runtime log-файл, логувати polling batches, update/message id, короткий текст повідомлення і повні traceback-и. Якщо обробка конкретного update падає, bot має пробувати відправити користувачу коротке повідомлення про помилку в Telegram, а не мовчки зникати.
+
+**Що робили:**
+
+- оновлено `hosts/telegram_gemini_bot/bot.py`;
+- оновлено `hosts/telegram_gemini_bot/README.md`;
+- оновлено `docs/local-development.md`.
+
+**Що зроблено:**
+Додано runtime log:
+
+```text
+hosts/telegram_gemini_bot/runtime/logs/bot.log
+```
+
+У log пишеться:
+
+- старт bot-а;
+- завершення `deleteWebhook`;
+- старт polling loop;
+- кількість отриманих updates;
+- `chat_id`, `message_id` і короткий текст повідомлення;
+- факт успішної відповіді;
+- traceback-и помилок polling і per-update обробки.
+
+Змінено update loop: помилка в одному update більше не валить весь batch без видимого сліду. Bot логуватиме помилку і спробує повідомити про неї в Telegram.
+
+**Проблеми чи виклики:**
+Причина конкретного стопу ще не встановлена, бо попередня версія писала помилки тільки у видиме PowerShell-вікно, а не у файл. Після цього запису наступний live-run має дати точний traceback або підтвердити, що polling перестає отримувати updates.
+
+**Фідбек користувача:**
+Користувач надав transcript, де bot перестав відповідати після повідомлення "Норм, сижу на нараді".
+
+**Перевірки:**
+
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `git diff --check` проходить.
+
+**Наступні кроки:**
+Перезапустити bot, повторити короткий live-тест і, якщо знову зависне, читати `hosts/telegram_gemini_bot/runtime/logs/bot.log`.

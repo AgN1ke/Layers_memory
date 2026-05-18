@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,6 +34,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = ROOT / "prompts"
 RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 MEMORY_DIR = RUNTIME_DIR / "memory"
+LOG_DIR = RUNTIME_DIR / "logs"
+LOG_PATH = LOG_DIR / "bot.log"
 
 DEFAULT_REASONING_MODEL = "gemini-2.5-pro"
 DEFAULT_BALANCED_MODEL = "gemini-2.5-flash"
@@ -158,8 +161,10 @@ class GeminiClient:
 def main() -> None:
     print("Telegram Gemini Memory Bot")
     print(f"Runtime memory: {MEMORY_DIR}")
+    print(f"Runtime log: {LOG_PATH}")
     print("Keys are read from terminal and are not stored.")
     print()
+    log_line("starting Telegram Gemini Memory Bot")
 
     telegram_token = read_secret("Telegram bot token", "TELEGRAM_BOT_TOKEN")
     gemini_key = read_secret("Gemini API key", "GEMINI_API_KEY")
@@ -171,20 +176,33 @@ def main() -> None:
     gemini = GeminiClient(gemini_key)
 
     telegram.delete_webhook()
+    log_line("deleteWebhook completed")
     print("Bot is running. Open Telegram and write to your bot.")
     print("Commands: /help, /sleep, /recall text, /tasks, /models")
+    log_line("bot polling started")
 
     offset: int | None = None
     while True:
         try:
             updates = telegram.get_updates(offset)
+            if updates:
+                log_line(f"poll received {len(updates)} update(s), offset={offset}")
             for update in updates:
-                offset = update["update_id"] + 1
-                handle_update(update, telegram, gemini, engine, llm_config)
+                update_id = update.get("update_id")
+                try:
+                    handle_update(update, telegram, gemini, engine, llm_config)
+                except Exception as err:
+                    log_exception(f"update {update_id} failed", err)
+                    notify_update_error(update, telegram, err)
+                finally:
+                    if update_id is not None:
+                        offset = update_id + 1
         except KeyboardInterrupt:
+            log_line("bot stopped by keyboard interrupt")
             print("\nStopped.")
             return
         except Exception as err:  # Keep the bot alive during temporary network/API errors.
+            log_exception("polling failed", err)
             print(f"[error] {err}", file=sys.stderr)
             time.sleep(3)
 
@@ -203,9 +221,11 @@ def handle_update(
     user = message.get("from") or {}
 
     if not text or chat_id is None:
+        log_line("ignored update without text or chat_id")
         return
 
     session_id = f"telegram_{chat_id}"
+    log_line(f"handling chat={chat_id} message_id={message.get('message_id')} text={truncate_chars(text, 160)}")
 
     if text in {"/start", "/help"}:
         telegram.send_message(chat_id, help_text())
@@ -265,6 +285,7 @@ def handle_update(
             "model": model,
         },
     )
+    log_line(f"answered chat={chat_id} event={stored['event_id']} model={model}")
     print(f"chat={chat_id} event={stored['event_id']} model={model}")
 
     if should_auto_sleep(text):
@@ -338,6 +359,23 @@ def recall(engine: memory_engine.MemoryEngine, session_id: str, query_text: str,
 
 def read_session(engine: memory_engine.MemoryEngine, session_id: str) -> dict[str, Any]:
     return json.loads(engine.read_session(session_id))
+
+
+def notify_update_error(update: dict[str, Any], telegram: TelegramClient, err: Exception) -> None:
+    message = update.get("message") or {}
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    if chat_id is None:
+        return
+
+    try:
+        telegram.send_message(
+            chat_id,
+            "Bot error while processing this message. "
+            f"Check runtime log: {LOG_PATH}\n\n{type(err).__name__}: {err}",
+        )
+    except Exception as notify_err:
+        log_exception("failed to send error notification to Telegram", notify_err)
 
 
 def ingest_chat_event(
@@ -418,6 +456,26 @@ def read_model_config() -> HostLlmConfig:
 def input_default(label: str, default: str) -> str:
     value = input(f"{label} [{default}]: ").strip()
     return value or default
+
+
+def log_line(message: str) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    line = f"{now_rfc3339()} {message}"
+    with LOG_PATH.open("a", encoding="utf-8") as file:
+        file.write(line + "\n")
+    print(line, flush=True)
+
+
+def log_exception(message: str, err: Exception) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    line = f"{now_rfc3339()} {message}: {type(err).__name__}: {err}"
+    details = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+    with LOG_PATH.open("a", encoding="utf-8") as file:
+        file.write(line + "\n")
+        file.write(details)
+        if not details.endswith("\n"):
+            file.write("\n")
+    print(line, file=sys.stderr, flush=True)
 
 
 def chat_system_instruction() -> str:

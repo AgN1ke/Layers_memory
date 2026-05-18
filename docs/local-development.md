@@ -212,6 +212,14 @@ hosts/telegram_gemini_bot/runtime/memory
 
 Ця runtime тека ігнорується git.
 
+Runtime log host-бота:
+
+```text
+hosts/telegram_gemini_bot/runtime/logs/bot.log
+```
+
+У log пишуться старт bot-а, polling batches, message id, короткий текст обробленого update і traceback-и помилок. API keys не логуються.
+
 Поточна логіка діалогу:
 
 - plain text користувача зберігається як `user_message`;
