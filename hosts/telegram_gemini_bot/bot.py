@@ -187,7 +187,10 @@ def main() -> None:
     telegram.delete_webhook()
     log_line("deleteWebhook completed")
     print("Bot is running. Open Telegram and write to your bot.")
-    print("Commands: /help, /sleep, /recall text, /core, /remember text, /tasks, /models")
+    print(
+        "Commands: /help, /sleep, /recall text, /core, /remember text, "
+        "/core_update id text, /core_forget id, /tasks, /models"
+    )
     offset = read_saved_offset()
     log_line(f"bot polling started offset={offset} auto_sleep_after_events={auto_sleep_after_events}")
 
@@ -268,6 +271,35 @@ def handle_update(
             tags=["manual", "telegram"],
         )
         telegram.send_message(chat_id, f"Core fact saved: {result['fact']['text']}")
+        return
+
+    if text.startswith("/core_forget"):
+        fact_id = text.removeprefix("/core_forget").strip()
+        if not fact_id:
+            telegram.send_message(chat_id, "Usage: /core_forget core_fact_id")
+            return
+        result = patch_core_fact(
+            engine=engine,
+            scope=core_scope(session_id),
+            core_fact_id=fact_id,
+            status="deprecated",
+        )
+        telegram.send_message(chat_id, f"Core fact deprecated: {result['fact']['text']}")
+        return
+
+    if text.startswith("/core_update"):
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3:
+            telegram.send_message(chat_id, "Usage: /core_update core_fact_id new fact text")
+            return
+        result = patch_core_fact(
+            engine=engine,
+            scope=core_scope(session_id),
+            core_fact_id=parts[1],
+            text=parts[2],
+            status="active",
+        )
+        telegram.send_message(chat_id, f"Core fact updated: {result['fact']['text']}")
         return
 
     if text == "/sleep":
@@ -449,6 +481,32 @@ def upsert_core_fact(
             )
         )
     )
+
+
+def patch_core_fact(
+    engine: memory_engine.MemoryEngine,
+    scope: str,
+    core_fact_id: str,
+    text: str | None = None,
+    status: str | None = None,
+    confidence: float | None = None,
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "core_fact_patch_input.v1",
+        "core_fact_id": core_fact_id,
+        "scope": scope,
+    }
+    if text is not None:
+        payload["text"] = text
+    if status is not None:
+        payload["status"] = status
+    if confidence is not None:
+        payload["confidence"] = confidence
+    if tags is not None:
+        payload["tags"] = tags
+
+    return json.loads(engine.patch_core_fact(json.dumps(payload, ensure_ascii=False)))
 
 
 def core_scope(session_id: str) -> str:
@@ -672,7 +730,8 @@ def format_core_facts(package: dict[str, Any]) -> str:
     for index, fact in enumerate(facts, start=1):
         category = fact.get("category", "core")
         confidence = float(fact.get("confidence", 0.0))
-        lines.append(f"{index}. [{category} {confidence:.2f}] {fact.get('text', '')}")
+        fact_id = fact.get("core_fact_id", "")
+        lines.append(f"{index}. {fact_id} [{category} {confidence:.2f}] {fact.get('text', '')}")
     return "\n".join(lines)
 
 
@@ -705,6 +764,8 @@ def help_text() -> str:
         "/recall text - search archive memory\n"
         "/core - show stable Core facts\n"
         "/remember text - save a stable Core fact manually\n"
+        "/core_update id text - update a Core fact in this chat\n"
+        "/core_forget id - deprecate a Core fact in this chat\n"
         "/tasks - show pending tasks\n"
         "/models - show model role mapping\n"
         "\n"

@@ -262,6 +262,69 @@ def test_core_context_package_does_not_leak_facts_between_scopes(
     ]
 
 
+def test_patch_core_fact_updates_and_deprecates_fact(engine: memory_engine.MemoryEngine):
+    _ingest(engine, "patch_core_session", "Початок тесту.")
+    upsert = json.loads(
+        engine.upsert_core_fact(
+            json.dumps(
+                {
+                    "schema_version": "core_fact_input.v1",
+                    "category": "profile",
+                    "scope": "telegram_patch",
+                    "text": "Користувача звати Микита.",
+                    "confidence": 0.95,
+                    "tags": ["telegram", "name"],
+                }
+            )
+        )
+    )
+    fact_id = upsert["fact"]["core_fact_id"]
+
+    updated = json.loads(
+        engine.patch_core_fact(
+            json.dumps(
+                {
+                    "schema_version": "core_fact_patch_input.v1",
+                    "core_fact_id": fact_id,
+                    "scope": "telegram_patch",
+                    "text": "Користувача звати Микита Загамула.",
+                    "status": "active",
+                }
+            )
+        )
+    )
+    assert updated["schema_version"] == "core_fact_patch_result.v1"
+    assert updated["fact"]["text"] == "Користувача звати Микита Загамула."
+
+    deprecated = json.loads(
+        engine.patch_core_fact(
+            json.dumps(
+                {
+                    "schema_version": "core_fact_patch_input.v1",
+                    "core_fact_id": fact_id,
+                    "scope": "telegram_patch",
+                    "status": "deprecated",
+                }
+            )
+        )
+    )
+    assert deprecated["fact"]["status"] == "deprecated"
+
+    request = {
+        "schema_version": "core_context_request.v1",
+        "session_id": "patch_core_session",
+        "domain_state": {"current_text": "Як мене звати?"},
+        "core_scope": "telegram_patch",
+        "query_text": "ім'я користувача",
+        "recall_limit": 5,
+        "session_recent_limit": 2,
+        "session_trace_event_limit": 10,
+        "include_core": True,
+    }
+    package = json.loads(engine.core_context_package(json.dumps(request)))
+    assert package.get("core_facts", []) == []
+
+
 def test_ingest_rejects_wrong_schema(engine: memory_engine.MemoryEngine):
     bad_event = json.dumps(
         {

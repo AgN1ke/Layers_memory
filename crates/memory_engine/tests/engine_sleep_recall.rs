@@ -1,11 +1,14 @@
 use memory_engine::archive::ArchiveStatus;
-use memory_engine::core_store::{CoreContextRequest, CoreFactInput};
+use memory_engine::core_store::{
+    CoreContextRequest, CoreFactInput, CoreFactPatchInput, CoreFactStatus,
+};
 use memory_engine::event::IngestEvent;
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::SleepCompressionResult;
 use memory_engine::types::{
-    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
-    RECALL_QUERY_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
+    CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
+    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{FileStorage, MemoryEngine};
 use serde_json::json;
@@ -375,6 +378,80 @@ fn engine_core_context_package_filters_core_facts_by_scope() {
     assert_eq!(package.core_facts.len(), 1);
     assert_eq!(package.core_facts[0].text, "Користувача звати Аліса.");
     assert_eq!(package.core_facts[0].scope.as_deref(), Some("telegram_2"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_patch_core_fact_updates_text_and_deprecates_fact() {
+    let root = unique_temp_dir("engine_patch_core_fact_updates_text_and_deprecates_fact");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Початок core patch test.",
+        vec!["test"],
+    );
+
+    let upsert = engine
+        .upsert_core_fact(CoreFactInput {
+            schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+            category: "profile".to_string(),
+            scope: Some("telegram_1".to_string()),
+            text: "Користувача звати Микита.".to_string(),
+            confidence: 0.95,
+            tags: vec!["name".to_string()],
+            source_archive_ids: vec![],
+            source_candidate_id: None,
+        })
+        .expect("upsert core fact");
+
+    let updated = engine
+        .patch_core_fact(CoreFactPatchInput {
+            schema_version: CORE_FACT_PATCH_INPUT_SCHEMA_VERSION.to_string(),
+            core_fact_id: upsert.fact.core_fact_id.clone(),
+            scope: Some("telegram_1".to_string()),
+            text: Some("Користувача звати Микита Загамула.".to_string()),
+            status: Some(CoreFactStatus::Active),
+            confidence: None,
+            tags: None,
+        })
+        .expect("patch core fact text");
+
+    assert_eq!(updated.fact.text, "Користувача звати Микита Загамула.");
+    assert_eq!(updated.fact.status, CoreFactStatus::Active);
+
+    let deprecated = engine
+        .patch_core_fact(CoreFactPatchInput {
+            schema_version: CORE_FACT_PATCH_INPUT_SCHEMA_VERSION.to_string(),
+            core_fact_id: upsert.fact.core_fact_id,
+            scope: Some("telegram_1".to_string()),
+            text: None,
+            status: Some(CoreFactStatus::Deprecated),
+            confidence: None,
+            tags: None,
+        })
+        .expect("deprecate core fact");
+
+    assert_eq!(deprecated.fact.status, CoreFactStatus::Deprecated);
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "Як мене звати?" }),
+            core_scope: Some("telegram_1".to_string()),
+            query_text: Some("ім'я користувача".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 2,
+            session_trace_event_limit: 10,
+            include_core: true,
+        })
+        .expect("core context package");
+
+    assert!(package.core_facts.is_empty());
 
     fs::remove_dir_all(root).ok();
 }

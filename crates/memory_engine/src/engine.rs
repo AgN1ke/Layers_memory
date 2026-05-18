@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 use crate::archive::{ArchiveEntry, ArchiveFilters, ArchiveStatus};
 use crate::core_store::{
     CoreContextEvent, CoreContextFact, CoreContextPackage, CoreContextRequest, CoreFact,
-    CoreFactInput, CoreFactStatus, CoreFactUpsertResult,
+    CoreFactInput, CoreFactPatchInput, CoreFactPatchResult, CoreFactStatus, CoreFactUpsertResult,
 };
 use crate::event::{IngestEvent, StoredEvent};
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
@@ -24,7 +24,8 @@ use crate::types::{
     ImportanceHint, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
     ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION,
     CORE_CONTEXT_PACKAGE_SCHEMA_VERSION, CORE_CONTEXT_REQUEST_SCHEMA_VERSION,
-    CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
+    CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_INPUT_SCHEMA_VERSION,
+    CORE_FACT_PATCH_RESULT_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
     CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
     INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
     PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION,
@@ -219,6 +220,57 @@ impl<S: Storage> MemoryEngine<S> {
             created,
             fact,
         })
+    }
+
+    pub fn patch_core_fact(&mut self, input: CoreFactPatchInput) -> Result<CoreFactPatchResult> {
+        validate_core_fact_patch_input(&input)?;
+        self.ensure_manifest()?;
+
+        let now = now_rfc3339()?;
+        let scope = normalize_optional_string(input.scope.as_deref());
+        let patch_text = input.text.as_deref().map(normalize_whitespace);
+        let patch_tags = input.tags.map(unique_strings);
+
+        for category_name in &self.options.context.core_categories {
+            let mut category = self.storage.read_core_store_category(category_name)?;
+            let Some(fact) = category
+                .facts
+                .iter_mut()
+                .find(|fact| fact.core_fact_id == input.core_fact_id && fact.scope == scope)
+            else {
+                continue;
+            };
+
+            if let Some(text) = patch_text.as_ref() {
+                fact.text = text.clone();
+            }
+            if let Some(status) = input.status {
+                fact.status = status;
+            }
+            if let Some(confidence) = input.confidence {
+                fact.confidence = confidence.clamp(0.0, 1.0);
+            }
+            if let Some(tags) = patch_tags.as_ref() {
+                fact.tags = tags.clone();
+            }
+            fact.updated_at = now.clone();
+
+            let patched_fact = fact.clone();
+            category.updated_at = now;
+            let category_name = category.category.clone();
+            self.storage.write_core_store_category(&category)?;
+
+            return Ok(CoreFactPatchResult {
+                schema_version: CORE_FACT_PATCH_RESULT_SCHEMA_VERSION.to_string(),
+                category: category_name,
+                fact: patched_fact,
+            });
+        }
+
+        Err(MemoryEngineError::Validation(format!(
+            "core fact not found for requested scope: {}",
+            input.core_fact_id
+        )))
     }
 
     pub fn core_context_package(
@@ -746,6 +798,52 @@ fn validate_core_fact_input(input: &CoreFactInput) -> Result<()> {
     if !input.confidence.is_finite() {
         return Err(MemoryEngineError::Validation(
             "core fact confidence must be finite".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_core_fact_patch_input(input: &CoreFactPatchInput) -> Result<()> {
+    if input.schema_version != CORE_FACT_PATCH_INPUT_SCHEMA_VERSION {
+        return Err(MemoryEngineError::IncompatibleSchema {
+            expected: CORE_FACT_PATCH_INPUT_SCHEMA_VERSION.to_string(),
+            actual: input.schema_version.clone(),
+        });
+    }
+
+    if input.core_fact_id.trim().is_empty() {
+        return Err(MemoryEngineError::Validation(
+            "core fact patch core_fact_id must not be empty".to_string(),
+        ));
+    }
+
+    if input.text.is_none()
+        && input.status.is_none()
+        && input.confidence.is_none()
+        && input.tags.is_none()
+    {
+        return Err(MemoryEngineError::Validation(
+            "core fact patch must change at least one field".to_string(),
+        ));
+    }
+
+    if input
+        .text
+        .as_deref()
+        .is_some_and(|text| text.trim().is_empty())
+    {
+        return Err(MemoryEngineError::Validation(
+            "core fact patch text must not be empty".to_string(),
+        ));
+    }
+
+    if input
+        .confidence
+        .is_some_and(|confidence| !confidence.is_finite())
+    {
+        return Err(MemoryEngineError::Validation(
+            "core fact patch confidence must be finite".to_string(),
         ));
     }
 

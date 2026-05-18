@@ -240,7 +240,7 @@ Offset зберігається після кожного обробленого
 - plain text не записується напряму в Core Store через regex extraction;
 - Telegram host додає мʼякі event-теги (`personal_fact_signal`, `name_reference`, `age_reference`, `preference_signal`) і піднімає `importance_hint`, щоб sleep/reflection потім уважніше переглянули ці події;
 - Telegram host записує і читає Core-факти зі scope `telegram_<chat_id>`, щоб факти різних чатів не змішувались;
-- Core можна перевірити командою `/core`, або явно додати факт командою `/remember text`;
+- Core можна перевірити командою `/core`, явно додати факт командою `/remember text`, оновити через `/core_update id text`, або прибрати з активного контексту через `/core_forget id`;
 - archive memory створюється через `/sleep`, auto-sleep keywords або engine-level auto-sleep після порога незаархівованих подій.
 - активний чат-промпт Telegram host-а лежить у `prompts/telegram_chat_system.md`, а не захардкоджений у Python.
 

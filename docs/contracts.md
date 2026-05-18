@@ -73,6 +73,8 @@ Markdown-файли існують для людини. Вони не замін
 - `core_store.v1`;
 - `core_fact.v1`;
 - `core_fact_input.v1`;
+- `core_fact_patch_input.v1`;
+- `core_fact_patch_result.v1`;
 - `core_fact_upsert_result.v1`;
 - `core_context_request.v1`;
 - `core_context_package.v1`;
@@ -613,7 +615,54 @@ Core Store - стабільна основа пам'яті.
 
 `scope` визначає межу видимості факту. Для Telegram host використовується `session_id` виду `telegram_<chat_id>`, щоб факти одного чату не потрапляли в контекст іншого. Upsert дедуплікує факти за нормалізованим текстом і `scope` у межах категорії.
 
-### 6.3 CoreContextRequest
+### 6.3 CoreFactPatchInput
+
+Вхід у `engine.patch_core_fact(input)`.
+
+```json
+{
+  "schema_version": "core_fact_patch_input.v1",
+  "core_fact_id": "core_fact_01J00000000000000000000001",
+  "scope": "telegram_311422683",
+  "text": "Користувача звати Микита Загамула.",
+  "status": "active"
+}
+```
+
+Для forget/deprecate:
+
+```json
+{
+  "schema_version": "core_fact_patch_input.v1",
+  "core_fact_id": "core_fact_01J00000000000000000000001",
+  "scope": "telegram_311422683",
+  "status": "deprecated"
+}
+```
+
+Відповідь:
+
+```json
+{
+  "schema_version": "core_fact_patch_result.v1",
+  "category": "profile",
+  "fact": {
+    "schema_version": "core_fact.v1",
+    "core_fact_id": "core_fact_01J00000000000000000000001",
+    "scope": "telegram_311422683",
+    "text": "Користувача звати Микита Загамула.",
+    "status": "active",
+    "confidence": 0.95,
+    "created_at": "2026-05-17T17:20:00.000Z",
+    "updated_at": "2026-05-17T17:30:00.000Z",
+    "tags": ["name", "profile", "telegram"]
+  }
+}
+```
+
+Patch шукає факт за `core_fact_id` і `scope`. Це захищає від редагування факту іншого Telegram-чату через випадково скопійований id. Факти зі статусом `deprecated`, `contradicted` або `needs_review` не повертаються в `CoreContextPackage.core_facts`.
+
+### 6.4 CoreContextRequest
 
 Вхід у `engine.core_context_package(request)`.
 
@@ -636,7 +685,7 @@ Core Store - стабільна основа пам'яті.
 
 `domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
 
-### 6.4 CoreContextPackage
+### 6.5 CoreContextPackage
 
 Core Context Package не обов'язково зберігається на диск. Це відповідь ядра на запит хоста.
 

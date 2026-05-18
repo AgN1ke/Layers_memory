@@ -1898,3 +1898,87 @@ plain text -> extract_core_facts(regex) -> upsert_core_fact
 
 **Наступні кроки:**
 Прогнати перевірки. Потім зробити наступний технічний крок: Core management API/commands для deprecate/update scoped Core-фактів, щоб прибрати або виправити старі regex-generated факти без ручного редагування JSON.
+
+### Запис 33
+
+**Час:** 2026-05-19 00:56:54 +03:00
+
+**Проблематика:**
+Після того як Core Store став scoped і direct-write лишився тільки через `/remember`, все одно залишалась практична діра: факт можна було створити, але не було штатного способу його виправити або прибрати з active context. Це змушувало б редагувати JSON руками, що суперечить ідеї зручної памʼяті.
+
+**Задум:**
+Додати керований lifecycle Core-факту:
+
+- update змінює текст факту в межах поточного scope;
+- forget не видаляє файл фізично, а ставить `status: deprecated`;
+- deprecated facts залишаються в історії, але не повертаються в `core_context_package`.
+
+**Що робили:**
+
+- оновлено Rust core contracts;
+- оновлено PyO3 adapter;
+- додано Telegram commands;
+- оновлено Rust/Python tests;
+- оновлено документацію.
+
+**Що зроблено:**
+
+1. Додано схеми:
+
+```text
+core_fact_patch_input.v1
+core_fact_patch_result.v1
+```
+
+2. Додано `engine.patch_core_fact(input)`.
+
+Patch шукає факт за:
+
+```text
+core_fact_id + scope
+```
+
+Це важливо: навіть якщо id випадково скопійований з іншого чату, команда поточного Telegram scope не має змінити чужий Core-факт.
+
+3. PyO3 adapter отримав:
+
+```text
+MemoryEngine.patch_core_fact(patch_json)
+```
+
+4. Telegram bot отримав команди:
+
+```text
+/core_update <core_fact_id> <new text>
+/core_forget <core_fact_id>
+```
+
+5. `/core` тепер показує `core_fact_id`, щоб користувач міг скопіювати його для update/forget.
+
+6. `/core_forget` ставить `status: deprecated`. Такий факт більше не повертається в prompt-context.
+
+7. `/core_update` оновлює текст і повертає статус `active`.
+
+**Проблеми чи виклики:**
+Це не вирішує повну історію demotion/contested/review. На v0.1 достатньо `deprecated`, щоб прибрати хибний факт з active context без ручного JSON-редагування. `contested` і повний review lifecycle лишаються для reflection/promotion v0.2.
+
+**Фідбек користувача:**
+Користувач дав команду рухатись далі після того, як було визначено, що без Core management будь-який хибний факт змушує лізти в файли руками.
+
+**Перевірки:**
+Перевірки після реалізації:
+
+- `cargo fmt --check` проходить;
+- `cargo test --workspace` проходить;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `maturin develop` у `crates/python_adapter/.venv` проходить;
+- `pytest crates/python_adapter/tests -v` проходить: 10/10;
+- `git diff --check` проходить.
+
+**Наступні кроки:**
+Перезапустити Telegram bot і вручну перевірити:
+
+- `/core` показує id;
+- `/core_update` оновлює факт;
+- `/core_forget` прибирає факт з `/core` і prompt-context.

@@ -20,7 +20,7 @@ use pyo3::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use ::memory_engine::core_store::{CoreContextRequest, CoreFactInput};
+use ::memory_engine::core_store::{CoreContextRequest, CoreFactInput, CoreFactPatchInput};
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::sleep::SleepCompressionResult;
@@ -99,6 +99,12 @@ impl PyMemoryEngine {
         let fact: CoreFactInput = parse_json(fact_json, "core fact input")?;
         let result = self.inner.upsert_core_fact(fact).map_err(map_err)?;
         dump_json(&result, "core fact upsert result")
+    }
+
+    fn patch_core_fact(&mut self, patch_json: &str) -> PyResult<String> {
+        let patch: CoreFactPatchInput = parse_json(patch_json, "core fact patch input")?;
+        let result = self.inner.patch_core_fact(patch).map_err(map_err)?;
+        dump_json(&result, "core fact patch result")
     }
 
     fn pending_tasks(&self) -> PyResult<String> {

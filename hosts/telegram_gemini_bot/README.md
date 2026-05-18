@@ -57,8 +57,10 @@
 - `/start` або `/help` - показати довідку.
 - `/sleep` - стиснути поточну сесію в archive memory і виконати LLM-доробку через Gemini.
 - `/recall текст` - пошукати archive memory.
-- `/core` - показати стабільні Core-факти.
+- `/core` - показати стабільні Core-факти разом із `core_fact_id`.
 - `/remember текст` - вручну записати стабільний Core-факт.
+- `/core_update id текст` - оновити Core-факт у поточному chat scope.
+- `/core_forget id` - позначити Core-факт як `deprecated`; він більше не потрапляє в prompt.
 - `/tasks` - показати pending tasks.
 - `/models` - показати active role -> model mapping.
 
