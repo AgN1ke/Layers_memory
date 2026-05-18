@@ -43,17 +43,18 @@ DEFAULT_REASONING_MODEL = "gemini-2.5-pro"
 DEFAULT_BALANCED_MODEL = "gemini-2.5-flash"
 DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CHAT_ROLE = "balanced"
+DEFAULT_AUTO_SLEEP_AFTER_EVENTS = 50
 RECENT_CONTEXT_LIMIT = 40
 SESSION_TRACE_EVENT_LIMIT = 120
 
 TELEGRAM_API = "https://api.telegram.org"
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
-MEMORY_KEYWORDS = (
-    "запам'ятай",
-    "запамʼятай",
-    "пам'ятай",
-    "памʼятай",
-    "важливо",
+CHAT_SYSTEM_PROMPT_PATH = PROMPTS_DIR / "telegram_chat_system.md"
+MEMORY_KEYWORD_PARTS = (
+    "запам",
+    "пам'ят",
+    "памʼят",
+    "важлив",
 )
 
 
@@ -172,18 +173,23 @@ def main() -> None:
     telegram_token = read_secret("Telegram bot token", "TELEGRAM_BOT_TOKEN")
     gemini_key = read_secret("Gemini API key", "GEMINI_API_KEY")
     llm_config = read_model_config()
+    auto_sleep_after_events = read_auto_sleep_after_events()
 
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    engine = memory_engine.MemoryEngine(str(MEMORY_DIR), host_id="telegram_gemini_bot")
+    engine = memory_engine.MemoryEngine(
+        str(MEMORY_DIR),
+        host_id="telegram_gemini_bot",
+        auto_sleep_after_events=auto_sleep_after_events,
+    )
     telegram = TelegramClient(telegram_token)
     gemini = GeminiClient(gemini_key)
 
     telegram.delete_webhook()
     log_line("deleteWebhook completed")
     print("Bot is running. Open Telegram and write to your bot.")
-    print("Commands: /help, /sleep, /recall text, /tasks, /models")
+    print("Commands: /help, /sleep, /recall text, /core, /remember text, /tasks, /models")
     offset = read_saved_offset()
-    log_line(f"bot polling started offset={offset}")
+    log_line(f"bot polling started offset={offset} auto_sleep_after_events={auto_sleep_after_events}")
 
     while True:
         try:
@@ -244,6 +250,26 @@ def handle_update(
         telegram.send_message(chat_id, format_tasks(tasks))
         return
 
+    if text == "/core":
+        telegram.send_message(chat_id, format_core_facts(context_package(engine, session_id, chat_id, text)))
+        return
+
+    if text.startswith("/remember"):
+        fact_text = text.removeprefix("/remember").strip()
+        if not fact_text:
+            telegram.send_message(chat_id, "Usage: /remember stable fact text")
+            return
+        result = upsert_core_fact(
+            engine,
+            category="profile",
+            scope=core_scope(session_id),
+            text=fact_text,
+            confidence=0.9,
+            tags=["manual", "telegram"],
+        )
+        telegram.send_message(chat_id, f"Core fact saved: {result['fact']['text']}")
+        return
+
     if text == "/sleep":
         telegram.send_message(chat_id, run_sleep(engine, gemini, llm_config, session_id))
         return
@@ -259,7 +285,7 @@ def handle_update(
         event_type="user_message",
         source=f"telegram_user_{user.get('id', 'unknown')}",
         text=text,
-        tags=["telegram_message"],
+        tags=event_tags(text),
         importance=importance_hint(text),
         payload_extra={
             "telegram_chat_id": chat_id,
@@ -400,6 +426,35 @@ def recall(engine: memory_engine.MemoryEngine, session_id: str, query_text: str,
     )
 
 
+def upsert_core_fact(
+    engine: memory_engine.MemoryEngine,
+    category: str,
+    scope: str,
+    text: str,
+    confidence: float,
+    tags: list[str],
+) -> dict[str, Any]:
+    return json.loads(
+        engine.upsert_core_fact(
+            json.dumps(
+                {
+                    "schema_version": "core_fact_input.v1",
+                    "category": category,
+                    "scope": scope,
+                    "text": text,
+                    "confidence": confidence,
+                    "tags": tags,
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+
+def core_scope(session_id: str) -> str:
+    return session_id
+
+
 def context_package(
     engine: memory_engine.MemoryEngine,
     session_id: str,
@@ -414,11 +469,12 @@ def context_package(
             "telegram_chat_id": chat_id,
             "current_text": text,
         },
+        "core_scope": core_scope(session_id),
         "query_text": text,
         "recall_limit": 5,
         "session_recent_limit": RECENT_CONTEXT_LIMIT,
         "session_trace_event_limit": SESSION_TRACE_EVENT_LIMIT,
-        "include_core": False,
+        "include_core": True,
     }
     return json.loads(engine.core_context_package(json.dumps(request, ensure_ascii=False)))
 
@@ -541,6 +597,21 @@ def read_model_config() -> HostLlmConfig:
     )
 
 
+def read_auto_sleep_after_events() -> int:
+    raw = os.environ.get("MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS")
+    if not raw:
+        return DEFAULT_AUTO_SLEEP_AFTER_EVENTS
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"Invalid MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS={raw!r}; "
+            f"using {DEFAULT_AUTO_SLEEP_AFTER_EVENTS}."
+        )
+        return DEFAULT_AUTO_SLEEP_AFTER_EVENTS
+    return max(0, value)
+
+
 def input_default(label: str, default: str) -> str:
     value = input(f"{label} [{default}]: ").strip()
     return value or default
@@ -567,15 +638,7 @@ def log_exception(message: str, err: Exception) -> None:
 
 
 def chat_system_instruction() -> str:
-    return (
-        "You are a concise Telegram assistant. Use the Memory Engine context package as the "
-        "source of truth for session_recent, session_trace, archive_relevant, core_facts, and "
-        "domain_state. Use session_trace for questions about what has been discussed in this "
-        "chat, session_recent for short-term follow-ups and pronouns, archive_relevant for older "
-        "committed memories, and core_facts for stable facts. If context is empty or irrelevant, "
-        "answer normally. Do not claim you remember things unless they are present in the context "
-        "package or the current user message."
-    )
+    return CHAT_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 def chat_prompt(package: dict[str, Any], user_text: str) -> str:
@@ -597,6 +660,19 @@ def format_recall(recall_result: dict[str, Any]) -> str:
             lines.append(f"   {item['narrative']}")
         if item.get("relevance_explanation"):
             lines.append(f"   {item['relevance_explanation']}")
+    return "\n".join(lines)
+
+
+def format_core_facts(package: dict[str, Any]) -> str:
+    facts = package.get("core_facts", [])
+    if not facts:
+        return "No Core facts saved yet. Use /remember text for explicit stable facts."
+
+    lines = ["Core facts:"]
+    for index, fact in enumerate(facts, start=1):
+        category = fact.get("category", "core")
+        confidence = float(fact.get("confidence", 0.0))
+        lines.append(f"{index}. [{category} {confidence:.2f}] {fact.get('text', '')}")
     return "\n".join(lines)
 
 
@@ -627,11 +703,13 @@ def help_text() -> str:
         "Memory bot commands:\n"
         "/sleep - commit current session into archive memory\n"
         "/recall text - search archive memory\n"
+        "/core - show stable Core facts\n"
+        "/remember text - save a stable Core fact manually\n"
         "/tasks - show pending tasks\n"
         "/models - show model role mapping\n"
         "\n"
         "Plain text is stored as an event and answered by Gemini with memory context.\n"
-        "Messages containing 'запамʼятай', 'памʼятай', or 'важливо' auto-run /sleep."
+        "Messages containing 'запам...', 'памʼят...', or 'важлив...' auto-run /sleep."
     )
 
 
@@ -639,12 +717,75 @@ def importance_hint(text: str) -> str:
     lowered = text.lower()
     if should_auto_sleep(lowered):
         return "high"
+    if has_core_signal(lowered):
+        return "medium"
     return "normal"
+
+
+def event_tags(text: str) -> list[str]:
+    lowered = text.lower()
+    tags = ["telegram_message"]
+
+    if has_memory_request(lowered):
+        tags.append("explicit_memory_request")
+    if has_name_reference(lowered):
+        tags.extend(["personal_fact_signal", "name_reference"])
+    if has_age_reference(lowered):
+        tags.extend(["personal_fact_signal", "age_reference"])
+    if has_assistant_identity_reference(lowered):
+        tags.append("assistant_identity_reference")
+    if has_communication_style_reference(lowered):
+        tags.extend(["preference_signal", "communication_style_signal"])
+
+    return unique_preserve_order(tags)
+
+
+def has_core_signal(lowered: str) -> bool:
+    return any(
+        (
+            has_memory_request(lowered),
+            has_name_reference(lowered),
+            has_age_reference(lowered),
+            has_assistant_identity_reference(lowered),
+            has_communication_style_reference(lowered),
+        )
+    )
 
 
 def should_auto_sleep(text: str) -> bool:
     lowered = text.lower()
-    return any(keyword in lowered for keyword in MEMORY_KEYWORDS)
+    return any(keyword in lowered for keyword in MEMORY_KEYWORD_PARTS)
+
+
+def has_memory_request(lowered: str) -> bool:
+    return any(keyword in lowered for keyword in MEMORY_KEYWORD_PARTS)
+
+
+def has_name_reference(lowered: str) -> bool:
+    return "мене звати" in lowered or bool(re.search(r"^\s*я\s+[а-яіїєґa-z'ʼ-]{2,40}\s*[.!?]?\s*$", lowered))
+
+
+def has_age_reference(lowered: str) -> bool:
+    return bool(re.search(r"\bмені\s+\d{1,3}\s*(?:років|роки|року|рік)\b", lowered))
+
+
+def has_assistant_identity_reference(lowered: str) -> bool:
+    return "тебе звати" in lowered or "твоє ім'я" in lowered or "твоє імʼя" in lowered
+
+
+def has_communication_style_reference(lowered: str) -> bool:
+    return "давай на ти" in lowered or "звертайся на ти" in lowered
+
+
+def unique_preserve_order(values: list[str]) -> list[str]:
+    seen = set()
+    unique = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
 
 
 def now_rfc3339() -> str:

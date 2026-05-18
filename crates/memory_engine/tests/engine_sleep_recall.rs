@@ -1,11 +1,11 @@
 use memory_engine::archive::ArchiveStatus;
-use memory_engine::core_store::CoreContextRequest;
+use memory_engine::core_store::{CoreContextRequest, CoreFactInput};
 use memory_engine::event::IngestEvent;
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::SleepCompressionResult;
 use memory_engine::types::{
-    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
-    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
+    RECALL_QUERY_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{FileStorage, MemoryEngine};
 use serde_json::json;
@@ -246,6 +246,7 @@ fn engine_core_context_package_combines_session_and_archive_context() {
             schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
             session_id: "live_session".to_string(),
             domain_state: json!({ "current_text": "А про літаки?" }),
+            core_scope: None,
             query_text: Some("літаки МіГ-15".to_string()),
             recall_limit: 5,
             session_recent_limit: 2,
@@ -262,6 +263,118 @@ fn engine_core_context_package_combines_session_and_archive_context() {
         .contains("МіГ-15")));
     assert_eq!(package.archive_relevant.len(), 1);
     assert_eq!(package.archive_relevant[0].gist, "Розмова про МіГ-15.");
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_upsert_core_fact_adds_stable_fact_to_context_package() {
+    let root = unique_temp_dir("engine_upsert_core_fact_adds_stable_fact_to_context_package");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Мене звати Микита.",
+        vec!["personal_fact"],
+    );
+
+    let result = engine
+        .upsert_core_fact(CoreFactInput {
+            schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+            category: "profile".to_string(),
+            scope: Some("telegram_chat_a".to_string()),
+            text: "Користувача звати Микита.".to_string(),
+            confidence: 0.95,
+            tags: vec!["telegram".to_string(), "name".to_string()],
+            source_archive_ids: vec![],
+            source_candidate_id: None,
+        })
+        .expect("upsert core fact");
+
+    assert!(result.created);
+    assert_eq!(result.category, "profile");
+    assert!(result.fact.core_fact_id.starts_with("core_fact_"));
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "Як мене звати?" }),
+            core_scope: Some("telegram_chat_a".to_string()),
+            query_text: Some("ім'я користувача".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 2,
+            session_trace_event_limit: 10,
+            include_core: true,
+        })
+        .expect("core context package");
+
+    assert!(package
+        .core_facts
+        .iter()
+        .any(|fact| fact.text == "Користувача звати Микита."));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_core_context_package_filters_core_facts_by_scope() {
+    let root = unique_temp_dir("engine_core_context_package_filters_core_facts_by_scope");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Початок scoped core test.",
+        vec!["test"],
+    );
+
+    engine
+        .upsert_core_fact(CoreFactInput {
+            schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+            category: "profile".to_string(),
+            scope: Some("telegram_1".to_string()),
+            text: "Користувача звати Микита.".to_string(),
+            confidence: 0.95,
+            tags: vec!["name".to_string()],
+            source_archive_ids: vec![],
+            source_candidate_id: None,
+        })
+        .expect("upsert first scoped fact");
+
+    engine
+        .upsert_core_fact(CoreFactInput {
+            schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+            category: "profile".to_string(),
+            scope: Some("telegram_2".to_string()),
+            text: "Користувача звати Аліса.".to_string(),
+            confidence: 0.95,
+            tags: vec!["name".to_string()],
+            source_archive_ids: vec![],
+            source_candidate_id: None,
+        })
+        .expect("upsert second scoped fact");
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "Як мене звати?" }),
+            core_scope: Some("telegram_2".to_string()),
+            query_text: Some("ім'я користувача".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 2,
+            session_trace_event_limit: 10,
+            include_core: true,
+        })
+        .expect("core context package");
+
+    assert_eq!(package.core_facts.len(), 1);
+    assert_eq!(package.core_facts[0].text, "Користувача звати Аліса.");
+    assert_eq!(package.core_facts[0].scope.as_deref(), Some("telegram_2"));
 
     fs::remove_dir_all(root).ok();
 }

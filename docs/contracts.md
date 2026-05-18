@@ -72,6 +72,8 @@ Markdown-файли існують для людини. Вони не замін
 - `archive_entry.v1`;
 - `core_store.v1`;
 - `core_fact.v1`;
+- `core_fact_input.v1`;
+- `core_fact_upsert_result.v1`;
 - `core_context_request.v1`;
 - `core_context_package.v1`;
 - `candidate_belief.v1`;
@@ -541,6 +543,7 @@ Core Store - стабільна основа пам'яті.
     {
       "schema_version": "core_fact.v1",
       "core_fact_id": "core_fact_01J00000000000000000000001",
+      "scope": "telegram_311422683",
       "text": "Користувач живе в Берліні.",
       "status": "active",
       "confidence": 0.82,
@@ -568,9 +571,49 @@ Core Store - стабільна основа пам'яті.
 - `contradicted`;
 - `needs_review`.
 
-На v0.1 Core Store змінюється тільки через явне підтвердження або спеціальну команду. Автоматична промоція без огляду не входить у v0.1.
+На v0.1 Core Store змінюється через явний `engine.upsert_core_fact(...)` або спеціальну команду host-а, наприклад `/remember`. Host-рівневі heuristic rules можуть додавати теги до подій, але не мають напряму записувати plain text у Core. Повна автоматична промоція з CandidateBelief без огляду не входить у v0.1.
 
-### 6.2 CoreContextRequest
+### 6.2 CoreFactInput
+
+Вхід у `engine.upsert_core_fact(input)`.
+
+```json
+{
+  "schema_version": "core_fact_input.v1",
+  "category": "profile",
+  "scope": "telegram_311422683",
+  "text": "Користувача звати Микита.",
+  "confidence": 0.95,
+  "tags": ["telegram", "profile", "name"],
+  "source_archive_ids": [],
+  "source_candidate_id": null
+}
+```
+
+Відповідь:
+
+```json
+{
+  "schema_version": "core_fact_upsert_result.v1",
+  "category": "profile",
+  "created": true,
+  "fact": {
+    "schema_version": "core_fact.v1",
+    "core_fact_id": "core_fact_01J00000000000000000000001",
+    "scope": "telegram_311422683",
+    "text": "Користувача звати Микита.",
+    "status": "active",
+    "confidence": 0.95,
+    "created_at": "2026-05-17T17:20:00.000Z",
+    "updated_at": "2026-05-17T17:20:00.000Z",
+    "tags": ["name", "profile", "telegram"]
+  }
+}
+```
+
+`scope` визначає межу видимості факту. Для Telegram host використовується `session_id` виду `telegram_<chat_id>`, щоб факти одного чату не потрапляли в контекст іншого. Upsert дедуплікує факти за нормалізованим текстом і `scope` у межах категорії.
+
+### 6.3 CoreContextRequest
 
 Вхід у `engine.core_context_package(request)`.
 
@@ -582,6 +625,7 @@ Core Store - стабільна основа пам'яті.
     "active_topic": "travel_planning",
     "current_text": "Що ми говорили про літаки?"
   },
+  "core_scope": "telegram_311422683",
   "query_text": "літаки",
   "recall_limit": 5,
   "session_recent_limit": 40,
@@ -590,9 +634,9 @@ Core Store - стабільна основа пам'яті.
 }
 ```
 
-`domain_state` приходить від хоста у момент запиту і не записується в Core Store.
+`domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
 
-### 6.3 CoreContextPackage
+### 6.4 CoreContextPackage
 
 Core Context Package не обов'язково зберігається на диск. Це відповідь ядра на запит хоста.
 
@@ -602,7 +646,9 @@ Core Context Package не обов'язково зберігається на д
   "created_at": "2026-05-17T17:25:00.000Z",
   "core_facts": [
     {
+      "category": "profile",
       "core_fact_id": "core_fact_01J00000000000000000000001",
+      "scope": "telegram_311422683",
       "text": "Користувач живе в Берліні.",
       "confidence": 0.82,
       "tags": ["personal_fact", "location"]
@@ -653,7 +699,7 @@ Core Context Package не обов'язково зберігається на д
 }
 ```
 
-На v0.1 `core_facts` зазвичай порожній, бо автоматична промоція в Core Store ще не реалізована. Але хости мають уже використовувати `CoreContextPackage` як єдину точку збору prompt-контексту, а не дублювати session/recent/archive логіку в кожному host-і.
+На v0.1 `core_facts` заповнюється з категорій `profile`, `preferences`, `relationship`, якщо host або користувач уже зберіг туди стабільні факти. Хости мають використовувати `CoreContextPackage` як єдину точку збору prompt-контексту, а не дублювати session/recent/archive/core логіку в кожному host-і.
 
 ---
 

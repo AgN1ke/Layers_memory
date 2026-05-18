@@ -248,13 +248,27 @@ processing_mode: defer_to_sleep
 
 На v0.1 `engine.core_context_package(request)` повертає:
 
-- `core_facts` — стабільні факти Core Store (може бути порожнім, поки промоція не реалізована);
+- `core_facts` — стабільні факти Core Store з категорій `profile`, `preferences`, `relationship`;
 - `session_recent` — короткий хвіст активної сесії;
 - `session_trace` — ширший trace подій поточної сесії;
 - `archive_relevant` — результат stage1 recall по Архіву;
 - `domain_state` — стан, який хост передав у запиті.
 
 Хости не повинні самі дублювати збір recent/trace/archive-контексту. Вони формують доменний стан, викликають `core_context_package`, а потім передають пакет у свій LLM prompt.
+
+### 5.4 Канали Запису В Core Store
+
+Core Store має три різні канали впливу. Їх треба не змішувати, бо вони мають різний рівень довіри і різну мету.
+
+**Explicit user path** — активний у v0.1. Користувач явно дає команду зберегти факт, наприклад `/remember Користувача звати Микита.`. Хост передає цей факт у `engine.upsert_core_fact(input)`. Це не regex extraction: рішення записати факт приймає користувач або власник системи.
+
+Explicit path обовʼязково має задавати `scope`, якщо host працює з кількома користувачами, чатами або персонажами. У Telegram host scope дорівнює session id `telegram_<chat_id>`. `core_context_package` повертає тільки факти поточного `core_scope`, тому факти з одного чату не мають потрапляти в інший.
+
+**Heuristic tagging path** — активний у v0.1, але не пише в Core Store. Хост може додати event-теги (`personal_fact_signal`, `name_reference`, `age_reference`, `preference_signal`, `explicit_memory_request`) і підняти `importance_hint`, щоб sleep/reflection пізніше уважніше переглянули подію. Це мʼякий сигнал, не рішення "це Core-факт".
+
+**Reflection-based promotion path** — запланований на v0.2+. Ядро переглядає Архів, знаходить повторювані теми й потенційні висновки, створює `CandidateBelief`, перевіряє правила підтримки й суперечностей, після чого власник підтверджує або відхиляє промоцію в Core Store. Цей шлях потрібен для висновків типу "користувач постійно повертається до теми X", а не для прямих профільних фактів.
+
+Regex extraction із plain text напряму в Core Store заборонений як основний шлях. Він створює демо-ефект, але не моделює консолідацію памʼяті і засмічує шар Ядро. У v0.1 Core поповнюється явно через `/remember`; неявні спостереження проходять через Session -> Archive -> майбутній Reflection.
 
 **Кандидати на промоцію (candidate beliefs).** Reflection-процес періодично переглядає Архів і виділяє повторювані теми, патерни, потенційні стабільні висновки. Вони зберігаються у `memory/core/candidates/<candidate_id>.json` як проміжний стан. Кандидат не потрапляє в Core Store автоматично.
 

@@ -20,12 +20,12 @@ use pyo3::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use ::memory_engine::core_store::CoreContextRequest;
+use ::memory_engine::core_store::{CoreContextRequest, CoreFactInput};
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::sleep::SleepCompressionResult;
 use ::memory_engine::storage::Storage;
-use ::memory_engine::{FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
+use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
 
 #[pyclass(name = "MemoryEngine", unsendable)]
 pub struct PyMemoryEngine {
@@ -35,13 +35,22 @@ pub struct PyMemoryEngine {
 #[pymethods]
 impl PyMemoryEngine {
     #[new]
-    #[pyo3(signature = (memory_dir, host_id="unknown"))]
-    fn new(memory_dir: &str, host_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (memory_dir, host_id="unknown", auto_sleep_after_events=None))]
+    fn new(
+        memory_dir: &str,
+        host_id: &str,
+        auto_sleep_after_events: Option<usize>,
+    ) -> PyResult<Self> {
         let path = PathBuf::from(memory_dir);
         let storage = FileStorage::with_host_id(&path, host_id);
         storage.ensure_layout().map_err(map_err)?;
+        let mut options = EngineOptions::default();
+        if let Some(after_events) = auto_sleep_after_events {
+            options.auto_sleep.enabled = after_events > 0;
+            options.auto_sleep.after_events = after_events;
+        }
         Ok(Self {
-            inner: CoreEngine::new(storage),
+            inner: CoreEngine::with_options(storage, options),
         })
     }
 
@@ -84,6 +93,12 @@ impl PyMemoryEngine {
         let request: CoreContextRequest = parse_json(request_json, "core context request")?;
         let package = self.inner.core_context_package(request).map_err(map_err)?;
         dump_json(&package, "core context package")
+    }
+
+    fn upsert_core_fact(&mut self, fact_json: &str) -> PyResult<String> {
+        let fact: CoreFactInput = parse_json(fact_json, "core fact input")?;
+        let result = self.inner.upsert_core_fact(fact).map_err(map_err)?;
+        dump_json(&result, "core fact upsert result")
     }
 
     fn pending_tasks(&self) -> PyResult<String> {

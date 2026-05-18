@@ -12,7 +12,7 @@ use crate::journal::{JournalOperation, JournalState};
 use crate::manifest::Manifest;
 use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
 use crate::storage::Storage;
-use crate::types::SESSION_SCHEMA_VERSION;
+use crate::types::{CORE_STORE_SCHEMA_VERSION, SESSION_SCHEMA_VERSION};
 use crate::{MemoryEngineError, Result};
 
 #[derive(Debug, Clone)]
@@ -251,7 +251,16 @@ impl Storage for FileStorage {
     }
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory> {
-        read_json(&self.core_store_path(category))
+        let path = self.core_store_path(category);
+        if !path.exists() {
+            return Ok(CoreStoreCategory {
+                schema_version: CORE_STORE_SCHEMA_VERSION.to_string(),
+                category: category.to_string(),
+                updated_at: "unknown".to_string(),
+                facts: Vec::new(),
+            });
+        }
+        read_json(&path)
     }
 
     fn write_core_store_category(&mut self, category: &CoreStoreCategory) -> Result<()> {

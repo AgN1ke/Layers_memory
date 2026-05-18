@@ -34,6 +34,8 @@ pub struct ReviewRecord {
 pub struct CoreFact {
     pub schema_version: String,
     pub core_fact_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     pub text: String,
     pub status: CoreFactStatus,
     pub confidence: f64,
@@ -61,8 +63,36 @@ pub struct CoreStoreCategory {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoreFactInput {
+    pub schema_version: String,
+    pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    pub text: String,
+    #[serde(default)]
+    pub confidence: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_archive_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_candidate_id: Option<Id>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoreFactUpsertResult {
+    pub schema_version: String,
+    pub category: String,
+    pub created: bool,
+    pub fact: CoreFact,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoreContextFact {
+    pub category: String,
     pub core_fact_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     pub text: String,
     pub confidence: f64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -75,6 +105,8 @@ pub struct CoreContextRequest {
     pub session_id: Id,
     #[serde(default)]
     pub domain_state: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_text: Option<String>,
     #[serde(default)]

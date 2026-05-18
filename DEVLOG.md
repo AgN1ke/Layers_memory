@@ -1578,3 +1578,323 @@ auto_sleep: Option<SleepStage1Result>
 
 **Наступні кроки:**
 Перезапустити Telegram bot і провести live-тест на довгу сесію без ручного `/sleep`: після 50 незаархівованих подій engine має повернути `auto_sleep`, bot має виконати sleep-compression, а наступні запити мають бачити вже archive memory через `core_context_package.archive_relevant`.
+
+### Запис 29
+
+**Час:** 2026-05-18 16:25:57 +03:00
+
+**Проблематика:**
+Після live-тесту стало видно, що auto-sleep уже працює, але Core Store залишався порожнім. Bot міг відповідати про імʼя, вік і стиль звертання тільки завдяки `session_trace`, тобто ці факти не були справді стабільною памʼяттю. Також користувач не мав зручної команди, щоб перевірити Core або прогнати backfill по вже наявній Telegram-сесії.
+
+**Задум:**
+Активувати мінімальний робочий Core-шар без повної reflection-промоції:
+
+- додати в engine явний `upsert_core_fact`;
+- повертати Core-факти у `core_context_package`;
+- у Telegram host додати `/core`, `/core_refresh`, `/remember`;
+- автоматично витягувати тільки очевидні стабільні факти з повідомлень;
+- винести активний чат-промпт Telegram host-а з Python-коду в `prompts/`.
+
+**Що робили:**
+
+- оновлено Rust core: `core_store.rs`, `engine.rs`, `file_storage.rs`, `types.rs`;
+- оновлено PyO3 adapter;
+- оновлено Telegram bot і GUI launcher;
+- додано `prompts/telegram_chat_system.md`;
+- оновлено тести Rust/Python;
+- оновлено `docs/contracts.md`, `docs/architecture.md`, `docs/local-development.md`;
+- одноразово прогнано Core refresh по реальній Telegram-сесії `telegram_311422683`.
+
+**Що зроблено:**
+
+1. Додано `core_fact_input.v1` і `core_fact_upsert_result.v1`.
+
+2. Додано `engine.upsert_core_fact(input)`:
+
+- пише факти у `memory/core/store/<category>.json`;
+- підтримує категорії `profile`, `preferences`, `relationship`;
+- дедуплікує факти за нормалізованим текстом у межах категорії;
+- повертає створений або оновлений `CoreFact`.
+
+3. `engine.core_context_package(...)` тепер реально наповнює `core_facts`, якщо `include_core: true`.
+
+4. PyO3 adapter отримав метод:
+
+```text
+MemoryEngine.upsert_core_fact(fact_json)
+```
+
+5. Telegram bot:
+
+- викликає `core_context_package` з `include_core: true`;
+- автоматично витягує очевидні факти: імʼя користувача, вік, імʼя bot-а, прохання спілкуватись на "ти";
+- має `/core` для перегляду Core;
+- має `/core_refresh` для сканування поточної сесії;
+- має `/remember text` для ручного запису стабільного факту;
+- має ширший keyword-тригер `запам...`, `памʼят...`, `важлив...`;
+- має env/GUI параметр `MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS`.
+
+6. Активний чат-промпт Telegram host-а винесено в:
+
+```text
+prompts/telegram_chat_system.md
+```
+
+7. Реальний Core після backfill поточної сесії:
+
+- `Користувача звати Микита.`;
+- `Користувачу 36 років.`;
+- `Бота звати Аврора.`;
+- `Користувач хоче спілкуватися на ти.`
+
+Файли лежать у:
+
+```text
+hosts/telegram_gemini_bot/runtime/memory/core/store/
+```
+
+**Проблеми чи виклики:**
+У системі одночасно висіли два процеси `bot.py` з одного venv. Це могло давати дивну поведінку або дубльовані відповіді. Перед `maturin develop` обидва процеси були зупинені, бо живий Python extension може блокувати оновлення wheel.
+
+`core_refresh` поки не є розумною LLM-екстракцією. Це навмисно простий deterministic шар для очевидних фактів. Повний pipeline `Archive -> CandidateBelief -> review -> Core Store` ще треба реалізувати окремо.
+
+**Фідбек користувача:**
+Користувач показав transcript, де bot памʼятає літаки й риболовлю через session context, але справедливо вказав, що sleep він не може явно перевірити, а імʼя, вік, імʼя bot-а і звертання на "ти" мають бути в Core.
+
+**Перевірки:**
+
+- `cargo fmt --check` проходить;
+- `cargo test --workspace` проходить;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `maturin develop` у `crates/python_adapter/.venv` проходить;
+- `pytest crates/python_adapter/tests -v` проходить: 8/8;
+- manual Core refresh по `telegram_311422683` створив 4 Core-факти.
+
+**Наступні кроки:**
+Перезапустити Telegram bot уже з оновленим adapter-ом і перевірити в Telegram:
+
+- `/core` має показати 4 стабільні факти;
+- питання "Як мене звати?", "Як тебе звати?", "Скільки мені років?", "Ми на ти?" мають брати відповідь із `core_facts`;
+- нові повідомлення з "запам..." або "важлив..." мають запускати memory update більш передбачувано.
+
+### Запис 30
+
+**Час:** 2026-05-18 16:45:31 +03:00
+
+**Проблематика:**
+Після активації Core Store треба чесно розділити два різні канали запису в шар Ядро. Поточний `direct host-extractor` вже працює, а `reflection-based promotion` ще тільки запланований. Якщо це не зафіксувати, наступна модель може помилково думати, що direct extraction уже є повною реалізацією reflection path.
+
+Також треба мати формальний критерій, коли v0.1 можна назвати завершеним. Без checklist є ризик нескінченно полірувати foundation або, навпаки, передчасно сказати "готово" без live-перевірки auto-sleep і archive recall.
+
+**Задум:**
+
+- явно описати два канали запису в Core Store у `docs/architecture.md`;
+- додати окремий acceptance checklist для v0.1;
+- привʼязати local-development інструкцію до цього checklist.
+
+**Що робили:**
+
+- оновлено `docs/architecture.md`;
+- додано `docs/v0.1-acceptance.md`;
+- оновлено `docs/local-development.md`;
+- оновлено цей devlog-запис.
+
+**Що зроблено:**
+
+1. В архітектурі зафіксовано два канали запису в Core Store:
+
+- `Direct host-extractor path` — активний у v0.1, працює через `engine.upsert_core_fact(input)`, підходить для прямих заяв користувача;
+- `Reflection-based promotion path` — v0.2+, працюватиме через Archive -> CandidateBelief -> review -> Core Store.
+
+2. Створено `docs/v0.1-acceptance.md` з live-checklist:
+
+- Core команда;
+- Core холодний старт;
+- auto-sleep;
+- topic recovery з Archive;
+- prompt/provider boundary;
+- runtime readability.
+
+3. У `docs/local-development.md` додано правило: перед тим як називати v0.1 завершеним, пройти `docs/v0.1-acceptance.md`.
+
+**Проблеми чи виклики:**
+Це документаційна зміна без нового коду. Вона не підтверджує live-тест, а тільки задає межу приймання.
+
+**Фідбек користувача:**
+Користувач сформулював, що foundation сильний, але v0.1 ще треба довести live-тестом auto-sleep і archive recall. Також вказав, що direct host-extractor path треба чесно відділити від майбутнього reflection-based path.
+
+**Перевірки:**
+
+- Документально зафіксовано checklist.
+- Код не змінювався в цьому кроці.
+
+**Наступні кроки:**
+Запустити Telegram bot через `run_gui.ps1` і пройти `docs/v0.1-acceptance.md`. Якщо checklist проходить — робити обережний commit і готувати `github-code` branch. Якщо ні — лагодити конкретний пункт.
+
+### Запис 31
+
+**Час:** 2026-05-18 22:12:20 +03:00
+
+**Проблематика:**
+Live-тест виявив критичний дефект ізоляції Core Store. Telegram bot отримував повідомлення з двох chat id: `311422683` і `376001833`. У другому чаті користувач запитав "Як мене звуть", а bot відповів "Тебе звати Микита", бо `core_facts` були глобальні для всього runtime і підмішувались у будь-який чат.
+
+Це не prompt-проблема, а boundary bug: стабільна памʼять одного користувача не має потрапляти в контекст іншого.
+
+**Задум:**
+Додати scope до Core Store contract і змусити Telegram host записувати/читати Core-факти тільки в межах поточного `telegram_<chat_id>`.
+
+**Що робили:**
+
+- оновлено `CoreFact`, `CoreFactInput`, `CoreContextFact`, `CoreContextRequest`;
+- оновлено `engine.upsert_core_fact(...)`;
+- оновлено `engine.core_context_package(...)`;
+- оновлено Telegram bot;
+- додано тести на scope isolation у Rust і Python adapter;
+- оновлено docs і acceptance checklist;
+- перебудовано PyO3 adapter;
+- зроблено scoped backfill для реальних сесій `telegram_311422683` і `telegram_376001833`.
+
+**Що зроблено:**
+
+1. Додано поле `scope` у Core facts:
+
+```text
+CoreFact.scope: Option<String>
+CoreFactInput.scope: Option<String>
+CoreContextFact.scope: Option<String>
+CoreContextRequest.core_scope: Option<String>
+```
+
+2. `engine.upsert_core_fact(...)` тепер дедуплікує факт за парою:
+
+```text
+normalized_text + scope
+```
+
+3. `engine.core_context_package(...)` повертає тільки факти, scope яких дорівнює `core_scope` запиту.
+
+4. Telegram host задає:
+
+```text
+core_scope = session_id = telegram_<chat_id>
+```
+
+5. `/core`, `/core_refresh`, `/remember` тепер працюють у межах поточного Telegram chat id.
+
+6. Extractor навчився розпізнавати коротке представлення виду:
+
+```text
+Я Аліса
+```
+
+7. Scoped runtime backfill:
+
+- `telegram_311422683`: Микита, 36 років, Аврора, "на ти";
+- `telegram_376001833`: Аліса.
+
+Старі unscoped Core-факти залишились у runtime як артефакт раннього тесту, але Telegram host більше не має їх підмішувати, бо завжди передає `core_scope`.
+
+**Проблеми чи виклики:**
+Перед `maturin develop` знову були запущені дві копії `bot.py`. Обидві зупинено перед оновленням adapter, щоб не тримати старий Python extension і не давати подвійні Telegram-відповіді.
+
+Це виправлення змінює контракт Core Store, але сумісно читає старі JSON-файли: `scope` має serde default і може бути відсутнім.
+
+**Фідбек користувача:**
+Користувач попросив подивитись після тесту. Логи й сесії показали змішування двох чатів. Це стало новим пунктом acceptance checklist: `Multi-Chat Core Isolation`.
+
+**Перевірки:**
+
+- `cargo fmt --check` проходить;
+- `cargo test --workspace` проходить;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `maturin develop` у `crates/python_adapter/.venv` проходить;
+- `pytest crates/python_adapter/tests -v` проходить: 9/9;
+- manual scoped context package check:
+  - `telegram_311422683` бачить тільки Микиту/36/Аврору/"на ти";
+  - `telegram_376001833` бачить тільки Алісу.
+
+**Наступні кроки:**
+Перезапустити Telegram bot через `run_gui.ps1` і повторити live-тест:
+
+- у чаті Микити `/core` має показати тільки факти Микити;
+- у чаті Аліси `/core` має показати тільки Алісу;
+- питання "Як мене звати?" в чаті Аліси не має повертати Микиту;
+- далі проходити `docs/v0.1-acceptance.md` з новим пунктом multi-chat isolation.
+
+### Запис 32
+
+**Час:** 2026-05-18 23:01:03 +03:00
+
+**Проблематика:**
+Після обговорення стало зрозуміло, що regex extraction із plain text напряму в Core Store — неправильний канал для памʼяті. Він корисний для демо, але архітектурно це anti-pattern: host бачить патерн типу "мені 36 років" і одразу створює CoreFact, оминаючи Session -> Archive -> Reflection -> Candidate -> Review.
+
+Це суперечить місії проєкту: Core має бути стабільною основою, а не автозаповненою формою з regex-ів.
+
+**Задум:**
+
+- залишити прямий запис у Core тільки для explicit-команди `/remember`;
+- прибрати автоматичний regex -> `upsert_core_fact` із Telegram host-а;
+- regex-подібні правила залишити лише як heuristic tagging для events;
+- зафіксувати три канали впливу на Core: explicit, heuristic tagging, reflection-based promotion.
+
+**Що робили:**
+
+- оновлено `hosts/telegram_gemini_bot/bot.py`;
+- оновлено `docs/architecture.md`;
+- оновлено `docs/contracts.md`;
+- оновлено `docs/local-development.md`;
+- оновлено `hosts/telegram_gemini_bot/README.md`;
+- оновлено `docs/v0.1-acceptance.md`;
+- оновлено цей devlog.
+
+**Що зроблено:**
+
+1. Прибрано автоматичний direct write:
+
+```text
+plain text -> extract_core_facts(regex) -> upsert_core_fact
+```
+
+2. `/core_refresh` прибрано з Telegram commands, бо він був regex-backfill у Core.
+
+3. `/remember text` лишився єдиним активним direct path у Telegram host.
+
+4. Замість extraction додано heuristic event tagging:
+
+- `explicit_memory_request`;
+- `personal_fact_signal`;
+- `name_reference`;
+- `age_reference`;
+- `assistant_identity_reference`;
+- `preference_signal`;
+- `communication_style_signal`.
+
+5. Якщо message має такі сигнали, `importance_hint` піднімається до `medium`. Якщо є "запам..." / "памʼят..." / "важлив...", лишається `high` і запускається sleep-flow.
+
+6. В архітектурі зафіксовано три канали:
+
+- `Explicit user path` — активний у v0.1 через `/remember`;
+- `Heuristic tagging path` — активний у v0.1, але не пише в Core;
+- `Reflection-based promotion path` — v0.2+, через Archive -> CandidateBelief -> review -> Core.
+
+7. У checklist змінено очікування: plain text на кшталт "Мені 36 років" не має сам створювати CoreFact; він має отримати event-теги для майбутньої reflection.
+
+**Проблеми чи виклики:**
+Старі scoped Core-факти, створені попереднім regex-backfill, не видалені автоматично. Це runtime-артефакт раннього тесту. Для штатного виправлення потрібні Core management commands (`/core_forget`, `/core_update`, статуси `deprecated/contested`), щоб не редагувати памʼять руками.
+
+**Фідбек користувача:**
+Користувач прямо вказав, що заміна агентивної оцінки regex-хардкодом — неправильна архітектура. Інша модель також рекомендувала залишити regex лише як heuristic signal, а не канал запису в Core.
+
+**Перевірки:**
+
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `cargo fmt --check` проходить;
+- `git diff --check` проходить;
+- `cargo test --workspace` проходить;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `pytest crates/python_adapter/tests -v` проходить: 9/9.
+
+**Наступні кроки:**
+Прогнати перевірки. Потім зробити наступний технічний крок: Core management API/commands для deprecate/update scoped Core-фактів, щоб прибрати або виправити старі regex-generated факти без ручного редагування JSON.

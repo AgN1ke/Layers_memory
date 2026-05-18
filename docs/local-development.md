@@ -181,7 +181,7 @@ hosts/telegram_gemini_bot/
 .\hosts\telegram_gemini_bot\run_gui.ps1
 ```
 
-Він відкриває маленьке вікно з полями для Telegram token, Gemini API key і model mapping. Секрети передаються в bot через env-змінні й не записуються у файли.
+Він відкриває маленьке вікно з полями для Telegram token, Gemini API key, model mapping і порога auto-sleep. Секрети передаються в bot через env-змінні й не записуються у файли.
 
 Скрипт:
 
@@ -196,6 +196,7 @@ hosts/telegram_gemini_bot/
 - Telegram bot token;
 - Gemini API key;
 - model mapping для ролей `reasoning`, `balanced`, `fast`.
+- `auto-sleep events` або env `MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS`.
 
 Defaults:
 
@@ -203,6 +204,7 @@ Defaults:
 - `balanced` -> `gemini-2.5-flash`;
 - `fast` -> `gemini-2.5-flash-lite`;
 - chatbot replies -> `balanced`.
+- auto-sleep threshold -> `50` незаархівованих подій (`0` вимикає engine-level auto-sleep).
 
 Runtime memory host-бота:
 
@@ -235,7 +237,12 @@ Offset зберігається після кожного обробленого
 - bot просить `engine.core_context_package(...)`, а не збирає recent/trace/archive сам;
 - Gemini отримує готовий context package: `session_recent`, `session_trace`, `archive_relevant`, `core_facts`, `domain_state`;
 - відповідь bot-а зберігається як `assistant_message`;
+- plain text не записується напряму в Core Store через regex extraction;
+- Telegram host додає мʼякі event-теги (`personal_fact_signal`, `name_reference`, `age_reference`, `preference_signal`) і піднімає `importance_hint`, щоб sleep/reflection потім уважніше переглянули ці події;
+- Telegram host записує і читає Core-факти зі scope `telegram_<chat_id>`, щоб факти різних чатів не змішувались;
+- Core можна перевірити командою `/core`, або явно додати факт командою `/remember text`;
 - archive memory створюється через `/sleep`, auto-sleep keywords або engine-level auto-sleep після порога незаархівованих подій.
+- активний чат-промпт Telegram host-а лежить у `prompts/telegram_chat_system.md`, а не захардкоджений у Python.
 
 ## Поточний Очікуваний Результат
 
@@ -243,7 +250,7 @@ Offset зберігається після кожного обробленого
 
 - `cargo fmt --check` проходить;
 - `cargo test --workspace` проходить;
-- `cargo test --workspace` запускає 15 тестів у `memory_engine` (6 + 3 + 6 у трьох test-файлах);
+- `cargo test --workspace` запускає 17 тестів у `memory_engine` (6 + 3 + 8 у трьох test-файлах);
 - `cargo clippy --workspace --all-targets -- -D warnings` проходить.
 
 ## Python-адаптер
@@ -284,13 +291,15 @@ $venv = "C:\Python_projects\Layers_memory\crates\python_adapter\.venv"
 
 ### Поточний Очікуваний Результат Pytest
 
-7 тестів у `tests/test_basic.py`, усі проходять:
+9 тестів у `tests/test_basic.py`, усі проходять:
 
 - `test_ingest_creates_stored_event`;
 - `test_read_session_returns_stored_events`;
 - `test_ingest_returns_auto_sleep_after_default_threshold`;
 - `test_full_cycle_ingest_sleep_resume_recall`;
 - `test_core_context_package_combines_session_and_archive`;
+- `test_upsert_core_fact_is_returned_in_context_package`;
+- `test_core_context_package_does_not_leak_facts_between_scopes`;
 - `test_ingest_rejects_wrong_schema`;
 - `test_recall_zero_limit_uses_engine_default`.
 
@@ -335,3 +344,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 Якщо змінюються залежності в `Cargo.toml`, треба оновити і комітити `Cargo.lock`.
 
 `target/` не комітити: це локальний build output і він ігнорується через `.gitignore`.
+
+Перед тим як називати v0.1 завершеним, пройти live-checklist:
+
+```text
+docs/v0.1-acceptance.md
+```

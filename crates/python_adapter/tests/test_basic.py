@@ -182,6 +182,86 @@ def test_core_context_package_combines_session_and_archive(engine: memory_engine
     assert package["archive_relevant"][0]["gist"] == "Розмова про МіГ-15."
 
 
+def test_upsert_core_fact_is_returned_in_context_package(engine: memory_engine.MemoryEngine):
+    _ingest(engine, "core_session", "Мене звати Микита.")
+
+    result = json.loads(
+        engine.upsert_core_fact(
+            json.dumps(
+                {
+                    "schema_version": "core_fact_input.v1",
+                    "category": "profile",
+                    "scope": "telegram_core_session",
+                    "text": "Користувача звати Микита.",
+                    "confidence": 0.95,
+                    "tags": ["telegram", "name"],
+                }
+            )
+        )
+    )
+
+    assert result["schema_version"] == "core_fact_upsert_result.v1"
+    assert result["created"] is True
+    assert result["fact"]["core_fact_id"].startswith("core_fact_")
+
+    request = {
+        "schema_version": "core_context_request.v1",
+        "session_id": "core_session",
+        "domain_state": {"current_text": "Як мене звати?"},
+        "core_scope": "telegram_core_session",
+        "query_text": "ім'я користувача",
+        "recall_limit": 5,
+        "session_recent_limit": 2,
+        "session_trace_event_limit": 10,
+        "include_core": True,
+    }
+    package = json.loads(engine.core_context_package(json.dumps(request)))
+
+    assert any(
+        fact["text"] == "Користувача звати Микита."
+        for fact in package["core_facts"]
+    )
+
+
+def test_core_context_package_does_not_leak_facts_between_scopes(
+    engine: memory_engine.MemoryEngine,
+):
+    _ingest(engine, "scoped_core_session", "Початок тесту.")
+    for scope, name in [
+        ("telegram_1", "Микита"),
+        ("telegram_2", "Аліса"),
+    ]:
+        engine.upsert_core_fact(
+            json.dumps(
+                {
+                    "schema_version": "core_fact_input.v1",
+                    "category": "profile",
+                    "scope": scope,
+                    "text": f"Користувача звати {name}.",
+                    "confidence": 0.95,
+                    "tags": ["telegram", "name"],
+                }
+            )
+        )
+
+    request = {
+        "schema_version": "core_context_request.v1",
+        "session_id": "scoped_core_session",
+        "domain_state": {"current_text": "Як мене звати?"},
+        "core_scope": "telegram_2",
+        "query_text": "ім'я користувача",
+        "recall_limit": 5,
+        "session_recent_limit": 2,
+        "session_trace_event_limit": 10,
+        "include_core": True,
+    }
+    package = json.loads(engine.core_context_package(json.dumps(request)))
+
+    assert [fact["text"] for fact in package["core_facts"]] == [
+        "Користувача звати Аліса."
+    ]
+
+
 def test_ingest_rejects_wrong_schema(engine: memory_engine.MemoryEngine):
     bad_event = json.dumps(
         {

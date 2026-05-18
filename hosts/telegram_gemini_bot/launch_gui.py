@@ -25,12 +25,13 @@ DEFAULT_REASONING_MODEL = "gemini-2.5-pro"
 DEFAULT_BALANCED_MODEL = "gemini-2.5-flash"
 DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CHAT_ROLE = "balanced"
+DEFAULT_AUTO_SLEEP_AFTER_EVENTS = "50"
 
 
 def main() -> None:
     app = tk.Tk()
     app.title("Memory Bot Launcher")
-    app.geometry("560x340")
+    app.geometry("560x390")
     app.resizable(False, False)
 
     token_var = tk.StringVar()
@@ -39,6 +40,7 @@ def main() -> None:
     balanced_var = tk.StringVar(value=DEFAULT_BALANCED_MODEL)
     fast_var = tk.StringVar(value=DEFAULT_FAST_MODEL)
     chat_role_var = tk.StringVar(value=DEFAULT_CHAT_ROLE)
+    auto_sleep_var = tk.StringVar(value=DEFAULT_AUTO_SLEEP_AFTER_EVENTS)
 
     def add_row(row: int, label: str, variable: tk.StringVar, show: str | None = None) -> None:
         tk.Label(app, text=label, anchor="w").grid(row=row, column=0, padx=12, pady=6, sticky="w")
@@ -58,6 +60,7 @@ def main() -> None:
     add_row(4, "balanced model", balanced_var)
     add_row(5, "fast model", fast_var)
     add_row(6, "chat reply role", chat_role_var)
+    add_row(7, "auto-sleep events", auto_sleep_var)
 
     def start_bot() -> None:
         token = token_var.get().strip()
@@ -80,6 +83,9 @@ def main() -> None:
         env["GEMINI_BALANCED_MODEL"] = balanced_var.get().strip() or DEFAULT_BALANCED_MODEL
         env["GEMINI_FAST_MODEL"] = fast_var.get().strip() or DEFAULT_FAST_MODEL
         env["MEMORY_BOT_CHAT_ROLE"] = chat_role_var.get().strip() or DEFAULT_CHAT_ROLE
+        env["MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS"] = (
+            auto_sleep_var.get().strip() or DEFAULT_AUTO_SLEEP_AFTER_EVENTS
+        )
         env["MEMORY_BOT_NONINTERACTIVE"] = "1"
 
         creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
@@ -93,7 +99,7 @@ def main() -> None:
         app.destroy()
 
     tk.Button(app, text="Start bot", command=start_bot, width=18).grid(
-        row=7, column=1, padx=12, pady=18, sticky="e"
+        row=8, column=1, padx=12, pady=18, sticky="e"
     )
 
     app.grid_columnconfigure(1, weight=1)

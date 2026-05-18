@@ -7,7 +7,10 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::archive::{ArchiveEntry, ArchiveFilters, ArchiveStatus};
-use crate::core_store::{CoreContextEvent, CoreContextPackage, CoreContextRequest};
+use crate::core_store::{
+    CoreContextEvent, CoreContextFact, CoreContextPackage, CoreContextRequest, CoreFact,
+    CoreFactInput, CoreFactStatus, CoreFactUpsertResult,
+};
 use crate::event::{IngestEvent, StoredEvent};
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
 use crate::recall::{
@@ -21,7 +24,8 @@ use crate::types::{
     ImportanceHint, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
     ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION,
     CORE_CONTEXT_PACKAGE_SCHEMA_VERSION, CORE_CONTEXT_REQUEST_SCHEMA_VERSION,
-    CORE_FACT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
+    CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
+    CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
     INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
     PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION,
     SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
@@ -153,6 +157,70 @@ impl<S: Storage> MemoryEngine<S> {
             .count())
     }
 
+    pub fn upsert_core_fact(&mut self, input: CoreFactInput) -> Result<CoreFactUpsertResult> {
+        validate_core_fact_input(&input)?;
+        self.ensure_manifest()?;
+
+        let now = now_rfc3339()?;
+        let category_name = normalize_whitespace(&input.category);
+        let scope = normalize_optional_string(input.scope.as_deref());
+        let fact_text = normalize_whitespace(&input.text);
+        let mut category = self.storage.read_core_store_category(&category_name)?;
+
+        if category.schema_version.trim().is_empty() {
+            category.schema_version = CORE_STORE_SCHEMA_VERSION.to_string();
+        }
+        category.category = category_name.clone();
+        category.updated_at = now.clone();
+
+        let needle = normalize_match_text(&fact_text);
+        let mut created = false;
+        let fact = if let Some(existing) = category
+            .facts
+            .iter_mut()
+            .find(|fact| normalize_match_text(&fact.text) == needle && fact.scope == scope)
+        {
+            existing.scope = scope.clone();
+            existing.text = fact_text;
+            existing.status = CoreFactStatus::Active;
+            existing.confidence = existing.confidence.max(input.confidence).clamp(0.0, 1.0);
+            existing.updated_at = now.clone();
+            merge_unique(&mut existing.tags, &input.tags);
+            merge_unique(&mut existing.source_archive_ids, &input.source_archive_ids);
+            if existing.source_candidate_id.is_none() {
+                existing.source_candidate_id = input.source_candidate_id.clone();
+            }
+            existing.clone()
+        } else {
+            created = true;
+            let fact = CoreFact {
+                schema_version: CORE_FACT_SCHEMA_VERSION.to_string(),
+                core_fact_id: new_id("core_fact")?,
+                scope,
+                text: fact_text,
+                status: CoreFactStatus::Active,
+                confidence: input.confidence.clamp(0.0, 1.0),
+                created_at: now.clone(),
+                updated_at: now,
+                source_archive_ids: input.source_archive_ids,
+                source_candidate_id: input.source_candidate_id,
+                tags: unique_strings(input.tags),
+                links: Vec::new(),
+                review: None,
+            };
+            category.facts.push(fact.clone());
+            fact
+        };
+
+        self.storage.write_core_store_category(&category)?;
+        Ok(CoreFactUpsertResult {
+            schema_version: CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION.to_string(),
+            category: category_name,
+            created,
+            fact,
+        })
+    }
+
     pub fn core_context_package(
         &mut self,
         request: CoreContextRequest,
@@ -216,19 +284,63 @@ impl<S: Storage> MemoryEngine<S> {
             })?
             .items;
 
+        let core_facts = if request.include_core {
+            self.core_context_facts(request.core_scope.as_deref())?
+        } else {
+            Vec::new()
+        };
+        let notes = if request.include_core && core_facts.is_empty() {
+            vec![
+                "core_facts are empty; no stable Core Store facts have been saved yet.".to_string(),
+            ]
+        } else {
+            Vec::new()
+        };
+
         Ok(CoreContextPackage {
             schema_version: CORE_CONTEXT_PACKAGE_SCHEMA_VERSION.to_string(),
             created_at,
-            core_facts: Vec::new(),
+            core_facts,
             session_recent,
             session_trace,
             archive_relevant,
             domain_state: request.domain_state,
-            notes: vec![
-                "core_facts are empty in v0.1; Core Store promotion is not implemented yet."
-                    .to_string(),
-            ],
+            notes,
         })
+    }
+
+    fn core_context_facts(&self, scope: Option<&str>) -> Result<Vec<CoreContextFact>> {
+        let normalized_scope = normalize_optional_string(scope);
+        let mut facts = Vec::new();
+        for category_name in &self.options.context.core_categories {
+            let category = self.storage.read_core_store_category(category_name)?;
+            let fact_category = category.category.clone();
+            for fact in category.facts {
+                if fact.status != CoreFactStatus::Active {
+                    continue;
+                }
+                if fact.scope != normalized_scope {
+                    continue;
+                }
+                facts.push(CoreContextFact {
+                    category: fact_category.clone(),
+                    core_fact_id: fact.core_fact_id,
+                    scope: fact.scope,
+                    text: fact.text,
+                    confidence: fact.confidence,
+                    tags: fact.tags,
+                });
+            }
+        }
+
+        facts.sort_by(|left, right| {
+            right
+                .confidence
+                .total_cmp(&left.confidence)
+                .then_with(|| left.category.cmp(&right.category))
+                .then_with(|| left.core_fact_id.cmp(&right.core_fact_id))
+        });
+        Ok(facts)
     }
 
     pub fn sleep(&mut self, session_id: &str) -> Result<SleepStage1Result> {
@@ -442,6 +554,7 @@ pub struct AutoSleepConfig {
 pub struct ContextPackageConfig {
     pub default_session_recent_limit: usize,
     pub default_session_trace_event_limit: usize,
+    pub core_categories: Vec<String>,
 }
 
 impl Default for RecallStage1Config {
@@ -470,6 +583,11 @@ impl Default for ContextPackageConfig {
         Self {
             default_session_recent_limit: 40,
             default_session_trace_event_limit: 120,
+            core_categories: vec![
+                "profile".to_string(),
+                "preferences".to_string(),
+                "relationship".to_string(),
+            ],
         }
     }
 }
@@ -599,6 +717,35 @@ fn validate_core_context_request(request: &CoreContextRequest) -> Result<()> {
     if request.session_id.trim().is_empty() {
         return Err(MemoryEngineError::Validation(
             "core context request session_id must not be empty".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_core_fact_input(input: &CoreFactInput) -> Result<()> {
+    if input.schema_version != CORE_FACT_INPUT_SCHEMA_VERSION {
+        return Err(MemoryEngineError::IncompatibleSchema {
+            expected: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+            actual: input.schema_version.clone(),
+        });
+    }
+
+    if input.category.trim().is_empty() {
+        return Err(MemoryEngineError::Validation(
+            "core fact category must not be empty".to_string(),
+        ));
+    }
+
+    if input.text.trim().is_empty() {
+        return Err(MemoryEngineError::Validation(
+            "core fact text must not be empty".to_string(),
+        ));
+    }
+
+    if !input.confidence.is_finite() {
+        return Err(MemoryEngineError::Validation(
+            "core fact confidence must be finite".to_string(),
         ));
     }
 
@@ -989,6 +1136,41 @@ fn tokenize(text: &str) -> BTreeSet<String> {
         .map(|token| token.trim().to_lowercase())
         .filter(|token| token.chars().count() >= 2)
         .collect()
+}
+
+fn normalize_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_match_text(text: &str) -> String {
+    normalize_whitespace(text).to_lowercase()
+}
+
+fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(normalize_whitespace)
+        .filter(|value| !value.is_empty())
+}
+
+fn unique_strings(items: Vec<String>) -> Vec<String> {
+    items
+        .into_iter()
+        .map(|item| normalize_whitespace(&item))
+        .filter(|item| !item.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn merge_unique(target: &mut Vec<String>, source: &[String]) {
+    let mut seen = target.iter().cloned().collect::<BTreeSet<_>>();
+    for item in source {
+        let normalized = normalize_whitespace(item);
+        if normalized.is_empty() || !seen.insert(normalized.clone()) {
+            continue;
+        }
+        target.push(normalized);
+    }
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {

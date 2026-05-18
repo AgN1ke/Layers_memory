@@ -12,6 +12,8 @@
 - відповідає через Gemini;
 - створює archive memory через `/sleep`;
 - виконує engine-level `auto_sleep`, якщо `ingest` повернув sleep task;
+- зберігає explicit Core-факти тільки через `/remember` у scope поточного `telegram_<chat_id>`;
+- додає мʼякі event-теги для можливих профільних фактів, щоб майбутній reflection міг їх переглянути;
 - виконує `sleep_compression` pending task через Gemini і повертає результат у `resume_sleep_compression`.
 
 ## Запуск
@@ -28,7 +30,7 @@
 .\hosts\telegram_gemini_bot\run_gui.ps1
 ```
 
-Він відкриє маленьке вікно з полями для token/key і запустить bot з env-змінними.
+Він відкриє маленьке вікно з полями для token/key, model mapping, порога auto-sleep і запустить bot з env-змінними.
 
 Скрипт:
 
@@ -46,6 +48,7 @@
 - `balanced` -> `gemini-2.5-flash`
 - `fast` -> `gemini-2.5-flash-lite`
 - chatbot replies -> `balanced`
+- auto-sleep threshold -> `50`
 
 Під час запуску можна натиснути Enter і лишити defaults, або ввести іншу модель.
 
@@ -54,6 +57,8 @@
 - `/start` або `/help` - показати довідку.
 - `/sleep` - стиснути поточну сесію в archive memory і виконати LLM-доробку через Gemini.
 - `/recall текст` - пошукати archive memory.
+- `/core` - показати стабільні Core-факти.
+- `/remember текст` - вручну записати стабільний Core-факт.
 - `/tasks` - показати pending tasks.
 - `/models` - показати active role -> model mapping.
 
@@ -64,9 +69,18 @@ Plain text без `/`:
 3. Просить `core_context_package` у engine.
 4. Дає Gemini відповідь з готовим context package.
 5. Зберігає відповідь bot-а як `assistant_message`.
-6. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернений `sleep_compression` task через Gemini і завершує `resume_sleep_compression`.
+6. Додає до user event мʼякі теги на кшталт `name_reference`, `age_reference`, `preference_signal`, якщо текст схожий на потенційно важливу інформацію.
+7. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернений `sleep_compression` task через Gemini і завершує `resume_sleep_compression`.
 
-Якщо повідомлення містить `запам'ятай`, `запамʼятай`, `пам'ятай`, `памʼятай` або `важливо`, bot автоматично робить `/sleep` після відповіді, щоб цей факт одразу став archive memory.
+Core-факти ізольовані по Telegram chat id. Якщо bot-у пишуть два різні користувачі з різних чатів, `/core` і prompt-контекст кожного чату бачать тільки свій scope.
+
+Якщо повідомлення містить `запам...`, `памʼят...`, `пам'ят...` або `важлив...`, bot автоматично робить `/sleep` після відповіді, щоб ця подія швидше стала archive memory. В Core вона не потрапляє без `/remember` або майбутнього reflection/promotion.
+
+Активний system prompt для Telegram-чату лежить у:
+
+```text
+prompts/telegram_chat_system.md
+```
 
 ## Runtime Дані
 
