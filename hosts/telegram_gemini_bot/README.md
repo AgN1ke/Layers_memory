@@ -21,6 +21,14 @@
 .\hosts\telegram_gemini_bot\run.ps1
 ```
 
+Якщо PowerShell не дає вставити token/key, запускайте GUI-варіант:
+
+```powershell
+.\hosts\telegram_gemini_bot\run_gui.ps1
+```
+
+Він відкриє маленьке вікно з полями для token/key і запустить bot з env-змінними.
+
 Скрипт:
 
 1. Увімкне UTF-8 для термінала.

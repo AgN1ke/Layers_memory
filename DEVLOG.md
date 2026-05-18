@@ -1290,3 +1290,56 @@ hosts/telegram_gemini_bot/runtime/memory
 
 **Наступні кроки:**
 Закомітити host-застосунок у локальний `main`. GitHub-code branch не оновлювати автоматично, поки не вирішено, як публікувати workspace + host examples без внутрішніх docs.
+
+### Запис 24
+
+**Час:** 2026-05-18 12:13:15 +03:00
+
+**Проблематика:**
+Користувач не зміг вставити Telegram token і Gemini API key у відкрите PowerShell-вікно: не працювали ні `Ctrl+V`, ні правий клік. Через це live-тест bot-а блокувався не кодом, а незручним способом введення секретів.
+
+**Задум:**
+Додати простий GUI launcher для Windows, щоб token/key можна було вставити у звичайні поля вводу. Секрети не мають зберігатися у файлах, тільки передаватися в процес bot-а через env-змінні.
+
+**Що робили:**
+
+- додано `hosts/telegram_gemini_bot/launch_gui.py`;
+- додано `hosts/telegram_gemini_bot/run_gui.ps1`;
+- оновлено `hosts/telegram_gemini_bot/bot.py`;
+- оновлено `hosts/telegram_gemini_bot/README.md`;
+- оновлено `docs/local-development.md`.
+
+**Що зроблено:**
+GUI launcher відкриває вікно з полями:
+
+- Telegram token;
+- Gemini API key;
+- `reasoning` model;
+- `balanced` model;
+- `fast` model;
+- chat reply role.
+
+Після натискання `Start bot` launcher запускає `bot.py` в окремому процесі з env-змінними:
+
+- `TELEGRAM_BOT_TOKEN`;
+- `GEMINI_API_KEY`;
+- `GEMINI_REASONING_MODEL`;
+- `GEMINI_BALANCED_MODEL`;
+- `GEMINI_FAST_MODEL`;
+- `MEMORY_BOT_CHAT_ROLE`;
+- `MEMORY_BOT_NONINTERACTIVE=1`.
+
+У `bot.py` додано non-interactive режим: якщо `MEMORY_BOT_NONINTERACTIVE=1`, bot не питає model mapping через terminal input, а читає його з env. Старий terminal flow через `run.ps1` залишився.
+
+**Проблеми чи виклики:**
+Це Windows-specific зручність для локального тесту. Вона не змінює memory engine і не змінює принцип, що provider/model/API keys живуть на host-рівні, а не в Rust core.
+
+**Фідбек користувача:**
+Користувач повідомив, що не може вставити дані в PowerShell-вікно.
+
+**Перевірки:**
+
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить.
+
+**Наступні кроки:**
+Запустити `run_gui.ps1`, щоб користувач ввів token/key у GUI і перевірив bot у Telegram.

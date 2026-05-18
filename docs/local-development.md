@@ -175,6 +175,14 @@ hosts/telegram_gemini_bot/
 .\hosts\telegram_gemini_bot\run.ps1
 ```
 
+Якщо PowerShell не дає вставити token/key, запускати GUI-варіант:
+
+```powershell
+.\hosts\telegram_gemini_bot\run_gui.ps1
+```
+
+Він відкриває маленьке вікно з полями для Telegram token, Gemini API key і model mapping. Секрети передаються в bot через env-змінні й не записуються у файли.
+
 Скрипт:
 
 - вмикає UTF-8 у Windows console;

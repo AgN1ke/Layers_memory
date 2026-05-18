@@ -343,6 +343,18 @@ def read_secret(label: str, env_name: str) -> str:
 
 
 def read_model_config() -> HostLlmConfig:
+    if os.environ.get("MEMORY_BOT_NONINTERACTIVE") == "1":
+        return HostLlmConfig(
+            reasoning=ModelSelection(
+                "google", os.environ.get("GEMINI_REASONING_MODEL", DEFAULT_REASONING_MODEL)
+            ),
+            balanced=ModelSelection(
+                "google", os.environ.get("GEMINI_BALANCED_MODEL", DEFAULT_BALANCED_MODEL)
+            ),
+            fast=ModelSelection("google", os.environ.get("GEMINI_FAST_MODEL", DEFAULT_FAST_MODEL)),
+            chat_role=os.environ.get("MEMORY_BOT_CHAT_ROLE", DEFAULT_CHAT_ROLE),
+        )
+
     print("Gemini model mapping. Press Enter to keep defaults.")
     reasoning = input_default("reasoning model", DEFAULT_REASONING_MODEL)
     balanced = input_default("balanced model", DEFAULT_BALANCED_MODEL)
