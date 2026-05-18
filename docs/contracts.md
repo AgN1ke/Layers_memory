@@ -67,10 +67,13 @@ Markdown-файли існують для людини. Вони не замін
 Початкові версії:
 
 - `event.v1`;
+- `ingest_result.v1`;
 - `session.v1`;
 - `archive_entry.v1`;
 - `core_store.v1`;
 - `core_fact.v1`;
+- `core_context_request.v1`;
+- `core_context_package.v1`;
 - `candidate_belief.v1`;
 - `recall_query.v1`;
 - `recall_result.v1`;
@@ -261,6 +264,47 @@ Markdown-файли існують для людини. Вони не замін
 - `weight_reason` - коротке пояснення для debug і людського аудиту.
 
 `events.jsonl` містить саме `StoredEvent`.
+
+### 3.3 IngestResult
+
+`IngestResult` - відповідь `engine.ingest(event)`.
+
+```json
+{
+  "schema_version": "ingest_result.v1",
+  "stored_event": {
+    "schema_version": "event.v1",
+    "event_id": "event_01J00000000000000000000001",
+    "received_at": "2026-05-17T16:32:12.003Z",
+    "type": "user_message",
+    "source": "telegram_user_42",
+    "timestamp": "2026-05-17T16:32:11.420Z",
+    "session_id": "2026-05-17_005",
+    "payload": {
+      "text": "Я переїхав у Берлін минулого місяця",
+      "chat_id": 42
+    },
+    "tags": ["personal_fact", "location"],
+    "theme": "personal_background",
+    "importance_hint": "high",
+    "processing_mode": "defer_to_sleep",
+    "initial_weight": 0.75,
+    "weight_reason": "High importance hint and personal_fact tag."
+  },
+  "auto_sleep": null
+}
+```
+
+`auto_sleep` або `null`/відсутній, або має форму `SleepStage1Result`:
+
+```json
+{
+  "archive_entry": {},
+  "pending_task": {}
+}
+```
+
+Auto-sleep створюється ядром, коли кількість незаархівованих подій у сесії досягає налаштованого порога. Хост не вирішує, коли стискати сесію; хост тільки виконує повернений `PendingTask` через свій LLM-провайдер.
 
 ---
 
@@ -526,7 +570,29 @@ Core Store - стабільна основа пам'яті.
 
 На v0.1 Core Store змінюється тільки через явне підтвердження або спеціальну команду. Автоматична промоція без огляду не входить у v0.1.
 
-### 6.2 CoreContextPackage
+### 6.2 CoreContextRequest
+
+Вхід у `engine.core_context_package(request)`.
+
+```json
+{
+  "schema_version": "core_context_request.v1",
+  "session_id": "2026-05-17_005",
+  "domain_state": {
+    "active_topic": "travel_planning",
+    "current_text": "Що ми говорили про літаки?"
+  },
+  "query_text": "літаки",
+  "recall_limit": 5,
+  "session_recent_limit": 40,
+  "session_trace_event_limit": 120,
+  "include_core": false
+}
+```
+
+`domain_state` приходить від хоста у момент запиту і не записується в Core Store.
+
+### 6.3 CoreContextPackage
 
 Core Context Package не обов'язково зберігається на диск. Це відповідь ядра на запит хоста.
 
@@ -542,6 +608,44 @@ Core Context Package не обов'язково зберігається на д
       "tags": ["personal_fact", "location"]
     }
   ],
+  "session_recent": [
+    {
+      "event_id": "event_01J00000000000000000000002",
+      "timestamp": "2026-05-17T17:20:00.000Z",
+      "type": "user_message",
+      "source": "telegram_user_42",
+      "text": "А що треба для початку риболовлі?",
+      "tags": ["telegram_message"],
+      "theme": "telegram_conversation"
+    }
+  ],
+  "session_trace": [
+    {
+      "event_id": "event_01J00000000000000000000001",
+      "timestamp": "2026-05-17T17:10:00.000Z",
+      "type": "user_message",
+      "source": "telegram_user_42",
+      "text": "Розкажи про МіГ-15.",
+      "tags": ["telegram_message"],
+      "theme": "telegram_conversation"
+    }
+  ],
+  "archive_relevant": [
+    {
+      "source_layer": "archive",
+      "id": "archive_01J00000000000000000000001",
+      "gist": "Розмова про МіГ-15.",
+      "narrative": "Користувач питав про радянський винищувач МіГ-15.",
+      "facts": [],
+      "quotes": [],
+      "source_session_id": "2026-05-17_005",
+      "tags": ["aircraft"],
+      "theme": "aviation",
+      "weight": 0.9,
+      "freshness": 1.0,
+      "relevance_score": 0.8
+    }
+  ],
   "domain_state": {
     "active_topic": "travel_planning"
   },
@@ -549,7 +653,7 @@ Core Context Package не обов'язково зберігається на д
 }
 ```
 
-`domain_state` приходить від хоста у момент запиту і не записується в Core Store.
+На v0.1 `core_facts` зазвичай порожній, бо автоматична промоція в Core Store ще не реалізована. Але хости мають уже використовувати `CoreContextPackage` як єдину точку збору prompt-контексту, а не дублювати session/recent/archive логіку в кожному host-і.
 
 ---
 
@@ -995,13 +1099,15 @@ memory/
 Для MVP Memory Engine має вміти:
 
 1. Прийняти `IngestEvent`.
-2. Записати `StoredEvent` у `memory/sessions/<session_id>/events.jsonl`.
-3. Підтримувати людський `session.md`.
-4. Створити preliminary `ArchiveEntry` під час sleep-stage-1.
-5. Створити `PendingTask` для `sleep_compression`.
-6. Прийняти `SleepCompressionResult` через `resume()`.
-7. Оновити той самий `ArchiveEntry`.
-8. Повернути `RecallResult` за `RecallQuery` через stage1 recall.
-9. Тримати `manifest.json` і `journal/` для версій та crash safety.
+2. Повернути `IngestResult` зі `StoredEvent` і, за потреби, `auto_sleep`.
+3. Записати `StoredEvent` у `memory/sessions/<session_id>/events.jsonl`.
+4. Підтримувати людський `session.md`.
+5. Створити preliminary `ArchiveEntry` під час sleep-stage-1.
+6. Створити `PendingTask` для `sleep_compression`.
+7. Прийняти `SleepCompressionResult` через `resume()`.
+8. Оновити той самий `ArchiveEntry`.
+9. Повернути `RecallResult` за `RecallQuery` через stage1 recall.
+10. Повернути `CoreContextPackage` за `CoreContextRequest`.
+11. Тримати `manifest.json` і `journal/` для версій та crash safety.
 
 Це достатній контракт для старту Rust-коду без розпливання архітектури.

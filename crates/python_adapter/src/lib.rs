@@ -20,6 +20,7 @@ use pyo3::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use ::memory_engine::core_store::CoreContextRequest;
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::sleep::SleepCompressionResult;
@@ -77,6 +78,12 @@ impl PyMemoryEngine {
         let query: RecallQuery = parse_json(query_json, "recall query")?;
         let result = self.inner.recall(query).map_err(map_err)?;
         dump_json(&result, "recall result")
+    }
+
+    fn core_context_package(&mut self, request_json: &str) -> PyResult<String> {
+        let request: CoreContextRequest = parse_json(request_json, "core context request")?;
+        let package = self.inner.core_context_package(request).map_err(map_err)?;
+        dump_json(&package, "core context package")
     }
 
     fn pending_tasks(&self) -> PyResult<String> {

@@ -4,10 +4,13 @@ pub type Id = String;
 pub type Timestamp = String;
 
 pub const EVENT_SCHEMA_VERSION: &str = "event.v1";
+pub const INGEST_RESULT_SCHEMA_VERSION: &str = "ingest_result.v1";
 pub const SESSION_SCHEMA_VERSION: &str = "session.v1";
 pub const ARCHIVE_ENTRY_SCHEMA_VERSION: &str = "archive_entry.v1";
 pub const CORE_STORE_SCHEMA_VERSION: &str = "core_store.v1";
 pub const CORE_FACT_SCHEMA_VERSION: &str = "core_fact.v1";
+pub const CORE_CONTEXT_REQUEST_SCHEMA_VERSION: &str = "core_context_request.v1";
+pub const CORE_CONTEXT_PACKAGE_SCHEMA_VERSION: &str = "core_context_package.v1";
 pub const CANDIDATE_BELIEF_SCHEMA_VERSION: &str = "candidate_belief.v1";
 pub const RECALL_QUERY_SCHEMA_VERSION: &str = "recall_query.v1";
 pub const RECALL_RESULT_SCHEMA_VERSION: &str = "recall_result.v1";

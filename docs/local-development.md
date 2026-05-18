@@ -231,10 +231,11 @@ Offset зберігається після кожного обробленого
 Поточна логіка діалогу:
 
 - plain text користувача зберігається як `user_message`;
-- bot читає поточну сесію через adapter method `read_session`;
-- Gemini отримує ширший `session topic trace`, коротший `recent session context` і archive memory context;
+- `engine.ingest()` повертає `IngestResult` з `stored_event` і можливим `auto_sleep`;
+- bot просить `engine.core_context_package(...)`, а не збирає recent/trace/archive сам;
+- Gemini отримує готовий context package: `session_recent`, `session_trace`, `archive_relevant`, `core_facts`, `domain_state`;
 - відповідь bot-а зберігається як `assistant_message`;
-- archive memory все одно створюється окремо через `/sleep` або auto-sleep keywords.
+- archive memory створюється через `/sleep`, auto-sleep keywords або engine-level auto-sleep після порога незаархівованих подій.
 
 ## Поточний Очікуваний Результат
 
@@ -242,7 +243,7 @@ Offset зберігається після кожного обробленого
 
 - `cargo fmt --check` проходить;
 - `cargo test --workspace` проходить;
-- `cargo test --workspace` запускає 13 тестів у `memory_engine` (6 + 2 + 5 у трьох test-файлах);
+- `cargo test --workspace` запускає 15 тестів у `memory_engine` (6 + 3 + 6 у трьох test-файлах);
 - `cargo clippy --workspace --all-targets -- -D warnings` проходить.
 
 ## Python-адаптер
@@ -283,10 +284,13 @@ $venv = "C:\Python_projects\Layers_memory\crates\python_adapter\.venv"
 
 ### Поточний Очікуваний Результат Pytest
 
-4 тести у `tests/test_basic.py`, усі проходять:
+7 тестів у `tests/test_basic.py`, усі проходять:
 
 - `test_ingest_creates_stored_event`;
+- `test_read_session_returns_stored_events`;
+- `test_ingest_returns_auto_sleep_after_default_threshold`;
 - `test_full_cycle_ingest_sleep_resume_recall`;
+- `test_core_context_package_combines_session_and_archive`;
 - `test_ingest_rejects_wrong_schema`;
 - `test_recall_zero_limit_uses_engine_default`.
 

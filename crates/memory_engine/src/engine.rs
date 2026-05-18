@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -7,6 +7,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::archive::{ArchiveEntry, ArchiveFilters, ArchiveStatus};
+use crate::core_store::{CoreContextEvent, CoreContextPackage, CoreContextRequest};
 use crate::event::{IngestEvent, StoredEvent};
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
 use crate::recall::{
@@ -18,10 +19,12 @@ use crate::storage::Storage;
 use crate::tasks::{PendingTask, TaskState, TaskType};
 use crate::types::{
     ImportanceHint, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
-    ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
-    CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION,
-    MANIFEST_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
-    RECALL_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION,
+    CORE_CONTEXT_PACKAGE_SCHEMA_VERSION, CORE_CONTEXT_REQUEST_SCHEMA_VERSION,
+    CORE_FACT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
+    INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
+    PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION,
+    SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use crate::{MemoryEngineError, Result};
 
@@ -63,7 +66,7 @@ impl<S> MemoryEngine<S> {
 }
 
 impl<S: Storage> MemoryEngine<S> {
-    pub fn ingest(&mut self, event: IngestEvent) -> Result<StoredEvent> {
+    pub fn ingest(&mut self, event: IngestEvent) -> Result<IngestResult> {
         validate_ingest_event(&event)?;
         self.ensure_manifest()?;
 
@@ -77,7 +80,13 @@ impl<S: Storage> MemoryEngine<S> {
         );
 
         self.storage.append_event(&stored.session_id, &stored)?;
-        Ok(stored)
+        let auto_sleep = self.maybe_auto_sleep(&stored.session_id)?;
+
+        Ok(IngestResult {
+            schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
+            stored_event: stored,
+            auto_sleep,
+        })
     }
 
     fn ensure_manifest(&mut self) -> Result<()> {
@@ -100,6 +109,126 @@ impl<S: Storage> MemoryEngine<S> {
             .into_iter()
             .filter(|task| matches!(task.state, TaskState::Pending | TaskState::Submitted))
             .collect())
+    }
+
+    fn maybe_auto_sleep(&mut self, session_id: &str) -> Result<Option<SleepStage1Result>> {
+        if !self.options.auto_sleep.enabled || self.options.auto_sleep.after_events == 0 {
+            return Ok(None);
+        }
+
+        if self.has_pending_sleep_task_for_session(session_id)? {
+            return Ok(None);
+        }
+
+        let session = self.storage.read_session(session_id)?;
+        let unarchived_event_count = self.unarchived_event_count(&session)?;
+        if unarchived_event_count < self.options.auto_sleep.after_events {
+            return Ok(None);
+        }
+
+        self.sleep(session_id).map(Some)
+    }
+
+    fn has_pending_sleep_task_for_session(&self, session_id: &str) -> Result<bool> {
+        Ok(self.storage.load_tasks()?.into_iter().any(|task| {
+            task.task_type == TaskType::SleepCompression
+                && matches!(task.state, TaskState::Pending | TaskState::Submitted)
+                && task.inputs.get("session_id").and_then(Value::as_str) == Some(session_id)
+        }))
+    }
+
+    fn unarchived_event_count(&self, session: &SessionRecord) -> Result<usize> {
+        let archived_event_ids = self
+            .storage
+            .read_archive(&ArchiveFilters::default())?
+            .into_iter()
+            .filter(|entry| entry.source_session_id == session.metadata.session_id)
+            .flat_map(|entry| entry.source_event_ids)
+            .collect::<HashSet<_>>();
+
+        Ok(session
+            .events
+            .iter()
+            .filter(|event| !archived_event_ids.contains(&event.event_id))
+            .count())
+    }
+
+    pub fn core_context_package(
+        &mut self,
+        request: CoreContextRequest,
+    ) -> Result<CoreContextPackage> {
+        validate_core_context_request(&request)?;
+        self.ensure_manifest()?;
+
+        let created_at = now_rfc3339()?;
+        let session = self.storage.read_session(&request.session_id)?;
+        let recent_limit = if request.session_recent_limit == 0 {
+            self.options.context.default_session_recent_limit
+        } else {
+            request.session_recent_limit
+        };
+        let trace_limit = if request.session_trace_event_limit == 0 {
+            self.options.context.default_session_trace_event_limit
+        } else {
+            request.session_trace_event_limit
+        };
+        let recall_limit = if request.recall_limit == 0 {
+            self.options.recall.default_limit
+        } else {
+            request.recall_limit
+        };
+
+        let session_recent = session_context_events(&session, recent_limit);
+        let session_trace = session_context_events(&session, trace_limit);
+        let query_text = request
+            .query_text
+            .clone()
+            .or_else(|| {
+                request
+                    .domain_state
+                    .get("recent_text")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                request
+                    .domain_state
+                    .get("current_text")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+
+        let archive_relevant = self
+            .recall(RecallQuery {
+                schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+                query_id: None,
+                created_at: Some(created_at.clone()),
+                session_id: Some(request.session_id.clone()),
+                context: json!({ "recent_text": query_text.clone().unwrap_or_default() }),
+                query_text,
+                filters: RecallFilters {
+                    source_layers: vec![RecallSourceLayer::Archive],
+                    ..RecallFilters::default()
+                },
+                limit: recall_limit,
+                include_core: false,
+                explain: false,
+            })?
+            .items;
+
+        Ok(CoreContextPackage {
+            schema_version: CORE_CONTEXT_PACKAGE_SCHEMA_VERSION.to_string(),
+            created_at,
+            core_facts: Vec::new(),
+            session_recent,
+            session_trace,
+            archive_relevant,
+            domain_state: request.domain_state,
+            notes: vec![
+                "core_facts are empty in v0.1; Core Store promotion is not implemented yet."
+                    .to_string(),
+            ],
+        })
     }
 
     pub fn sleep(&mut self, session_id: &str) -> Result<SleepStage1Result> {
@@ -260,6 +389,8 @@ pub struct EngineOptions {
     pub event_scoring: EventScoringConfig,
     pub sleep: SleepStage1Config,
     pub recall: RecallStage1Config,
+    pub auto_sleep: AutoSleepConfig,
+    pub context: ContextPackageConfig,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -301,6 +432,18 @@ pub struct RecallStage1Config {
     pub no_text_match_factor: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoSleepConfig {
+    pub enabled: bool,
+    pub after_events: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextPackageConfig {
+    pub default_session_recent_limit: usize,
+    pub default_session_trace_event_limit: usize,
+}
+
 impl Default for RecallStage1Config {
     fn default() -> Self {
         Self {
@@ -311,6 +454,32 @@ impl Default for RecallStage1Config {
             no_text_match_factor: 0.7,
         }
     }
+}
+
+impl Default for AutoSleepConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            after_events: 50,
+        }
+    }
+}
+
+impl Default for ContextPackageConfig {
+    fn default() -> Self {
+        Self {
+            default_session_recent_limit: 40,
+            default_session_trace_event_limit: 120,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IngestResult {
+    pub schema_version: String,
+    pub stored_event: StoredEvent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_sleep: Option<SleepStage1Result>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -417,6 +586,43 @@ fn validate_recall_query(query: &RecallQuery) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_core_context_request(request: &CoreContextRequest) -> Result<()> {
+    if request.schema_version != CORE_CONTEXT_REQUEST_SCHEMA_VERSION {
+        return Err(MemoryEngineError::IncompatibleSchema {
+            expected: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            actual: request.schema_version.clone(),
+        });
+    }
+
+    if request.session_id.trim().is_empty() {
+        return Err(MemoryEngineError::Validation(
+            "core context request session_id must not be empty".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn session_context_events(session: &SessionRecord, limit: usize) -> Vec<CoreContextEvent> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let start = session.events.len().saturating_sub(limit);
+    session.events[start..]
+        .iter()
+        .map(|event| CoreContextEvent {
+            event_id: event.event_id.clone(),
+            timestamp: event.timestamp.clone(),
+            event_type: event.event_type.clone(),
+            source: event.source.clone(),
+            text: event_text(event),
+            tags: event.tags.clone(),
+            theme: event.theme.clone(),
+        })
+        .collect()
 }
 
 fn select_sleep_events<'a>(

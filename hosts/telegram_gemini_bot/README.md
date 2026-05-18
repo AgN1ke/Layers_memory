@@ -8,10 +8,10 @@
 - питає Gemini API key у терміналі;
 - використовує `memory_engine` Python adapter;
 - пише повідомлення користувача і відповіді bot-а в памʼять через `ingest`;
-- підкладає останні події поточної Telegram-сесії в prompt як short-term context;
-- шукає archive memory через `recall`;
+- просить у engine готовий `core_context_package` для prompt-а;
 - відповідає через Gemini;
 - створює archive memory через `/sleep`;
+- виконує engine-level `auto_sleep`, якщо `ingest` повернув sleep task;
 - виконує `sleep_compression` pending task через Gemini і повертає результат у `resume_sleep_compression`.
 
 ## Запуск
@@ -60,11 +60,11 @@
 Plain text без `/`:
 
 1. Зберігається як event.
-2. Читає поточну Telegram-сесію через `read_session`.
-3. Формує ширший `session topic trace` і коротший `recent session context`.
-4. Виконує recall по попередній archive memory.
-5. Дає Gemini відповідь з session topic trace + recent session context + archive memory context.
-6. Зберігає відповідь bot-а як `assistant_message`.
+2. Якщо engine повертає `auto_sleep`, bot запамʼятовує цей sleep task для виконання після відповіді.
+3. Просить `core_context_package` у engine.
+4. Дає Gemini відповідь з готовим context package.
+5. Зберігає відповідь bot-а як `assistant_message`.
+6. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернений `sleep_compression` task через Gemini і завершує `resume_sleep_compression`.
 
 Якщо повідомлення містить `запам'ятай`, `запамʼятай`, `пам'ятай`, `памʼятай` або `важливо`, bot автоматично робить `/sleep` після відповіді, щоб цей факт одразу став archive memory.
 

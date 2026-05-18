@@ -105,7 +105,7 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let stored = engine.ingest(IngestEvent {
+        let ingest_result = engine.ingest(IngestEvent {
             schema_version: EVENT_SCHEMA_VERSION.to_string(),
             event_type: "user_message".to_string(),
             source: "terminal_user".to_string(),
@@ -119,11 +119,18 @@ fn main() -> Result<()> {
             importance_hint: Default::default(),
             processing_mode: Default::default(),
         })?;
+        let stored = ingest_result.stored_event;
 
         println!(
             "Stored event: {} weight={:.2}",
             stored.event_id, stored.initial_weight
         );
+        if let Some(auto_sleep) = ingest_result.auto_sleep {
+            println!(
+                "Auto-sleep created archive {} and pending task {}.",
+                auto_sleep.archive_entry.archive_id, auto_sleep.pending_task.task_id
+            );
+        }
         run_recall(&mut engine, &session_id, input, false)?;
     }
 

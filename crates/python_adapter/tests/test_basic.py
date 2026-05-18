@@ -35,8 +35,10 @@ def _ingest(engine: memory_engine.MemoryEngine, session_id: str, text: str, **ov
 
 
 def test_ingest_creates_stored_event(engine: memory_engine.MemoryEngine):
-    stored = _ingest(engine, "session_a", "Я живу в Берліні.")
+    result = _ingest(engine, "session_a", "Я живу в Берліні.")
+    stored = result["stored_event"]
 
+    assert result["schema_version"] == "ingest_result.v1"
     assert stored["event_id"].startswith("event_")
     assert stored["schema_version"] == "event.v1"
     assert stored["session_id"] == "session_a"
@@ -61,6 +63,22 @@ def test_read_session_returns_stored_events(engine: memory_engine.MemoryEngine):
         "Розкажи про МіГ-15.",
         "Розкажи про F-86.",
     ]
+
+
+def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine.MemoryEngine):
+    last_result = None
+    for index in range(50):
+        last_result = _ingest(
+            engine,
+            "auto_sleep_session",
+            f"Подія {index}",
+            timestamp=f"2026-05-18T10:{index:02}:00.000Z",
+        )
+
+    assert last_result is not None
+    auto_sleep = last_result["auto_sleep"]
+    assert auto_sleep["archive_entry"]["source_session_id"] == "auto_sleep_session"
+    assert auto_sleep["pending_task"]["task_type"] == "sleep_compression"
 
 
 def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngine):
@@ -118,6 +136,50 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
     assert len(recall["items"]) == 1
     assert recall["items"][0]["gist"] == llm_result["gist"]
     assert recall["items"][0]["narrative"] == llm_result["narrative"]
+
+
+def test_core_context_package_combines_session_and_archive(engine: memory_engine.MemoryEngine):
+    _ingest(engine, "context_session", "Ми говорили про МіГ-15.")
+    sleep_result = json.loads(engine.sleep("context_session"))
+    llm_result = {
+        "schema_version": "sleep_compression_result.v1",
+        "archive_id": sleep_result["archive_entry"]["archive_id"],
+        "gist": "Розмова про МіГ-15.",
+        "narrative": "Користувач питав про радянський винищувач МіГ-15.",
+        "facts": [],
+        "quotes": [],
+        "tags": ["aircraft"],
+        "theme": "aviation",
+        "weight": 0.9,
+        "links": [],
+    }
+    engine.resume_sleep_compression(
+        sleep_result["pending_task"]["task_id"],
+        json.dumps(llm_result),
+    )
+    _ingest(
+        engine,
+        "context_session",
+        "А тепер говоримо про риболовлю.",
+        timestamp="2026-05-18T10:01:00.000Z",
+    )
+
+    request = {
+        "schema_version": "core_context_request.v1",
+        "session_id": "context_session",
+        "domain_state": {"current_text": "А про літаки?"},
+        "query_text": "літаки МіГ-15",
+        "recall_limit": 5,
+        "session_recent_limit": 2,
+        "session_trace_event_limit": 10,
+        "include_core": False,
+    }
+    package = json.loads(engine.core_context_package(json.dumps(request)))
+
+    assert package["schema_version"] == "core_context_package.v1"
+    assert len(package["session_recent"]) == 2
+    assert any("МіГ-15" in event.get("text", "") for event in package["session_trace"])
+    assert package["archive_relevant"][0]["gist"] == "Розмова про МіГ-15."
 
 
 def test_ingest_rejects_wrong_schema(engine: memory_engine.MemoryEngine):

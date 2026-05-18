@@ -45,7 +45,6 @@ DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CHAT_ROLE = "balanced"
 RECENT_CONTEXT_LIMIT = 40
 SESSION_TRACE_EVENT_LIMIT = 120
-SESSION_TRACE_CHAR_LIMIT = 12000
 
 TELEGRAM_API = "https://api.telegram.org"
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
@@ -254,7 +253,7 @@ def handle_update(
         telegram.send_message(chat_id, format_recall(recall(engine, session_id, query, explain=True)))
         return
 
-    stored = ingest_chat_event(
+    user_ingest = ingest_chat_event(
         engine=engine,
         session_id=session_id,
         event_type="user_message",
@@ -268,18 +267,15 @@ def handle_update(
         },
     )
 
-    session = read_session(engine, session_id)
-    session_trace_context = format_session_trace_context(session)
-    recent_context = format_recent_session_context(session)
-    memory_context = format_memory_context(recall(engine, session_id, text, explain=False))
+    package = context_package(engine, session_id, chat_id, text)
     model = llm_config.chat_model().model
     answer = gemini.generate_text(
         model=model,
         system_instruction=chat_system_instruction(),
-        prompt=chat_prompt(memory_context, session_trace_context, recent_context, text),
+        prompt=chat_prompt(package, text),
     )
     telegram.send_message(chat_id, answer)
-    ingest_chat_event(
+    assistant_ingest = ingest_chat_event(
         engine=engine,
         session_id=session_id,
         event_type="assistant_message",
@@ -292,12 +288,26 @@ def handle_update(
             "model": model,
         },
     )
+    stored = user_ingest["stored_event"]
     log_line(f"answered chat={chat_id} event={stored['event_id']} model={model}")
     print(f"chat={chat_id} event={stored['event_id']} model={model}")
 
     if should_auto_sleep(text):
-        summary = run_sleep(engine, gemini, llm_config, session_id)
+        auto_sleep_results = [
+            result["auto_sleep"]
+            for result in (user_ingest, assistant_ingest)
+            if result.get("auto_sleep")
+        ]
+        if auto_sleep_results:
+            summary = "\n\n".join(
+                complete_sleep_result(engine, gemini, llm_config, sleep_result)
+                for sleep_result in auto_sleep_results
+            )
+        else:
+            summary = run_sleep(engine, gemini, llm_config, session_id)
         telegram.send_message(chat_id, f"Memory updated.\n\n{summary}")
+    else:
+        run_auto_sleep_results(engine, gemini, llm_config, user_ingest, assistant_ingest)
 
 
 def run_sleep(
@@ -307,6 +317,15 @@ def run_sleep(
     session_id: str,
 ) -> str:
     sleep_result = json.loads(engine.sleep(session_id))
+    return complete_sleep_result(engine, gemini, llm_config, sleep_result)
+
+
+def complete_sleep_result(
+    engine: memory_engine.MemoryEngine,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    sleep_result: dict[str, Any],
+) -> str:
     task = sleep_result["pending_task"]
     archive = sleep_result["archive_entry"]
     llm_result = execute_sleep_compression(task, gemini, llm_config)
@@ -320,6 +339,23 @@ def run_sleep(
         f"Model: {llm_config.for_role(task['role_hint']).model}\n"
         f"Gist: {updated['gist']}"
     )
+
+
+def run_auto_sleep_results(
+    engine: memory_engine.MemoryEngine,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    *ingest_results: dict[str, Any],
+) -> None:
+    for ingest_result in ingest_results:
+        sleep_result = ingest_result.get("auto_sleep")
+        if not sleep_result:
+            continue
+        try:
+            summary = complete_sleep_result(engine, gemini, llm_config, sleep_result)
+            log_line(f"auto-sleep completed: {summary.replace(chr(10), ' | ')}")
+        except Exception as err:
+            log_exception("auto-sleep completion failed", err)
 
 
 def execute_sleep_compression(
@@ -364,8 +400,27 @@ def recall(engine: memory_engine.MemoryEngine, session_id: str, query_text: str,
     )
 
 
-def read_session(engine: memory_engine.MemoryEngine, session_id: str) -> dict[str, Any]:
-    return json.loads(engine.read_session(session_id))
+def context_package(
+    engine: memory_engine.MemoryEngine,
+    session_id: str,
+    chat_id: int,
+    text: str,
+) -> dict[str, Any]:
+    request = {
+        "schema_version": "core_context_request.v1",
+        "session_id": session_id,
+        "domain_state": {
+            "host": "telegram_gemini_bot",
+            "telegram_chat_id": chat_id,
+            "current_text": text,
+        },
+        "query_text": text,
+        "recall_limit": 5,
+        "session_recent_limit": RECENT_CONTEXT_LIMIT,
+        "session_trace_event_limit": SESSION_TRACE_EVENT_LIMIT,
+        "include_core": False,
+    }
+    return json.loads(engine.core_context_package(json.dumps(request, ensure_ascii=False)))
 
 
 def read_saved_offset() -> int | None:
@@ -513,90 +568,22 @@ def log_exception(message: str, err: Exception) -> None:
 
 def chat_system_instruction() -> str:
     return (
-        "You are a concise Telegram assistant. Use session topic trace for questions about what "
-        "has been discussed in this chat, including older topics in the current session. Use "
-        "recent session context for short-term references, follow-up questions, and pronouns like "
-        "'they' or 'it'. Use archive memory for older committed memories. If context is empty or "
-        "irrelevant, answer normally. Do not claim you remember things unless they are present in "
-        "session topic trace, recent session context, archive memory, or the current user message."
+        "You are a concise Telegram assistant. Use the Memory Engine context package as the "
+        "source of truth for session_recent, session_trace, archive_relevant, core_facts, and "
+        "domain_state. Use session_trace for questions about what has been discussed in this "
+        "chat, session_recent for short-term follow-ups and pronouns, archive_relevant for older "
+        "committed memories, and core_facts for stable facts. If context is empty or irrelevant, "
+        "answer normally. Do not claim you remember things unless they are present in the context "
+        "package or the current user message."
     )
 
 
-def chat_prompt(
-    memory_context: str,
-    session_trace_context: str,
-    recent_context: str,
-    user_text: str,
-) -> str:
+def chat_prompt(package: dict[str, Any], user_text: str) -> str:
     return (
-        f"Session topic trace, chronological:\n{session_trace_context}\n\n"
-        f"Recent session context, chronological:\n{recent_context}\n\n"
-        f"Archive memory context:\n{memory_context}\n\n"
+        "Memory Engine context package JSON:\n"
+        f"{json.dumps(package, ensure_ascii=False, indent=2)}\n\n"
         f"Current user message:\n{user_text}"
     )
-
-
-def format_session_trace_context(session: dict[str, Any]) -> str:
-    events = [
-        event
-        for event in session.get("events", [])
-        if event.get("type") in {"user_message", "assistant_message"}
-    ][-SESSION_TRACE_EVENT_LIMIT:]
-    if not events:
-        return "(no session topic trace)"
-
-    lines = []
-    total_chars = 0
-    for event in events:
-        payload = event.get("payload") or {}
-        text = (payload.get("text") or "").strip()
-        if not text:
-            continue
-        role = format_event_role(event.get("type", "event"))
-        line = f"- {role}: {truncate_chars(text, 220)}"
-        if total_chars + len(line) > SESSION_TRACE_CHAR_LIMIT:
-            lines.append("- ...older session trace omitted by prompt budget")
-            break
-        lines.append(line)
-        total_chars += len(line)
-    return "\n".join(lines) if lines else "(no session topic trace)"
-
-
-def format_recent_session_context(session: dict[str, Any]) -> str:
-    events = session.get("events", [])[-RECENT_CONTEXT_LIMIT:]
-    if not events:
-        return "(no recent session history)"
-
-    lines = []
-    for event in events:
-        payload = event.get("payload") or {}
-        text = (payload.get("text") or "").strip()
-        if not text:
-            continue
-        role = format_event_role(event.get("type", "event"))
-        timestamp = event.get("timestamp", "unknown-time")
-        lines.append(f"- {timestamp} {role}: {truncate_chars(text, 900)}")
-    return "\n".join(lines) if lines else "(no recent session history)"
-
-
-def format_event_role(event_type: str) -> str:
-    if event_type == "user_message":
-        return "User"
-    if event_type == "assistant_message":
-        return "Assistant"
-    return event_type
-
-
-def format_memory_context(recall_result: dict[str, Any]) -> str:
-    items = recall_result.get("items", [])
-    if not items:
-        return "(no archive memory found)"
-    lines = []
-    for item in items:
-        lines.append(f"- {item['gist']}")
-        if item.get("narrative"):
-            lines.append(f"  {item['narrative']}")
-    return "\n".join(lines)
 
 
 def format_recall(recall_result: dict[str, Any]) -> str:

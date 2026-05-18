@@ -1,9 +1,11 @@
 use memory_engine::archive::ArchiveStatus;
+use memory_engine::core_store::CoreContextRequest;
 use memory_engine::event::IngestEvent;
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::SleepCompressionResult;
 use memory_engine::types::{
-    EVENT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
+    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{FileStorage, MemoryEngine};
 use serde_json::json;
@@ -197,6 +199,69 @@ fn engine_recall_with_zero_limit_uses_engine_default() {
         5,
         "limit==0 must fall back to engine default of 5"
     );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_core_context_package_combines_session_and_archive_context() {
+    let root = unique_temp_dir("engine_core_context_package_combines_session_and_archive_context");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Ми говорили про МіГ-15.",
+        vec!["aircraft"],
+    );
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    engine
+        .resume_sleep_compression(
+            &sleep_result.pending_task.task_id,
+            SleepCompressionResult {
+                schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                gist: "Розмова про МіГ-15.".to_string(),
+                narrative: "Користувач питав про радянський винищувач МіГ-15.".to_string(),
+                facts: vec![],
+                quotes: vec![],
+                tags: vec!["aircraft".to_string()],
+                theme: Some("aviation".to_string()),
+                weight: 0.9,
+                links: vec![],
+            },
+        )
+        .expect("resume sleep compression");
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:05:00.000Z",
+        "А тепер говоримо про риболовлю.",
+        vec!["fishing"],
+    );
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "А про літаки?" }),
+            query_text: Some("літаки МіГ-15".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 2,
+            session_trace_event_limit: 10,
+            include_core: false,
+        })
+        .expect("core context package");
+
+    assert_eq!(package.session_recent.len(), 2);
+    assert!(package.session_trace.iter().any(|event| event
+        .text
+        .as_deref()
+        .unwrap_or("")
+        .contains("МіГ-15")));
+    assert_eq!(package.archive_relevant.len(), 1);
+    assert_eq!(package.archive_relevant[0].gist, "Розмова про МіГ-15.");
 
     fs::remove_dir_all(root).ok();
 }

@@ -1498,3 +1498,83 @@ Offset оновлюється після кожного обробленого u
 
 **Наступні кроки:**
 Перезапустити bot і повторити тест на довшу сесію: літаки -> риболовля -> імʼя -> персональні факти -> питання "А про літаки?".
+
+### Запис 28
+
+**Час:** 2026-05-18 15:49:55 +03:00
+
+**Проблематика:**
+Після аналізу записів 23-27 і повного `bot.log` стало очевидно, що Запис 27 був паліативом: ми розширили live-context, але справжній тришаровий цикл `Session -> Sleep -> Archive -> Recall` не активувався. У 47-event live-тесті не було жодного `/sleep` і жодного auto-sleep, тому archive memory залишалась порожньою, а `recall()` не повертав нічого. Bot фактично працював як чат із великим prompt-ом.
+
+**Задум:**
+Перенести відповідальність за sleep-тригер і збір prompt-контексту в engine:
+
+- `engine.ingest(event)` має повертати `IngestResult` з можливим `auto_sleep`;
+- `engine.core_context_package(request)` має збирати `session_recent`, `session_trace`, `archive_relevant`, `core_facts` і `domain_state` в одному місці;
+- Telegram bot має бути тонким host-ом: виконати PendingTask через Gemini і передати готовий context package у prompt.
+
+**Що робили:**
+
+- оновлено Rust core (`engine.rs`, `core_store.rs`, `types.rs`, `lib.rs`);
+- оновлено terminal runner;
+- оновлено PyO3 adapter;
+- оновлено Telegram bot;
+- оновлено Rust і Python tests;
+- оновлено `docs/architecture.md`, `docs/contracts.md`, `docs/local-development.md`;
+- оновлено README для Python adapter і Telegram host.
+
+**Що зроблено:**
+
+1. Додано `IngestResult`:
+
+```text
+schema_version: ingest_result.v1
+stored_event: StoredEvent
+auto_sleep: Option<SleepStage1Result>
+```
+
+2. Додано engine-level auto-sleep:
+
+- `EngineOptions.auto_sleep.enabled`;
+- `EngineOptions.auto_sleep.after_events`;
+- default поріг: 50 незаархівованих подій;
+- дедуплікація: якщо для сесії вже є pending/submitted `sleep_compression`, новий auto-sleep не створюється;
+- події, які вже входять у будь-який archive entry цієї сесії, не рахуються як незаархівовані.
+
+3. Додано `CoreContextRequest` і розширено `CoreContextPackage`:
+
+- `core_facts`;
+- `session_recent`;
+- `session_trace`;
+- `archive_relevant`;
+- `domain_state`;
+- `notes`.
+
+4. Додано `engine.core_context_package(request)` у Rust core і PyO3 adapter.
+
+5. Telegram bot більше не збирає сам `recent + trace + archive`:
+
+- після `user_message` bot викликає `engine.core_context_package(...)`;
+- у Gemini prompt передається один JSON context package;
+- якщо `ingest()` повертає `auto_sleep`, bot виконує `sleep_compression` через Gemini після відповіді і завершує `resume_sleep_compression`.
+
+**Проблеми чи виклики:**
+Під час `maturin develop` живий bot тримав імпортований Python extension, тому pip не зміг переписати wheel і лишив stale теку `~emory_engine`. Bot-процеси були зупинені, stale тека безпечно видалена всередині `crates/python_adapter/.venv`, після чого `maturin develop` і pytest пройшли.
+
+`core_facts` у `CoreContextPackage` на v0.1 поки порожній: автоматична промоція в Core Store ще не реалізована. Але API вже правильний, і host-и більше не повинні дублювати session/archive context assembly.
+
+**Фідбек користувача:**
+Користувач прямо вказав, що розширення recent/trace — це симптоматичне лікування, а не активація архітектури. Запропонував два engine-level кроки: auto-sleep і `core_context_package`.
+
+**Перевірки:**
+
+- `cargo fmt` проходить;
+- `cargo test -p memory_engine` проходить;
+- `cargo test --workspace` проходить;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `git diff --check` проходить;
+- `maturin develop` проходить після зупинки живого bot-а;
+- `pytest tests/ -v` у `crates/python_adapter` проходить: 7/7.
+
+**Наступні кроки:**
+Перезапустити Telegram bot і провести live-тест на довгу сесію без ручного `/sleep`: після 50 незаархівованих подій engine має повернути `auto_sleep`, bot має виконати sleep-compression, а наступні запити мають бачити вже archive memory через `core_context_package.archive_relevant`.

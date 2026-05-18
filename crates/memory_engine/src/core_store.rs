@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::recall::RecallItem;
 use crate::types::{Id, Link, Timestamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,11 +70,50 @@ pub struct CoreContextFact {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoreContextRequest {
+    pub schema_version: String,
+    pub session_id: Id,
+    #[serde(default)]
+    pub domain_state: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_text: Option<String>,
+    #[serde(default)]
+    pub recall_limit: usize,
+    #[serde(default)]
+    pub session_recent_limit: usize,
+    #[serde(default)]
+    pub session_trace_event_limit: usize,
+    #[serde(default)]
+    pub include_core: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoreContextEvent {
+    pub event_id: Id,
+    pub timestamp: Timestamp,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoreContextPackage {
     pub schema_version: String,
     pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub core_facts: Vec<CoreContextFact>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_recent: Vec<CoreContextEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_trace: Vec<CoreContextEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archive_relevant: Vec<RecallItem>,
     #[serde(default)]
     pub domain_state: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
