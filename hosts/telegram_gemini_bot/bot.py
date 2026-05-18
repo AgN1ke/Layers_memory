@@ -38,6 +38,7 @@ DEFAULT_REASONING_MODEL = "gemini-2.5-pro"
 DEFAULT_BALANCED_MODEL = "gemini-2.5-flash"
 DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CHAT_ROLE = "balanced"
+RECENT_CONTEXT_LIMIT = 16
 
 TELEGRAM_API = "https://api.telegram.org"
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
@@ -228,37 +229,42 @@ def handle_update(
         telegram.send_message(chat_id, format_recall(recall(engine, session_id, query, explain=True)))
         return
 
-    stored = json.loads(
-        engine.ingest(
-            json.dumps(
-                {
-                    "schema_version": "event.v1",
-                    "type": "user_message",
-                    "source": f"telegram_user_{user.get('id', 'unknown')}",
-                    "timestamp": now_rfc3339(),
-                    "session_id": session_id,
-                    "payload": {
-                        "text": text,
-                        "telegram_chat_id": chat_id,
-                        "telegram_message_id": message.get("message_id"),
-                    },
-                    "tags": ["telegram_message"],
-                    "theme": "telegram_conversation",
-                    "importance_hint": importance_hint(text),
-                },
-                ensure_ascii=False,
-            )
-        )
+    stored = ingest_chat_event(
+        engine=engine,
+        session_id=session_id,
+        event_type="user_message",
+        source=f"telegram_user_{user.get('id', 'unknown')}",
+        text=text,
+        tags=["telegram_message"],
+        importance=importance_hint(text),
+        payload_extra={
+            "telegram_chat_id": chat_id,
+            "telegram_message_id": message.get("message_id"),
+        },
     )
 
+    recent_context = format_recent_session_context(read_session(engine, session_id))
     memory_context = format_memory_context(recall(engine, session_id, text, explain=False))
     model = llm_config.chat_model().model
     answer = gemini.generate_text(
         model=model,
         system_instruction=chat_system_instruction(),
-        prompt=chat_prompt(memory_context, text),
+        prompt=chat_prompt(memory_context, recent_context, text),
     )
     telegram.send_message(chat_id, answer)
+    ingest_chat_event(
+        engine=engine,
+        session_id=session_id,
+        event_type="assistant_message",
+        source="telegram_bot",
+        text=answer,
+        tags=["telegram_reply"],
+        importance="normal",
+        payload_extra={
+            "telegram_chat_id": chat_id,
+            "model": model,
+        },
+    )
     print(f"chat={chat_id} event={stored['event_id']} model={model}")
 
     if should_auto_sleep(text):
@@ -330,6 +336,44 @@ def recall(engine: memory_engine.MemoryEngine, session_id: str, query_text: str,
     )
 
 
+def read_session(engine: memory_engine.MemoryEngine, session_id: str) -> dict[str, Any]:
+    return json.loads(engine.read_session(session_id))
+
+
+def ingest_chat_event(
+    engine: memory_engine.MemoryEngine,
+    session_id: str,
+    event_type: str,
+    source: str,
+    text: str,
+    tags: list[str],
+    importance: str,
+    payload_extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {"text": text}
+    if payload_extra:
+        payload.update(payload_extra)
+
+    return json.loads(
+        engine.ingest(
+            json.dumps(
+                {
+                    "schema_version": "event.v1",
+                    "type": event_type,
+                    "source": source,
+                    "timestamp": now_rfc3339(),
+                    "session_id": session_id,
+                    "payload": payload,
+                    "tags": tags,
+                    "theme": "telegram_conversation",
+                    "importance_hint": importance,
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+
 def read_secret(label: str, env_name: str) -> str:
     value = os.environ.get(env_name)
     if value:
@@ -378,14 +422,45 @@ def input_default(label: str, default: str) -> str:
 
 def chat_system_instruction() -> str:
     return (
-        "You are a concise Telegram assistant. Use the provided memory context when it is relevant. "
-        "If memory context is empty or irrelevant, answer normally. Do not claim you remember things "
-        "unless they are present in memory context or the current user message."
+        "You are a concise Telegram assistant. Use recent session context for short-term "
+        "conversation references, follow-up questions, and questions like 'what did we discuss'. "
+        "Use archive memory for older committed memories. If context is empty or irrelevant, "
+        "answer normally. Do not claim you remember things unless they are present in recent "
+        "session context, archive memory, or the current user message."
     )
 
 
-def chat_prompt(memory_context: str, user_text: str) -> str:
-    return f"Memory context:\n{memory_context}\n\nUser message:\n{user_text}"
+def chat_prompt(memory_context: str, recent_context: str, user_text: str) -> str:
+    return (
+        f"Recent session context, chronological:\n{recent_context}\n\n"
+        f"Archive memory context:\n{memory_context}\n\n"
+        f"Current user message:\n{user_text}"
+    )
+
+
+def format_recent_session_context(session: dict[str, Any]) -> str:
+    events = session.get("events", [])[-RECENT_CONTEXT_LIMIT:]
+    if not events:
+        return "(no recent session history)"
+
+    lines = []
+    for event in events:
+        payload = event.get("payload") or {}
+        text = (payload.get("text") or "").strip()
+        if not text:
+            continue
+        role = format_event_role(event.get("type", "event"))
+        timestamp = event.get("timestamp", "unknown-time")
+        lines.append(f"- {timestamp} {role}: {truncate_chars(text, 900)}")
+    return "\n".join(lines) if lines else "(no recent session history)"
+
+
+def format_event_role(event_type: str) -> str:
+    if event_type == "user_message":
+        return "User"
+    if event_type == "assistant_message":
+        return "Assistant"
+    return event_type
 
 
 def format_memory_context(recall_result: dict[str, Any]) -> str:
@@ -502,6 +577,12 @@ def chunk_text(text: str, limit: int) -> list[str]:
         chunks.append(text[start : start + limit])
         start += limit
     return chunks
+
+
+def truncate_chars(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
 
 
 if __name__ == "__main__":

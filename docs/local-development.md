@@ -212,6 +212,14 @@ hosts/telegram_gemini_bot/runtime/memory
 
 Ця runtime тека ігнорується git.
 
+Поточна логіка діалогу:
+
+- plain text користувача зберігається як `user_message`;
+- bot читає останні події сесії через adapter method `read_session`;
+- Gemini отримує recent session context + archive memory context;
+- відповідь bot-а зберігається як `assistant_message`;
+- archive memory все одно створюється окремо через `/sleep` або auto-sleep keywords.
+
 ## Поточний Очікуваний Результат
 
 На момент запису цього документа локальний цикл проходить:

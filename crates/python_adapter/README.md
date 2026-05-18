@@ -31,6 +31,7 @@ import memory_engine
 engine = memory_engine.MemoryEngine("memory", host_id="telegram_bot")
 
 stored = json.loads(engine.ingest(json.dumps(event_dict)))
+session = json.loads(engine.read_session(session_id))
 sleep_result = json.loads(engine.sleep(session_id))
 updated = json.loads(engine.resume_sleep_compression(task_id, json.dumps(llm_result)))
 recall_result = json.loads(engine.recall(json.dumps(query_dict)))

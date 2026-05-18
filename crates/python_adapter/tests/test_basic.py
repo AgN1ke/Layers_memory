@@ -44,6 +44,25 @@ def test_ingest_creates_stored_event(engine: memory_engine.MemoryEngine):
     assert "high importance floor" in stored["weight_reason"]
 
 
+def test_read_session_returns_stored_events(engine: memory_engine.MemoryEngine):
+    _ingest(engine, "session_recent", "Розкажи про МіГ-15.")
+    _ingest(
+        engine,
+        "session_recent",
+        "Розкажи про F-86.",
+        timestamp="2026-05-18T10:01:00.000Z",
+    )
+
+    session = json.loads(engine.read_session("session_recent"))
+
+    assert session["metadata"]["session_id"] == "session_recent"
+    assert session["metadata"]["event_count"] == 2
+    assert [event["payload"]["text"] for event in session["events"]] == [
+        "Розкажи про МіГ-15.",
+        "Розкажи про F-86.",
+    ]
+
+
 def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngine):
     _ingest(engine, "session_b", "Я живу в Берліні з квітня 2026 року.")
 

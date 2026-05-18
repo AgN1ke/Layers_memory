@@ -7,7 +7,8 @@
 - питає Telegram bot token у терміналі;
 - питає Gemini API key у терміналі;
 - використовує `memory_engine` Python adapter;
-- пише повідомлення користувача в памʼять через `ingest`;
+- пише повідомлення користувача і відповіді bot-а в памʼять через `ingest`;
+- підкладає останні події поточної Telegram-сесії в prompt як short-term context;
 - шукає archive memory через `recall`;
 - відповідає через Gemini;
 - створює archive memory через `/sleep`;
@@ -59,8 +60,10 @@
 Plain text без `/`:
 
 1. Зберігається як event.
-2. Виконує recall по попередній archive memory.
-3. Дає Gemini відповідь з memory context.
+2. Читає останні події поточної Telegram-сесії через `read_session`.
+3. Виконує recall по попередній archive memory.
+4. Дає Gemini відповідь з recent session context + archive memory context.
+5. Зберігає відповідь bot-а як `assistant_message`.
 
 Якщо повідомлення містить `запам'ятай`, `запамʼятай`, `пам'ятай`, `памʼятай` або `важливо`, bot автоматично робить `/sleep` після відповіді, щоб цей факт одразу став archive memory.
 

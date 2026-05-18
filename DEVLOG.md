@@ -1343,3 +1343,53 @@ GUI launcher відкриває вікно з полями:
 
 **Наступні кроки:**
 Запустити `run_gui.ps1`, щоб користувач ввів token/key у GUI і перевірив bot у Telegram.
+
+### Запис 25
+
+**Час:** 2026-05-18 12:27:54 +03:00
+
+**Проблематика:**
+Live-тест Telegram bot-а показав, що він поводиться як stateless чат: після розмови про МіГ-15 і F-86 на запит "Порівняй їх" bot попросив уточнити, що саме порівняти, а на "Про що ми говорили?" відповів, що не має історії. Причина: host підкладав у Gemini prompt тільки archive memory через `recall`, а поточна сесія до `/sleep` не передавалась як short-term context.
+
+**Задум:**
+Розвести два шари памʼяті у live-host:
+
+- recent session context для поточного діалогу і коротких посилань типу "їх", "це", "про що ми говорили";
+- archive memory для довшої памʼяті після `/sleep` або auto-sleep.
+
+**Що робили:**
+
+- додано `read_session(session_id)` у Python adapter;
+- додано pytest на повернення подій сесії через adapter;
+- оновлено `hosts/telegram_gemini_bot/bot.py`;
+- оновлено README host-а, README Python adapter-а і `docs/local-development.md`.
+
+**Що зроблено:**
+Telegram bot тепер:
+
+- зберігає повідомлення користувача як `user_message`;
+- читає останні 16 подій поточної Telegram-сесії через `read_session`;
+- передає Gemini `Recent session context` окремо від `Archive memory context`;
+- зберігає відповідь bot-а як `assistant_message`;
+- продовжує використовувати `/sleep` і archive recall як окремий довший шар памʼяті.
+
+Очікувана поведінка після зміни: якщо користувач питає "Порівняй їх" після МіГ-15 і F-86, bot має зрозуміти, що "їх" означає ці два літаки. Якщо користувач питає "Про що ми говорили?", bot має відповідати з recent session context, навіть якщо `/sleep` ще не запускався.
+
+**Проблеми чи виклики:**
+Це все ще простий MVP без embeddings і без LLM-rerank recall. Recent context обмежено останніми 16 подіями, щоб не роздувати prompt. Якщо діалог буде дуже довгим, старіша частина має переходити в archive memory через `/sleep`.
+
+**Фідбек користувача:**
+Користувач надав реальний Telegram transcript, де bot втратив локальний контекст діалогу.
+
+**Перевірки:**
+
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `git diff --check` проходить;
+- `cargo fmt` проходить;
+- `cargo test --workspace` проходить;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `maturin develop` проходить;
+- `pytest tests/ -v` у `crates/python_adapter` проходить: 5/5.
+
+**Наступні кроки:**
+Перезапустити bot через `run_gui.ps1` і повторити live-тест: МіГ-15 -> F-86 -> "Порівняй їх" -> "Про що ми говорили?".

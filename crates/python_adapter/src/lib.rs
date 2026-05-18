@@ -23,6 +23,7 @@ use serde::Serialize;
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::sleep::SleepCompressionResult;
+use ::memory_engine::storage::Storage;
 use ::memory_engine::{FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
 
 #[pyclass(name = "MemoryEngine", unsendable)]
@@ -52,6 +53,15 @@ impl PyMemoryEngine {
     fn sleep(&mut self, session_id: &str) -> PyResult<String> {
         let result = self.inner.sleep(session_id).map_err(map_err)?;
         dump_json(&result, "sleep result")
+    }
+
+    fn read_session(&self, session_id: &str) -> PyResult<String> {
+        let session = self
+            .inner
+            .storage()
+            .read_session(session_id)
+            .map_err(map_err)?;
+        dump_json(&session, "session")
     }
 
     fn resume_sleep_compression(&mut self, task_id: &str, result_json: &str) -> PyResult<String> {
