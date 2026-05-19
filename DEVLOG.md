@@ -1982,3 +1982,51 @@ MemoryEngine.patch_core_fact(patch_json)
 - `/core` показує id;
 - `/core_update` оновлює факт;
 - `/core_forget` прибирає факт з `/core` і prompt-context.
+
+### Запис 34
+
+**Час:** 2026-05-19 20:06:29 +03:00
+
+**Проблематика:**
+У runtime Telegram bot-а лишались Core-факти, створені старим regex/backfill шляхом до того, як direct-write у Core було обмежено явною командою `/remember`. Це були демо-артефакти попереднього підходу: імʼя користувача, вік, імʼя bot-а, стиль звертання і тестовий факт для іншого Telegram scope.
+
+Якщо залишити ці факти активними, наступний live-тест не буде чесним: bot виглядатиме так, ніби Core-памʼять працює правильно, хоча частина Core вже була заповнена хибним каналом.
+
+**Задум:**
+Не видаляти runtime-файли фізично, бо це прибирає audit trail. Замість цього позначити старі seed/backfill Core-факти як `deprecated`. Так вони залишаються в історії, але більше не повертаються в `core_context_package` і не потрапляють у prompt-context.
+
+**Що робили:**
+
+- переглянуто `hosts/telegram_gemini_bot/runtime/memory/core/store/profile.json`;
+- переглянуто `hosts/telegram_gemini_bot/runtime/memory/core/store/preferences.json`;
+- переглянуто `hosts/telegram_gemini_bot/runtime/memory/core/store/relationship.json`;
+- всі наявні active Core-факти в цих runtime-файлах позначено `status: deprecated`;
+- оновлено `updated_at` у категоріях і фактах.
+
+**Що зроблено:**
+Після cleanup у runtime більше немає активних Core-фактів, які були створені старим regex/backfill підходом. Це означає, що наступний live-тест має перевіряти реальну поведінку:
+
+- без `/remember` bot не має брати імʼя/вік/імʼя bot-а зі старого Core;
+- `/remember` має бути явним каналом запису в Core;
+- `/core_update` і `/core_forget` мають керувати тільки фактами поточного Telegram scope.
+
+**Проблеми чи виклики:**
+Runtime-памʼять git-ignored і не комітиться в репозиторій. Тому цей запис у DEVLOG є єдиним контрольним слідом для того, чому локальні runtime Core-факти були деактивовані.
+
+**Фідбек користувача:**
+Користувач погодився з позицією, що старі regex-generated Core-факти є артефактом неправильного каналу запису і не мають підміняти чесний live-тест v0.1.
+
+**Перевірки:**
+
+- `profile.json`, `preferences.json`, `relationship.json` успішно читаються через `ConvertFrom-Json`;
+- `git status --short` не показує runtime-файли, бо вони не входять у репозиторій.
+
+**Наступні кроки:**
+Запустити Telegram bot і пройти один великий live-test v0.1:
+
+- `/core` спочатку має бути порожнім для активного scope;
+- `/remember` має створити новий scoped Core-факт;
+- `/core_update` має змінити цей факт;
+- `/core_forget` має прибрати його з active context;
+- 50+ повідомлень мають запустити auto-sleep;
+- після auto-sleep старі теми мають повертатися через archive recall, а не через роздутий session trace.
