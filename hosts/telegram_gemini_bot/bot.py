@@ -7,6 +7,7 @@ Gemini API calls, API keys, and model selection.
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -132,6 +133,24 @@ class GeminiClient:
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
 
+    def validate_key(self) -> None:
+        request = urllib.request.Request(
+            f"{GEMINI_API}/models",
+            headers={"x-goog-api-key": self.api_key},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as err:
+            body = err.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Gemini key validation failed: HTTP {err.code}: {body}") from err
+        except urllib.error.URLError as err:
+            raise RuntimeError(f"Gemini key validation failed: {err}") from err
+
+        if not isinstance(payload.get("models"), list):
+            raise RuntimeError(f"Gemini key validation returned unexpected payload: {payload}")
+
     def generate_text(self, model: str, system_instruction: str, prompt: str) -> str:
         url_model = urllib.parse.quote(model, safe="")
         url = f"{GEMINI_API}/models/{url_model}:generateContent"
@@ -183,6 +202,11 @@ def main() -> None:
     )
     telegram = TelegramClient(telegram_token)
     gemini = GeminiClient(gemini_key)
+
+    log_line(f"telegram token fingerprint: {secret_fingerprint(telegram_token)}")
+    log_line(f"gemini key fingerprint: {secret_fingerprint(gemini_key)}")
+    gemini.validate_key()
+    log_line("gemini key validation completed")
 
     telegram.delete_webhook()
     log_line("deleteWebhook completed")
@@ -616,14 +640,19 @@ def ingest_chat_event(
 
 def read_secret(label: str, env_name: str) -> str:
     value = os.environ.get(env_name)
-    if value:
+    if value and value.strip():
         print(f"{label}: using {env_name} from environment")
-        return value
+        return value.strip()
     while True:
         value = getpass.getpass(f"{label}: ").strip()
         if value:
             return value
         print("Value must not be empty.")
+
+
+def secret_fingerprint(value: str) -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return f"len={len(value)} sha256_12={digest}"
 
 
 def read_model_config() -> HostLlmConfig:
