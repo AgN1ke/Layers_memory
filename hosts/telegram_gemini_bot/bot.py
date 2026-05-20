@@ -404,6 +404,10 @@ def handle_update(
         telegram.send_message(chat_id, format_archive_detail(archive))
         return
 
+    if text == "/archive":
+        telegram.send_message(chat_id, "Usage: /archive_last or /archive archive_id")
+        return
+
     if text.startswith("/archive "):
         archive_id = text.removeprefix("/archive").strip()
         telegram.send_message(chat_id, format_archive_detail(find_archive(archive_id)))
@@ -468,6 +472,10 @@ def handle_update(
     if text.startswith("/recall"):
         query = text.removeprefix("/recall").strip() or text
         telegram.send_message(chat_id, format_recall(recall(engine, session_id, query, explain=True)))
+        return
+
+    if text.startswith("/"):
+        telegram.send_message(chat_id, "Unknown command. Use /help for available commands.")
         return
 
     user_ingest = ingest_chat_event(

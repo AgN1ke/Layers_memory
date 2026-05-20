@@ -45,4 +45,5 @@ Rules:
 - Include `source_event_ids` for every signal.
 - Include `evidence` explaining the support.
 - Do not promote generic encyclopedia facts unless they reveal something about the user.
+- For user identity, name, surname, age, or other profile facts, base the signal on user-authored events. Assistant messages may confirm a user-stated fact, but must not be the source for a name form or identity detail.
 - If no personal signal is present, return an empty `personal_signals` array.
