@@ -320,7 +320,7 @@ def main() -> None:
     print("Bot is running. Open Telegram and write to your bot.")
     print(
         "Commands: /help, /sleep, /archives, /archive_last, /recall text, "
-        "/core, /core_refresh, /remember text, /core_update id text, "
+        "/core, /core_seed, /remember text, /core_update id text, "
         "/core_forget id, /tasks, /models"
     )
     offset = read_saved_offset()
@@ -390,9 +390,9 @@ def handle_update(
         telegram.send_message(chat_id, format_core_facts(context_package(engine, session_id, chat_id, text)))
         return
 
-    if text == "/core_refresh":
+    if text == "/core_seed":
         summary = promote_existing_archives(engine)
-        telegram.send_message(chat_id, format_core_refresh(summary))
+        telegram.send_message(chat_id, format_core_seed(summary))
         return
 
     if text == "/archives":
@@ -616,7 +616,7 @@ def promote_archive_personal_signals(
         core_category = CORE_SIGNAL_CATEGORY_MAP.get(source_category)
         confidence = clamp_float(signal.get("confidence"), 0.0)
         source_event_ids = normalize_string_list(signal.get("source_event_ids"))
-        has_user_source = not user_event_ids or any(
+        has_user_source = bool(user_event_ids) and any(
             event_id in user_event_ids for event_id in source_event_ids
         )
         if (
@@ -1480,9 +1480,9 @@ def format_core_facts(package: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_core_refresh(summary: dict[str, int]) -> str:
+def format_core_seed(summary: dict[str, int]) -> str:
     return (
-        "Core refresh finished.\n"
+        "Core seed finished.\n"
         f"Archives scanned: {summary.get('archives', 0)}\n"
         f"Signals: {format_core_signal_counts(summary)}"
     )
@@ -1519,7 +1519,7 @@ def help_text() -> str:
         "/archive id - inspect one archive memory by id\n"
         "/recall text - search archive memory\n"
         "/core - show stable Core facts\n"
-        "/core_refresh - seed Core from completed archive personal signals\n"
+        "/core_seed - seed Core from completed archive personal signals\n"
         "/remember text - save a stable Core fact manually\n"
         "/core_update id text - update a Core fact in this chat\n"
         "/core_forget id - deprecate a Core fact in this chat\n"

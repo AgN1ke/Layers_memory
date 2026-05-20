@@ -63,7 +63,7 @@
 - `/archive id` - показати конкретний archive-запис за id.
 - `/recall текст` - пошукати archive memory.
 - `/core` - показати стабільні Core-факти разом із `core_fact_id`.
-- `/core_refresh` - повторно пройти завершені archive-записи і засіяти Core з їхніх `personal_signals`.
+- `/core_seed` - повторно пройти завершені archive-записи і засіяти Core з їхніх `personal_signals`.
 - `/remember текст` - вручну записати стабільний Core-факт.
 - `/core_update id текст` - оновити Core-факт у поточному chat scope.
 - `/core_forget id` - позначити Core-факт як `deprecated`; він більше не потрапляє в prompt.
@@ -86,7 +86,7 @@ Core-факти ізольовані по Telegram chat id. Якщо bot-у пи
 
 Якщо повідомлення містить явне прохання оновити памʼять (`запам...`, `запиши в пам...`, `це важливо`, `онови пам...`), bot автоматично ставить sleep у фон після відповіді, щоб ця подія швидше стала archive memory.
 
-Після успішного sleep host бере `personal_signals`, які виділив LLM-прохід, і переносить у Core тільки сигнали з confidence `>= 0.85`, підтримкою хоча б одного `user_message` source event і дозволеною загальною категорією (`profile`, `preferences`, `relationship`). Це не regex-витяг фактів із raw text: код не шукає "кішку", "імʼя" чи інші конкретні сутності. Він лише застосовує загальний поріг до структурованого результату sleep. `/core_refresh` повторює цей крок для вже завершених archive-записів.
+Після успішного sleep host бере `personal_signals`, які виділив LLM-прохід, і переносить у Core тільки сигнали з confidence `>= 0.85`, підтримкою хоча б одного `user_message` source event і дозволеною загальною категорією (`profile`, `preferences`, `relationship`). Це не regex-витяг фактів із raw text: код не шукає "кішку", "імʼя" чи інші конкретні сутності. Він лише застосовує загальний поріг до структурованого результату sleep. `/core_seed` повторює цей крок для вже завершених archive-записів.
 
 Для debug можна повернути старий single-pass sleep через env `MEMORY_BOT_SLEEP_MODE=single`. За замовчуванням використовується multi-pass sleep.
 
