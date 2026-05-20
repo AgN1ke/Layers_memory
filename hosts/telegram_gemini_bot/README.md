@@ -12,7 +12,8 @@
 - відповідає через Gemini;
 - створює archive memory через `/sleep`;
 - виконує engine-level `auto_sleep`, якщо `ingest` повернув sleep task;
-- зберігає explicit Core-факти тільки через `/remember` у scope поточного `telegram_<chat_id>`;
+- зберігає explicit Core-факти через `/remember` у scope поточного `telegram_<chat_id>`;
+- після успішного sleep переносить достатньо впевнені `personal_signals` з archive у Core без regex-хардкоду;
 - додає мʼякі event-теги для можливих профільних фактів, щоб майбутній reflection міг їх переглянути;
 - виконує `sleep_compression` pending task через Gemini; default flow є multi-pass: emotional pass, topic thread pass, personal signal pass, relational pass і consolidator;
 - повертає один `sleep_compression_result.v1` у `resume_sleep_compression`.
@@ -57,8 +58,12 @@
 
 - `/start` або `/help` - показати довідку.
 - `/sleep` - стиснути поточну сесію в archive memory і виконати multi-pass LLM-доробку через Gemini.
+- `/archives` - показати останні завершені archive-записи, їх gist і кількість emotional/personal треків.
+- `/archive_last` - показати повний останній archive-запис: gist, narrative, emotional markers, personal signals, relational tone.
+- `/archive id` - показати конкретний archive-запис за id.
 - `/recall текст` - пошукати archive memory.
 - `/core` - показати стабільні Core-факти разом із `core_fact_id`.
+- `/core_refresh` - повторно пройти завершені archive-записи і засіяти Core з їхніх `personal_signals`.
 - `/remember текст` - вручну записати стабільний Core-факт.
 - `/core_update id текст` - оновити Core-факт у поточному chat scope.
 - `/core_forget id` - позначити Core-факт як `deprecated`; він більше не потрапляє в prompt.
@@ -79,7 +84,9 @@ Plain text без `/`:
 
 Core-факти ізольовані по Telegram chat id. Якщо bot-у пишуть два різні користувачі з різних чатів, `/core` і prompt-контекст кожного чату бачать тільки свій scope.
 
-Якщо повідомлення містить `запам...`, `памʼят...`, `пам'ят...` або `важлив...`, bot автоматично робить `/sleep` після відповіді, щоб ця подія швидше стала archive memory. В Core вона не потрапляє без `/remember` або майбутнього reflection/promotion.
+Якщо повідомлення містить явне прохання оновити памʼять (`запам...`, `запиши в пам...`, `це важливо`, `онови пам...`), bot автоматично ставить sleep у фон після відповіді, щоб ця подія швидше стала archive memory.
+
+Після успішного sleep host бере `personal_signals`, які виділив LLM-прохід, і переносить у Core тільки сигнали з confidence `>= 0.85`, підтримкою хоча б одного `user_message` source event і дозволеною загальною категорією (`profile`, `preferences`, `relationship`). Це не regex-витяг фактів із raw text: код не шукає "кішку", "імʼя" чи інші конкретні сутності. Він лише застосовує загальний поріг до структурованого результату sleep. `/core_refresh` повторює цей крок для вже завершених archive-записів.
 
 Для debug можна повернути старий single-pass sleep через env `MEMORY_BOT_SLEEP_MODE=single`. За замовчуванням використовується multi-pass sleep.
 

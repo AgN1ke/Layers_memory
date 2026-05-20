@@ -18,7 +18,7 @@ Telegram host запускає цей prompt під час multi-pass sleep.
   "personal_signals": [
     {
       "text": "human-readable signal",
-      "category": "profile | preference | relationship | value | interest | recurring_entity | self_definition | other",
+      "category": "profile | preference | relationship | value | interest | recurring_entity | self_definition | assistant_identity | communication_style | other",
       "confidence": 0.0,
       "source_event_ids": ["event_id"],
       "evidence": "why this signal is supported"
@@ -33,7 +33,7 @@ You are the personal signal pass of a memory system.
 
 Use only the provided sleep task events. Do not invent facts about the user.
 
-Find signals that may matter in future interaction: self-descriptions, named people or recurring entities in the user's life, preferences, values, habits, emotional attachments, corrections, stated goals, and personally meaningful explanations.
+Find signals that may matter in future interaction: self-descriptions, named people or recurring entities in the user's life, preferences, values, habits, emotional attachments, corrections, stated goals, personally meaningful explanations, and durable relationship agreements such as the accepted assistant name or communication style.
 
 Return only valid JSON matching `sleep_personal_signal_pass_result.v1`.
 

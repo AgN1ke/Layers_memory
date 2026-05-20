@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = ROOT / "prompts"
 RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 MEMORY_DIR = RUNTIME_DIR / "memory"
+ARCHIVE_DIR = MEMORY_DIR / "archive"
 LOG_DIR = RUNTIME_DIR / "logs"
 LOG_PATH = LOG_DIR / "bot.log"
 STATE_DIR = RUNTIME_DIR / "state"
@@ -67,6 +68,27 @@ MEMORY_UPDATE_KEYWORD_PARTS = (
     "важлива інформація",
     "онови пам",
 )
+
+ARCHIVE_LIST_LIMIT = 5
+ARCHIVE_DETAIL_LIMIT = 10
+CORE_SIGNAL_MIN_CONFIDENCE = 0.85
+CORE_SIGNAL_CATEGORY_MAP = {
+    "profile": "profile",
+    "identity": "profile",
+    "self_definition": "profile",
+    "preference": "preferences",
+    "preferences": "preferences",
+    "value": "preferences",
+    "values": "preferences",
+    "interest": "preferences",
+    "relationship": "relationship",
+    "relationships": "relationship",
+    "recurring_entity": "relationship",
+    "assistant_identity": "relationship",
+    "communication_style": "preferences",
+    "pet": "relationship",
+    "pets": "relationship",
+}
 
 
 @dataclass(frozen=True)
@@ -297,8 +319,9 @@ def main() -> None:
     log_line("deleteWebhook completed")
     print("Bot is running. Open Telegram and write to your bot.")
     print(
-        "Commands: /help, /sleep, /recall text, /core, /remember text, "
-        "/core_update id text, /core_forget id, /tasks, /models"
+        "Commands: /help, /sleep, /archives, /archive_last, /recall text, "
+        "/core, /core_refresh, /remember text, /core_update id text, "
+        "/core_forget id, /tasks, /models"
     )
     offset = read_saved_offset()
     log_line(f"bot polling started offset={offset} auto_sleep_after_events={auto_sleep_after_events}")
@@ -365,6 +388,25 @@ def handle_update(
 
     if text == "/core":
         telegram.send_message(chat_id, format_core_facts(context_package(engine, session_id, chat_id, text)))
+        return
+
+    if text == "/core_refresh":
+        summary = promote_existing_archives(engine)
+        telegram.send_message(chat_id, format_core_refresh(summary))
+        return
+
+    if text == "/archives":
+        telegram.send_message(chat_id, format_archives())
+        return
+
+    if text == "/archive_last":
+        archive = last_complete_archive()
+        telegram.send_message(chat_id, format_archive_detail(archive))
+        return
+
+    if text.startswith("/archive "):
+        archive_id = text.removeprefix("/archive").strip()
+        telegram.send_message(chat_id, format_archive_detail(find_archive(archive_id)))
         return
 
     if text.startswith("/remember"):
@@ -538,6 +580,7 @@ def complete_sleep_result(
     updated = json.loads(
         engine.resume_sleep_compression(task["task_id"], json.dumps(llm_result, ensure_ascii=False))
     )
+    core_summary = promote_archive_personal_signals(engine, updated)
     return (
         f"Archive: {archive['archive_id']}\n"
         f"Task: {task['task_id']}\n"
@@ -545,8 +588,158 @@ def complete_sleep_result(
         f"Model: {llm_config.for_role(task['role_hint']).model}\n"
         f"Emotional markers: {len(updated.get('emotional_markers', []))}\n"
         f"Personal signals: {len(updated.get('personal_signals', []))}\n"
+        f"Core signals: {format_core_signal_counts(core_summary)}\n"
         f"Gist: {updated['gist']}"
     )
+
+
+def promote_archive_personal_signals(
+    engine: memory_engine.MemoryEngine,
+    archive: dict[str, Any],
+) -> dict[str, int]:
+    summary = {"created": 0, "updated": 0, "skipped": 0}
+    if archive.get("status") != "complete":
+        return summary
+
+    archive_id = clean_string(archive.get("archive_id"))
+    session_id = clean_string(archive.get("source_session_id"))
+    scope = core_scope(session_id) if session_id else ""
+    user_event_ids = user_event_ids_for_session(session_id)
+    personal_signals = archive.get("personal_signals", [])
+    for signal in personal_signals if isinstance(personal_signals, list) else []:
+        if not isinstance(signal, dict):
+            summary["skipped"] += 1
+            continue
+
+        text = clean_string(signal.get("text"))
+        source_category = clean_string(signal.get("category")).lower()
+        core_category = CORE_SIGNAL_CATEGORY_MAP.get(source_category)
+        confidence = clamp_float(signal.get("confidence"), 0.0)
+        source_event_ids = normalize_string_list(signal.get("source_event_ids"))
+        has_user_source = not user_event_ids or any(
+            event_id in user_event_ids for event_id in source_event_ids
+        )
+        if (
+            not text
+            or core_category is None
+            or confidence < CORE_SIGNAL_MIN_CONFIDENCE
+            or not has_user_source
+            or is_near_duplicate_core_fact(core_category, scope, text)
+        ):
+            summary["skipped"] += 1
+            continue
+
+        result = upsert_core_fact(
+            engine=engine,
+            category=core_category,
+            scope=scope,
+            text=text,
+            confidence=confidence,
+            tags=[
+                "archive_signal",
+                "telegram",
+                f"signal_category:{source_category}",
+            ],
+            source_archive_ids=[archive_id] if archive_id else [],
+        )
+        if result.get("created"):
+            summary["created"] += 1
+        else:
+            summary["updated"] += 1
+
+    return summary
+
+
+def promote_existing_archives(engine: memory_engine.MemoryEngine) -> dict[str, int]:
+    summary = {"archives": 0, "created": 0, "updated": 0, "skipped": 0}
+    for archive in complete_archives():
+        summary["archives"] += 1
+        archive_summary = promote_archive_personal_signals(engine, archive)
+        for key in ("created", "updated", "skipped"):
+            summary[key] += archive_summary[key]
+    return summary
+
+
+def format_core_signal_counts(summary: dict[str, int]) -> str:
+    return (
+        f"{summary.get('created', 0)} new, "
+        f"{summary.get('updated', 0)} updated, "
+        f"{summary.get('skipped', 0)} skipped"
+    )
+
+
+def is_near_duplicate_core_fact(category: str, scope: str, text: str) -> bool:
+    for existing_text in active_core_texts(category, scope):
+        if normalized_text(existing_text) == normalized_text(text):
+            return False
+        if token_overlap(existing_text, text) >= 0.55:
+            return True
+    return False
+
+
+def active_core_texts(category: str, scope: str) -> list[str]:
+    path = MEMORY_DIR / "core" / "store" / f"{category}.json"
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    texts = []
+    facts = payload.get("facts", []) if isinstance(payload, dict) else []
+    for fact in facts if isinstance(facts, list) else []:
+        if not isinstance(fact, dict):
+            continue
+        if fact.get("status") != "active":
+            continue
+        if clean_string(fact.get("scope")) != scope:
+            continue
+        text = clean_string(fact.get("text"))
+        if text:
+            texts.append(text)
+    return texts
+
+
+def normalized_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def token_overlap(left: str, right: str) -> float:
+    left_tokens = meaningful_tokens(left)
+    right_tokens = meaningful_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+
+
+def meaningful_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[0-9A-Za-zА-Яа-яІіЇїЄєҐґ_-]{4,}", text.lower())
+        if token
+        not in {
+            "user",
+            "users",
+            "the",
+            "and",
+            "with",
+            "that",
+            "this",
+            "has",
+            "have",
+            "interest",
+            "interested",
+            "strong",
+            "specifically",
+            "користувач",
+            "користувача",
+            "користувачу",
+            "дуже",
+            "любить",
+            "цікавиться",
+        }
+    }
 
 
 def run_auto_sleep_results(
@@ -860,20 +1053,25 @@ def upsert_core_fact(
     text: str,
     confidence: float,
     tags: list[str],
+    source_archive_ids: list[str] | None = None,
+    source_candidate_id: str | None = None,
 ) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "core_fact_input.v1",
+        "category": category,
+        "scope": scope,
+        "text": text,
+        "confidence": confidence,
+        "tags": tags,
+    }
+    if source_archive_ids:
+        payload["source_archive_ids"] = source_archive_ids
+    if source_candidate_id:
+        payload["source_candidate_id"] = source_candidate_id
+
     return json.loads(
         engine.upsert_core_fact(
-            json.dumps(
-                {
-                    "schema_version": "core_fact_input.v1",
-                    "category": category,
-                    "scope": scope,
-                    "text": text,
-                    "confidence": confidence,
-                    "tags": tags,
-                },
-                ensure_ascii=False,
-            )
+            json.dumps(payload, ensure_ascii=False)
         )
     )
 
@@ -1121,6 +1319,153 @@ def format_recall(recall_result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def archive_paths() -> list[Path]:
+    if not ARCHIVE_DIR.exists():
+        return []
+    return sorted(
+        ARCHIVE_DIR.rglob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+    )
+
+
+def read_archive(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as err:
+        log_exception(f"failed to read archive {path}", err)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def complete_archives() -> list[dict[str, Any]]:
+    archives = []
+    for path in archive_paths():
+        archive = read_archive(path)
+        if archive and archive.get("status") == "complete":
+            archives.append(archive)
+    return archives
+
+
+def user_event_ids_for_session(session_id: str) -> set[str]:
+    if not session_id or "/" in session_id or "\\" in session_id:
+        return set()
+    events_path = MEMORY_DIR / "sessions" / session_id / "events.jsonl"
+    if not events_path.exists():
+        return set()
+
+    event_ids = set()
+    try:
+        with events_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "user_message":
+                    event_id = clean_string(event.get("event_id"))
+                    if event_id:
+                        event_ids.add(event_id)
+    except OSError as err:
+        log_exception(f"failed to read session events {events_path}", err)
+    return event_ids
+
+
+def last_complete_archive() -> dict[str, Any] | None:
+    archives = complete_archives()
+    return archives[-1] if archives else None
+
+
+def find_archive(archive_id: str) -> dict[str, Any] | None:
+    if not archive_id:
+        return None
+    for archive in complete_archives():
+        if archive.get("archive_id") == archive_id:
+            return archive
+    return None
+
+
+def format_archives() -> str:
+    archives = complete_archives()
+    if not archives:
+        return "No completed archives found yet. Use /sleep after a meaningful chat."
+
+    lines = [f"Recent archives ({min(len(archives), ARCHIVE_LIST_LIMIT)} of {len(archives)}):"]
+    for archive in reversed(archives[-ARCHIVE_LIST_LIMIT:]):
+        archive_id = archive.get("archive_id", "")
+        lines.append(
+            f"- {archive_id} events={len(archive.get('source_event_ids', []))} "
+            f"emotional={len(archive.get('emotional_markers', []))} "
+            f"personal={len(archive.get('personal_signals', []))}"
+        )
+        gist = clean_string(archive.get("gist"))
+        if gist:
+            lines.append(f"  {truncate_chars(gist, 260)}")
+    lines.append("Use /archive_last or /archive archive_id to inspect details.")
+    return "\n".join(lines)
+
+
+def format_archive_detail(archive: dict[str, Any] | None) -> str:
+    if not archive:
+        return "Archive not found. Use /archives to list available archive ids."
+
+    lines = [
+        f"Archive: {archive.get('archive_id', '')}",
+        f"Status: {archive.get('status', '')}",
+        f"Events: {len(archive.get('source_event_ids', []))}",
+    ]
+    gist = clean_string(archive.get("gist"))
+    narrative = clean_string(archive.get("narrative"))
+    if gist:
+        lines.append(f"Gist: {gist}")
+    if narrative:
+        lines.append(f"Narrative: {narrative}")
+
+    emotional_markers = sorted(
+        [item for item in archive.get("emotional_markers", []) if isinstance(item, dict)],
+        key=lambda item: clamp_float(item.get("strength"), 0.0),
+        reverse=True,
+    )
+    if emotional_markers:
+        lines.append("Emotional markers:")
+        for marker in emotional_markers[:ARCHIVE_DETAIL_LIMIT]:
+            target = clean_string(marker.get("target"))
+            affect = clean_string(marker.get("affect"))
+            strength = clamp_float(marker.get("strength"), 0.0)
+            lines.append(f"- {target} | {affect} | {strength:.2f}")
+            evidence = clean_string(marker.get("evidence"))
+            if evidence:
+                lines.append(f"  {truncate_chars(evidence, 240)}")
+
+    personal_signals = sorted(
+        [item for item in archive.get("personal_signals", []) if isinstance(item, dict)],
+        key=lambda item: clamp_float(item.get("confidence"), 0.0),
+        reverse=True,
+    )
+    if personal_signals:
+        lines.append("Personal signals:")
+        for signal in personal_signals[:ARCHIVE_DETAIL_LIMIT]:
+            text = clean_string(signal.get("text"))
+            category = clean_string(signal.get("category"))
+            confidence = clamp_float(signal.get("confidence"), 0.0)
+            lines.append(f"- [{category} {confidence:.2f}] {text}")
+
+    tone = archive.get("relational_tone")
+    if isinstance(tone, dict):
+        tone_parts = []
+        for key in ("warmth", "intellectual_engagement", "intimacy", "trust", "playfulness", "tension"):
+            if tone.get(key) is not None:
+                tone_parts.append(f"{key}={clamp_float(tone.get(key), 0.0):.2f}")
+        tone_summary = clean_string(tone.get("summary"))
+        if tone_parts or tone_summary:
+            lines.append("Relational tone:")
+            if tone_parts:
+                lines.append("- " + ", ".join(tone_parts))
+            if tone_summary:
+                lines.append(f"- {tone_summary}")
+
+    return "\n".join(lines)
+
+
 def format_core_facts(package: dict[str, Any]) -> str:
     facts = package.get("core_facts", [])
     if not facts:
@@ -1133,6 +1478,14 @@ def format_core_facts(package: dict[str, Any]) -> str:
         fact_id = fact.get("core_fact_id", "")
         lines.append(f"{index}. {fact_id} [{category} {confidence:.2f}] {fact.get('text', '')}")
     return "\n".join(lines)
+
+
+def format_core_refresh(summary: dict[str, int]) -> str:
+    return (
+        "Core refresh finished.\n"
+        f"Archives scanned: {summary.get('archives', 0)}\n"
+        f"Signals: {format_core_signal_counts(summary)}"
+    )
 
 
 def format_tasks(tasks: list[dict[str, Any]]) -> str:
@@ -1161,8 +1514,12 @@ def help_text() -> str:
     return (
         "Memory bot commands:\n"
         "/sleep - commit current session into archive memory\n"
+        "/archives - list recent completed archive memories\n"
+        "/archive_last - inspect the newest archive memory\n"
+        "/archive id - inspect one archive memory by id\n"
         "/recall text - search archive memory\n"
         "/core - show stable Core facts\n"
+        "/core_refresh - seed Core from completed archive personal signals\n"
         "/remember text - save a stable Core fact manually\n"
         "/core_update id text - update a Core fact in this chat\n"
         "/core_forget id - deprecate a Core fact in this chat\n"
