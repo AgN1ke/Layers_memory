@@ -303,8 +303,10 @@ impl<S: Storage> MemoryEngine<S> {
             request.recall_limit
         };
 
-        let session_recent = session_context_events(&session, recent_limit);
-        let session_trace = session_context_events(&session, trace_limit);
+        let archived_event_ids =
+            self.archived_event_ids_for_session(&session.metadata.session_id)?;
+        let session_recent = session_context_events(&session, recent_limit, &archived_event_ids);
+        let session_trace = session_context_events(&session, trace_limit, &archived_event_ids);
         let query_text = request
             .query_text
             .clone()
@@ -872,14 +874,26 @@ fn validate_core_fact_patch_input(input: &CoreFactPatchInput) -> Result<()> {
     Ok(())
 }
 
-fn session_context_events(session: &SessionRecord, limit: usize) -> Vec<CoreContextEvent> {
+fn session_context_events(
+    session: &SessionRecord,
+    limit: usize,
+    archived_event_ids: &HashSet<String>,
+) -> Vec<CoreContextEvent> {
     if limit == 0 {
         return Vec::new();
     }
 
-    let start = session.events.len().saturating_sub(limit);
-    session.events[start..]
+    let mut events = session
+        .events
         .iter()
+        .rev()
+        .filter(|event| !archived_event_ids.contains(&event.event_id))
+        .take(limit)
+        .collect::<Vec<_>>();
+    events.reverse();
+
+    events
+        .into_iter()
         .map(|event| CoreContextEvent {
             event_id: event.event_id.clone(),
             timestamp: event.timestamp.clone(),

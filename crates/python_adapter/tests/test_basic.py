@@ -252,8 +252,9 @@ def test_core_context_package_combines_session_and_archive(engine: memory_engine
     package = json.loads(engine.core_context_package(json.dumps(request)))
 
     assert package["schema_version"] == "core_context_package.v1"
-    assert len(package["session_recent"]) == 2
-    assert any("МіГ-15" in event.get("text", "") for event in package["session_trace"])
+    assert len(package["session_recent"]) == 1
+    assert "риболовлю" in package["session_recent"][0].get("text", "")
+    assert not any("МіГ-15" in event.get("text", "") for event in package["session_trace"])
     assert package["archive_relevant"][0]["gist"] == "Розмова про МіГ-15."
 
 

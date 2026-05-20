@@ -729,6 +729,8 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
 
 `domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
 
+`session_recent` і `session_trace` у відповіді містять тільки active tail: події поточної сесії, які ще не покриті жодним archive entry через `source_event_ids`. Події, які вже пройшли sleep, повертаються через `archive_relevant`, а не дублюються як raw session events.
+
 ### 6.5 CoreContextPackage
 
 Core Context Package не обов'язково зберігається на диск. Це відповідь ядра на запит хоста.

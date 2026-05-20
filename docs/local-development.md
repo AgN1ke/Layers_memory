@@ -236,6 +236,7 @@ Offset зберігається після кожного обробленого
 - `engine.ingest()` повертає `IngestResult` з `stored_event` і можливим `auto_sleep`;
 - bot просить `engine.core_context_package(...)`, а не збирає recent/trace/archive сам;
 - Gemini отримує готовий context package: `session_recent`, `session_trace`, `archive_relevant`, `core_facts`, `domain_state`;
+- `session_recent` і `session_trace` містять тільки unarchived active tail; події, які вже пройшли sleep, мають приходити через `archive_relevant`;
 - відповідь bot-а зберігається як `assistant_message`;
 - plain text не записується напряму в Core Store через regex extraction;
 - Telegram host додає мʼякі event-теги (`personal_fact_signal`, `name_reference`, `age_reference`, `preference_signal`) і піднімає `importance_hint`, щоб sleep/reflection потім уважніше переглянули ці події;

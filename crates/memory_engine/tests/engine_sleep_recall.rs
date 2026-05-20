@@ -346,8 +346,13 @@ fn engine_core_context_package_combines_session_and_archive_context() {
         })
         .expect("core context package");
 
-    assert_eq!(package.session_recent.len(), 2);
-    assert!(package.session_trace.iter().any(|event| event
+    assert_eq!(package.session_recent.len(), 1);
+    assert!(package.session_recent[0]
+        .text
+        .as_deref()
+        .unwrap_or("")
+        .contains("риболовлю"));
+    assert!(!package.session_trace.iter().any(|event| event
         .text
         .as_deref()
         .unwrap_or("")

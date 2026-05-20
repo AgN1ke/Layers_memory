@@ -2315,3 +2315,52 @@ Partial sleep все ще не реалізовано. Це лишається v
 
 **Наступні кроки:**
 Провести live-тест уже нового multi-pass sleep. Поточний `bot.log` і latest archive у runtime створені до реалізації multi-pass, тому вони не валідовують новий flow.
+
+### Запис 40
+
+**Час:** 2026-05-20 15:18:16 +03:00
+
+**Проблематика:**
+Після уточнення про те, що session raw files не очищуються, користувач справедливо вказав на глибшу проблему: якщо archived events лишаються у `session_recent` / `session_trace`, ми не переносимо знання з короткострокової памʼяті в довгу, а дублюємо його. Це збільшує prompt context замість економії токенів.
+
+**Задум:**
+Розділити raw storage і prompt context:
+
+- raw `events.jsonl` може зберігати повну історію для людини й аудиту;
+- active short-term context має містити тільки unarchived tail;
+- усе, що вже пройшло sleep, має повертатись у prompt через `archive_relevant`, а не дублюватися raw events.
+
+**Що робили:**
+
+- оновлено `crates/memory_engine/src/engine.rs`;
+- оновлено Rust integration test для `core_context_package`;
+- оновлено Python adapter test;
+- оновлено `docs/architecture.md`, `docs/contracts.md`, `docs/local-development.md`;
+- оновлено `prompts/telegram_chat_system.md`.
+
+**Що зроблено:**
+
+1. `MemoryEngine::core_context_package` тепер читає `archived_event_ids_for_session(session_id)` і фільтрує ці події з `session_recent` та `session_trace`.
+2. Helper `session_context_events` тепер бере тільки події, яких немає у `archived_event_ids`.
+3. Existing test `engine_core_context_package_combines_session_and_archive_context` змінено так, щоб він перевіряв правильну межу: МіГ-15 після sleep є в `archive_relevant`, але не дублюється у `session_trace`; active tail про риболовлю лишається в `session_recent`.
+4. Python adapter test `test_core_context_package_combines_session_and_archive` перевіряє ту саму поведінку через PyO3.
+5. Документи тепер прямо кажуть: session файли можуть зберігати raw історію, але prompt context не має дублювати archived events.
+
+**Проблеми чи виклики:**
+Після auto-sleep поточний turn може вже бути covered archive event, тому хост повинен передавати поточне повідомлення окремо. Telegram bot уже це робить: `chat_prompt(package, text)` додає `Current user message` поза context package.
+
+**Фідбек користувача:**
+Користувач правильно сформулював принцип: sleep має економити токени через перенесення raw короткострокового контексту в стислий archive, а не збільшувати токени дублюванням.
+
+**Перевірки:**
+
+- `cargo fmt --check` проходить;
+- `cargo test --workspace` проходить;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `maturin develop` у `crates/python_adapter/.venv` проходить;
+- `pytest tests -v` у `crates/python_adapter` проходить: 11/11;
+- `git diff --check` проходить.
+
+**Наступні кроки:**
+Перезапустити bot і live-тестувати multi-pass sleep. У live archive треба перевірити дві речі: old covered events не дублюються в `session_trace`, а стислий зміст повертається через `archive_relevant` і multi-track поля archive.
