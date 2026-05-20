@@ -34,6 +34,14 @@
 
 Він відкриє маленьке вікно з полями для token/key, model mapping, порога auto-sleep і запустить bot з env-змінними.
 
+GUI launcher може кешувати token/key і model mapping у локальному файлі:
+
+```text
+hosts/telegram_gemini_bot/runtime/state/secrets.local.json
+```
+
+Це plaintext-кеш для зручності локального тестування. Уся тека `hosts/*/runtime/` ігнорується git, тому файл не потрапляє в commit/GitHub. У GUI є кнопка `Clear saved keys`, яка видаляє цей кеш.
+
 Скрипт:
 
 1. Увімкне UTF-8 для термінала.

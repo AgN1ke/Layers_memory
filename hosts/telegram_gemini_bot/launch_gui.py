@@ -1,12 +1,13 @@
 """GUI launcher for the Telegram Gemini Memory Bot.
 
 Use this when the classic Windows PowerShell window does not accept paste.
-Secrets are passed to `bot.py` through environment variables and are not
-written to disk.
+Secrets are passed to `bot.py` through environment variables. The launcher can
+cache them locally under runtime/state, which is ignored by git.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -19,6 +20,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parents[1]
 PYTHON_EXE = ROOT / "crates" / "python_adapter" / ".venv" / "Scripts" / "python.exe"
 BOT_PY = SCRIPT_DIR / "bot.py"
+STATE_DIR = SCRIPT_DIR / "runtime" / "state"
+SECRETS_CACHE_PATH = STATE_DIR / "secrets.local.json"
 
 
 DEFAULT_REASONING_MODEL = "gemini-2.5-pro"
@@ -28,19 +31,49 @@ DEFAULT_CHAT_ROLE = "balanced"
 DEFAULT_AUTO_SLEEP_AFTER_EVENTS = "50"
 
 
+def load_cache() -> dict[str, str]:
+    if not SECRETS_CACHE_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(SECRETS_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {key: value for key, value in payload.items() if isinstance(value, str)}
+
+
+def save_cache(values: dict[str, str]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"schema_version": "telegram_gemini_bot_secrets_cache.v1", **values}
+    tmp_path = SECRETS_CACHE_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(SECRETS_CACHE_PATH)
+
+
+def clear_cache() -> None:
+    try:
+        SECRETS_CACHE_PATH.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def main() -> None:
+    cache = load_cache()
+
     app = tk.Tk()
     app.title("Memory Bot Launcher")
-    app.geometry("560x390")
+    app.geometry("640x470")
     app.resizable(False, False)
 
-    token_var = tk.StringVar()
-    key_var = tk.StringVar()
-    reasoning_var = tk.StringVar(value=DEFAULT_REASONING_MODEL)
-    balanced_var = tk.StringVar(value=DEFAULT_BALANCED_MODEL)
-    fast_var = tk.StringVar(value=DEFAULT_FAST_MODEL)
-    chat_role_var = tk.StringVar(value=DEFAULT_CHAT_ROLE)
-    auto_sleep_var = tk.StringVar(value=DEFAULT_AUTO_SLEEP_AFTER_EVENTS)
+    token_var = tk.StringVar(value=cache.get("telegram_token", ""))
+    key_var = tk.StringVar(value=cache.get("gemini_api_key", ""))
+    reasoning_var = tk.StringVar(value=cache.get("reasoning_model", DEFAULT_REASONING_MODEL))
+    balanced_var = tk.StringVar(value=cache.get("balanced_model", DEFAULT_BALANCED_MODEL))
+    fast_var = tk.StringVar(value=cache.get("fast_model", DEFAULT_FAST_MODEL))
+    chat_role_var = tk.StringVar(value=cache.get("chat_role", DEFAULT_CHAT_ROLE))
+    auto_sleep_var = tk.StringVar(value=cache.get("auto_sleep_events", DEFAULT_AUTO_SLEEP_AFTER_EVENTS))
+    remember_var = tk.BooleanVar(value=True)
 
     def add_row(row: int, label: str, variable: tk.StringVar, show: str | None = None) -> None:
         tk.Label(app, text=label, anchor="w").grid(row=row, column=0, padx=12, pady=6, sticky="w")
@@ -49,9 +82,13 @@ def main() -> None:
 
     tk.Label(
         app,
-        text="Paste your Telegram token and Gemini API key here. They are not saved to files.",
+        text=(
+            "Paste your Telegram token and Gemini API key here. "
+            "They can be cached locally in runtime/state/secrets.local.json."
+        ),
         anchor="w",
         justify="left",
+        wraplength=590,
     ).grid(row=0, column=0, columnspan=2, padx=12, pady=(12, 8), sticky="w")
 
     add_row(1, "Telegram token", token_var, show="*")
@@ -61,6 +98,19 @@ def main() -> None:
     add_row(5, "fast model", fast_var)
     add_row(6, "chat reply role", chat_role_var)
     add_row(7, "auto-sleep events", auto_sleep_var)
+
+    tk.Checkbutton(
+        app,
+        text="Remember locally (ignored by git, stored as local plaintext)",
+        variable=remember_var,
+        anchor="w",
+    ).grid(row=8, column=1, padx=12, pady=(4, 6), sticky="w")
+
+    def clear_saved_values() -> None:
+        clear_cache()
+        token_var.set("")
+        key_var.set("")
+        messagebox.showinfo("Cache cleared", f"Deleted local cache:\n{SECRETS_CACHE_PATH}")
 
     def start_bot() -> None:
         token = token_var.get().strip()
@@ -95,6 +145,19 @@ def main() -> None:
         env["MEMORY_BOT_NONINTERACTIVE"] = "1"
         env["MEMORY_BOT_KEEP_CONSOLE_OPEN"] = "1"
 
+        if remember_var.get():
+            save_cache(
+                {
+                    "telegram_token": token,
+                    "gemini_api_key": key,
+                    "reasoning_model": env["GEMINI_REASONING_MODEL"],
+                    "balanced_model": env["GEMINI_BALANCED_MODEL"],
+                    "fast_model": env["GEMINI_FAST_MODEL"],
+                    "chat_role": env["MEMORY_BOT_CHAT_ROLE"],
+                    "auto_sleep_events": env["MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS"],
+                }
+            )
+
         creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         subprocess.Popen(
             [
@@ -113,7 +176,10 @@ def main() -> None:
         app.destroy()
 
     tk.Button(app, text="Start bot", command=start_bot, width=18).grid(
-        row=8, column=1, padx=12, pady=18, sticky="e"
+        row=9, column=1, padx=12, pady=18, sticky="e"
+    )
+    tk.Button(app, text="Clear saved keys", command=clear_saved_values, width=18).grid(
+        row=9, column=0, padx=12, pady=18, sticky="w"
     )
 
     app.grid_columnconfigure(1, weight=1)
