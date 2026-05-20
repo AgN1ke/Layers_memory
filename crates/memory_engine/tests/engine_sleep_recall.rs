@@ -10,7 +10,7 @@ use memory_engine::types::{
     CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
     SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
-use memory_engine::{FileStorage, MemoryEngine};
+use memory_engine::{EngineOptions, FileStorage, MemoryEngine};
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -61,6 +61,84 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
         .join("tasks")
         .join(format!("{}.json", sleep_result.pending_task.task_id))
         .exists());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_uses_unarchived_events_only() {
+    let root = unique_temp_dir("engine_sleep_uses_unarchived_events_only");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Перша тема вже була стиснута.",
+        vec!["first_topic"],
+    );
+    let first_sleep = engine.sleep("live_session").expect("first sleep");
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:05:00.000Z",
+        "Друга тема має потрапити в наступний сон.",
+        vec!["second_topic"],
+    );
+    let second_sleep = engine.sleep("live_session").expect("second sleep");
+
+    assert!(first_sleep
+        .archive_entry
+        .source_event_ids
+        .iter()
+        .all(|event_id| !second_sleep
+            .archive_entry
+            .source_event_ids
+            .contains(event_id)));
+    assert!(second_sleep.archive_entry.gist.contains("Друга тема"));
+    assert!(!second_sleep.archive_entry.gist.contains("Перша тема"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_keeps_late_events_when_weights_tie() {
+    let root = unique_temp_dir("engine_sleep_keeps_late_events_when_weights_tie");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut options = EngineOptions::default();
+    options.sleep.max_events = 4;
+    let mut engine = MemoryEngine::with_options(storage, options);
+
+    for index in 0..7 {
+        ingest_text(
+            &mut engine,
+            &format!("2026-05-17T16:0{index}:00.000Z"),
+            &format!("Робоча тема номер {index}."),
+            vec!["work_topic"],
+        );
+    }
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:07:00.000Z",
+        "Пізня особиста історія з явним поясненням, чому вона важлива.",
+        vec!["personal_story"],
+    );
+
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    let task_events = sleep_result.pending_task.inputs["events"]
+        .as_array()
+        .expect("sleep task events");
+    let selected_texts = task_events
+        .iter()
+        .filter_map(|event| event["payload"]["text"].as_str())
+        .collect::<Vec<_>>();
+
+    assert!(selected_texts
+        .iter()
+        .any(|text| text.contains("Пізня особиста історія")));
+    assert!(!selected_texts
+        .iter()
+        .any(|text| text.contains("Робоча тема номер 0")));
 
     fs::remove_dir_all(root).ok();
 }

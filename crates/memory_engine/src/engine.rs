@@ -143,19 +143,24 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     fn unarchived_event_count(&self, session: &SessionRecord) -> Result<usize> {
-        let archived_event_ids = self
-            .storage
-            .read_archive(&ArchiveFilters::default())?
-            .into_iter()
-            .filter(|entry| entry.source_session_id == session.metadata.session_id)
-            .flat_map(|entry| entry.source_event_ids)
-            .collect::<HashSet<_>>();
+        let archived_event_ids =
+            self.archived_event_ids_for_session(&session.metadata.session_id)?;
 
         Ok(session
             .events
             .iter()
             .filter(|event| !archived_event_ids.contains(&event.event_id))
             .count())
+    }
+
+    fn archived_event_ids_for_session(&self, session_id: &str) -> Result<HashSet<String>> {
+        Ok(self
+            .storage
+            .read_archive(&ArchiveFilters::default())?
+            .into_iter()
+            .filter(|entry| entry.source_session_id == session_id)
+            .flat_map(|entry| entry.source_event_ids)
+            .collect())
     }
 
     pub fn upsert_core_fact(&mut self, input: CoreFactInput) -> Result<CoreFactUpsertResult> {
@@ -410,7 +415,20 @@ impl<S: Storage> MemoryEngine<S> {
             )));
         }
 
-        let selected_events = select_sleep_events(&session, &self.options.sleep);
+        let archived_event_ids =
+            self.archived_event_ids_for_session(&session.metadata.session_id)?;
+        let unarchived_events = session
+            .events
+            .iter()
+            .filter(|event| !archived_event_ids.contains(&event.event_id))
+            .collect::<Vec<_>>();
+        if unarchived_events.is_empty() {
+            return Err(MemoryEngineError::Validation(format!(
+                "session has no unarchived events: {session_id}"
+            )));
+        }
+
+        let selected_events = select_sleep_events(&unarchived_events, &self.options.sleep);
         let now = now_rfc3339()?;
         let archive_id = new_id("archive")?;
         let archive_entry =
@@ -580,7 +598,7 @@ impl Default for SleepStage1Config {
     fn default() -> Self {
         Self {
             min_event_weight: 0.55,
-            max_events: 24,
+            max_events: 80,
             prompt_id: "sleep_compression".to_string(),
             prompt_version: 1,
         }
@@ -871,12 +889,12 @@ fn session_context_events(session: &SessionRecord, limit: usize) -> Vec<CoreCont
 }
 
 fn select_sleep_events<'a>(
-    session: &'a SessionRecord,
+    events: &[&'a StoredEvent],
     config: &SleepStage1Config,
 ) -> Vec<&'a StoredEvent> {
-    let mut selected = session
-        .events
+    let mut selected = events
         .iter()
+        .copied()
         .filter(|event| {
             event.initial_weight >= config.min_event_weight
                 || matches!(
@@ -887,14 +905,14 @@ fn select_sleep_events<'a>(
         .collect::<Vec<_>>();
 
     if selected.is_empty() {
-        selected = session.events.iter().collect();
+        selected = events.to_vec();
     }
 
     selected.sort_by(|left, right| {
         right
             .initial_weight
             .total_cmp(&left.initial_weight)
-            .then_with(|| left.timestamp.cmp(&right.timestamp))
+            .then_with(|| right.timestamp.cmp(&left.timestamp))
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     selected.truncate(config.max_events);

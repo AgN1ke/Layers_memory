@@ -76,7 +76,8 @@ Rules:
 
 - Keep `archive_id` equal to `preliminary_archive_id`.
 - `gist` must be one short sentence.
-- `narrative` must be human-readable and concise.
+- `gist` is not a topic list. It must preserve the most humanly salient episode or episodes.
+- `narrative` must be human-readable and concise, but it must preserve the memory shape: what happened, what it meant, and the emotional tone when the events support one.
 - `facts` must contain only stable facts that may be useful later.
 - Each fact must include `source_event_ids`.
 - Use direct `quotes` only when the wording itself is useful.
@@ -84,6 +85,11 @@ Rules:
 - `theme` must be a short machine-readable string or `null`.
 - `weight` must be between `0.0` and `1.0`.
 - Prefer preserving important user-stated facts over stylistic summaries.
+- Prefer personally meaningful user disclosures, explanations, preferences, corrections, relationship details, named recurring entities, and emotionally colored moments over generic encyclopedia-style Q&A.
+- For generic informational Q&A, keep only the user-facing takeaway unless the exact factual detail is likely to be useful later.
+- If the user shares why something matters, preserve both the event and the reason.
+- If the user shows affect through wording, correction, enthusiasm, frustration, affection, disappointment, or humor, include that affect in `narrative` or as a supported fact. Do not invent feelings that are not evidenced by the events.
+- Do not prioritize an entity because of its type. Prioritize it only when the events show personal meaning, emotional salience, repetition, correction, or likely future usefulness.
 - If the events do not contain durable memory, return a low `weight` and a minimal summary.
 
 ## Що Можна Безпечно Редагувати
