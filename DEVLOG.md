@@ -2467,3 +2467,81 @@ Partial sleep все ще не реалізовано. Це лишається v
 
 **Наступні кроки:**
 Запустити GUI launcher наново. Якщо ключі знов переплутані, GUI покаже це до запуску bot-а. Якщо інша помилка, консоль лишиться відкритою і покаже traceback.
+
+### Запис 43
+
+**Час:** 2026-05-20 17:27:53 +03:00
+
+**Проблематика:**
+У live-тесті bot перестав відповідати приблизно на півтори хвилини після 50-го event. Лог показав, що auto-sleep запустив multi-pass compression у головному polling loop. Поки sleep робив кілька Gemini-викликів, Telegram updates не оброблялись. Після цього sleep ще й упав на `Invalid sleep compression result JSON: missing field confidence`, бо LLM повернула один `personal_signal` без обовʼязкового службового поля.
+
+Додатково виявився гірший архітектурний дефект: `preliminary` archive, створений перед LLM-compression, уже рахувався як archive memory. Через це незавершений або failed sleep міг витісняти raw session events з `session_trace` і потрапляти в recall як грубий попередній дамп.
+
+**Задум:**
+Зробити auto-sleep безпечним для живого чату:
+
+- auto-sleep не блокує Telegram polling;
+- preliminary archive не вважається довгою памʼяттю до успішного `resume_sleep_compression`;
+- LLM JSON проходить host-side schema repair для службових полів перед передачею в Rust;
+- тести мають фіксувати різницю між `preliminary` і `complete`.
+
+**Що робили:**
+
+- оновлено `hosts/telegram_gemini_bot/bot.py`;
+- оновлено `crates/memory_engine/src/engine.rs`;
+- оновлено Rust tests у `crates/memory_engine/tests/engine_sleep_recall.rs`;
+- оновлено Python adapter tests у `crates/python_adapter/tests/test_basic.py`;
+- перебудовано PyO3 adapter після зупинки live bot-процесів.
+
+**Що зроблено:**
+
+1. Додано `AutoSleepRunner` у Telegram host.
+   Auto-sleep тепер ставиться у background thread і не блокує polling loop. Bot може відповідати на нові Telegram updates, поки sleep-compression ще виконується.
+
+2. Background sleep використовує окремий `MemoryEngine` instance з `auto_sleep_after_events=0`.
+   Він тільки завершує вже створений pending task через `resume_sleep_compression`, не створюючи новий auto-sleep.
+
+3. `run_auto_sleep_results` більше не виконує LLM-compression синхронно.
+   Він тільки ставить pending sleep у runner і логує queue/completion/error.
+
+4. `archived_event_ids_for_session` у Rust тепер враховує тільки `ArchiveStatus::Complete`.
+   `Preliminary` archives більше не витісняють live session events із `session_recent` / `session_trace`.
+
+5. `recall()` тепер також ігнорує non-complete archive entries.
+   Failed або pending sleep не може потрапити в `archive_relevant`.
+
+6. Додано host-side normalization для sleep result:
+   - `facts[].confidence`;
+   - `emotional_markers[].strength`;
+   - `personal_signals[].confidence`;
+   - `relational_tone` numeric fields;
+   - `source_event_ids`, `tags`, `quotes`, `links`.
+
+7. Якщо LLM пропускає службове числове поле, host ставить нейтральне значення `0.5` і не валить весь sleep.
+   Це не доменний хардкод і не правило про конкретний зміст памʼяті; це repair схеми, щоб модельна помилка формату не ламала runtime.
+
+8. Додано Rust test `engine_context_keeps_preliminary_sleep_events_active`.
+   Він фіксує, що після stage1 sleep, але до resume, подія лишається в `session_trace`, а `archive_relevant` порожній.
+
+9. Оновлено тести, які раніше неявно покладались на recall preliminary archive.
+   Тепер recall працює тільки з completed archive entries.
+
+**Проблеми чи виклики:**
+Windows не дав перебудувати PyO3 adapter, поки live bot тримав DLL завантаженою. Довелось зупинити тільки Telegram host-процеси, видалити stale `~emory_engine` у venv `site-packages` і повторити `maturin develop`.
+
+У runtime лишився failed pending sleep task і preliminary archive з live-тесту. Їх треба прибрати або перестворити, бо pending task блокує наступний auto-sleep для цієї сесії.
+
+**Фідбек користувача:**
+Користувач повідомив, що bot перестав відповідати після повідомлення про Проксиму Центавра. Це виявилось не падінням Telegram bot-а, а блокуванням polling loop під час auto-sleep плюс помилка schema validation у sleep result.
+
+**Перевірки:**
+
+- `cargo fmt --check` проходить;
+- `cargo test --workspace` проходить;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `maturin develop` у `crates/python_adapter/.venv` проходить після зупинки live bot-а;
+- `python -m pytest crates/python_adapter/tests -v` проходить: 11/11.
+
+**Наступні кроки:**
+Прибрати stuck preliminary archive/task із runtime live-тесту, перезапустити GUI launcher і повторити коротку перевірку: bot має відповідати одразу після 50-го event, а completed archive має зʼявитись у фоні в `bot.log`.

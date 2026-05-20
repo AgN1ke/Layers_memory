@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -83,6 +84,50 @@ class HostLlmConfig:
 
     def chat_model(self) -> ModelSelection:
         return self.for_role(self.chat_role)
+
+
+class AutoSleepRunner:
+    def __init__(self, gemini: "GeminiClient", llm_config: HostLlmConfig) -> None:
+        self._gemini = gemini
+        self._llm_config = llm_config
+        self._lock = threading.Lock()
+        self._running_task_ids: set[str] = set()
+
+    def submit(self, sleep_result: dict[str, Any]) -> None:
+        task_id = sleep_result.get("pending_task", {}).get("task_id")
+        if not task_id:
+            log_line("auto-sleep ignored: missing task_id")
+            return
+
+        with self._lock:
+            if task_id in self._running_task_ids:
+                log_line(f"auto-sleep already running task={task_id}")
+                return
+            self._running_task_ids.add(task_id)
+
+        thread = threading.Thread(
+            target=self._run,
+            args=(task_id, sleep_result),
+            name=f"auto-sleep-{task_id}",
+            daemon=True,
+        )
+        thread.start()
+        log_line(f"auto-sleep queued task={task_id}")
+
+    def _run(self, task_id: str, sleep_result: dict[str, Any]) -> None:
+        try:
+            engine = memory_engine.MemoryEngine(
+                str(MEMORY_DIR),
+                host_id="telegram_gemini_bot",
+                auto_sleep_after_events=0,
+            )
+            summary = complete_sleep_result(engine, self._gemini, self._llm_config, sleep_result)
+            log_line(f"auto-sleep completed: {summary.replace(chr(10), ' | ')}")
+        except Exception as err:
+            log_exception("auto-sleep completion failed", err)
+        finally:
+            with self._lock:
+                self._running_task_ids.discard(task_id)
 
 
 class TelegramClient:
@@ -202,6 +247,7 @@ def main() -> None:
     )
     telegram = TelegramClient(telegram_token)
     gemini = GeminiClient(gemini_key)
+    auto_sleep_runner = AutoSleepRunner(gemini, llm_config)
 
     log_line(f"telegram token fingerprint: {secret_fingerprint(telegram_token)}")
     log_line(f"gemini key fingerprint: {secret_fingerprint(gemini_key)}")
@@ -226,7 +272,7 @@ def main() -> None:
             for update in updates:
                 update_id = update.get("update_id")
                 try:
-                    handle_update(update, telegram, gemini, engine, llm_config)
+                    handle_update(update, telegram, gemini, engine, llm_config, auto_sleep_runner)
                 except Exception as err:
                     log_exception(f"update {update_id} failed", err)
                     notify_update_error(update, telegram, err)
@@ -250,6 +296,7 @@ def handle_update(
     gemini: GeminiClient,
     engine: memory_engine.MemoryEngine,
     llm_config: HostLlmConfig,
+    auto_sleep_runner: AutoSleepRunner,
 ) -> None:
     message = update.get("message") or {}
     text = (message.get("text") or "").strip()
@@ -389,7 +436,7 @@ def handle_update(
             summary = run_sleep(engine, gemini, llm_config, session_id)
         telegram.send_message(chat_id, f"Memory updated.\n\n{summary}")
     else:
-        run_auto_sleep_results(engine, gemini, llm_config, user_ingest, assistant_ingest)
+        run_auto_sleep_results(auto_sleep_runner, user_ingest, assistant_ingest)
 
 
 def run_sleep(
@@ -426,20 +473,14 @@ def complete_sleep_result(
 
 
 def run_auto_sleep_results(
-    engine: memory_engine.MemoryEngine,
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
+    auto_sleep_runner: AutoSleepRunner,
     *ingest_results: dict[str, Any],
 ) -> None:
     for ingest_result in ingest_results:
         sleep_result = ingest_result.get("auto_sleep")
         if not sleep_result:
             continue
-        try:
-            summary = complete_sleep_result(engine, gemini, llm_config, sleep_result)
-            log_line(f"auto-sleep completed: {summary.replace(chr(10), ' | ')}")
-        except Exception as err:
-            log_exception("auto-sleep completion failed", err)
+        auto_sleep_runner.submit(sleep_result)
 
 
 def execute_sleep_compression(
@@ -512,6 +553,7 @@ def execute_multi_pass_sleep_compression(
         consolidated["personal_signals"] = personal_signals.get("personal_signals", [])
     if consolidated.get("relational_tone") is None:
         consolidated["relational_tone"] = relational.get("relational_tone")
+    normalize_sleep_compression_result(consolidated, task)
     return consolidated
 
 
@@ -537,14 +579,179 @@ def normalize_sleep_compression_result(parsed: dict[str, Any], task: dict[str, A
     if parsed.get("archive_id") != task["inputs"]["preliminary_archive_id"]:
         parsed["archive_id"] = task["inputs"]["preliminary_archive_id"]
     parsed.setdefault("schema_version", task["expected_output_schema"])
-    parsed.setdefault("facts", [])
-    parsed.setdefault("quotes", [])
-    parsed.setdefault("tags", [])
-    parsed.setdefault("links", [])
-    parsed.setdefault("emotional_markers", [])
-    parsed.setdefault("topic_thread", [])
-    parsed.setdefault("personal_signals", [])
-    parsed.setdefault("relational_tone", None)
+    parsed["facts"] = normalize_weighted_facts(parsed.get("facts"))
+    parsed["quotes"] = normalize_quotes(parsed.get("quotes"))
+    parsed["tags"] = normalize_string_list(parsed.get("tags"))
+    parsed["links"] = normalize_links(parsed.get("links"))
+    parsed["emotional_markers"] = normalize_emotional_markers(parsed.get("emotional_markers"))
+    parsed["topic_thread"] = normalize_topic_thread(parsed.get("topic_thread"))
+    parsed["personal_signals"] = normalize_personal_signals(parsed.get("personal_signals"))
+    parsed["relational_tone"] = normalize_relational_tone(parsed.get("relational_tone"))
+
+
+def normalize_weighted_facts(value: Any) -> list[dict[str, Any]]:
+    items = []
+    for item in (value if isinstance(value, list) else []):
+        if not isinstance(item, dict):
+            continue
+        text = clean_string(item.get("text"))
+        if not text:
+            continue
+        items.append(
+            {
+                "text": text,
+                "confidence": clamp_float(item.get("confidence"), 0.5),
+                "source_event_ids": normalize_string_list(item.get("source_event_ids")),
+            }
+        )
+    return items
+
+
+def normalize_quotes(value: Any) -> list[dict[str, Any]]:
+    items = []
+    for item in (value if isinstance(value, list) else []):
+        if not isinstance(item, dict):
+            continue
+        text = clean_string(item.get("text"))
+        if not text:
+            continue
+        quote: dict[str, Any] = {"text": text}
+        source_event_id = clean_string(item.get("source_event_id"))
+        if source_event_id:
+            quote["source_event_id"] = source_event_id
+        items.append(quote)
+    return items
+
+
+def normalize_links(value: Any) -> list[dict[str, Any]]:
+    items = []
+    for item in (value if isinstance(value, list) else []):
+        if not isinstance(item, dict):
+            continue
+        kind = clean_string(item.get("kind"))
+        target = clean_string(item.get("target"))
+        if not kind or not target:
+            continue
+        link: dict[str, Any] = {"kind": kind, "target": target}
+        note = clean_string(item.get("note"))
+        if note:
+            link["note"] = note
+        items.append(link)
+    return items
+
+
+def normalize_emotional_markers(value: Any) -> list[dict[str, Any]]:
+    items = []
+    for item in (value if isinstance(value, list) else []):
+        if not isinstance(item, dict):
+            continue
+        target = clean_string(item.get("target"))
+        affect = clean_string(item.get("affect"))
+        if not target or not affect:
+            continue
+        marker: dict[str, Any] = {
+            "target": target,
+            "affect": affect,
+            "strength": clamp_float(item.get("strength"), 0.5),
+            "source_event_ids": normalize_string_list(item.get("source_event_ids")),
+        }
+        quote = clean_string(item.get("quote"))
+        evidence = clean_string(item.get("evidence"))
+        if quote:
+            marker["quote"] = quote
+        if evidence:
+            marker["evidence"] = evidence
+        items.append(marker)
+    return items
+
+
+def normalize_topic_thread(value: Any) -> list[dict[str, Any]]:
+    items = []
+    for item in (value if isinstance(value, list) else []):
+        if not isinstance(item, dict):
+            continue
+        topic = clean_string(item.get("topic"))
+        if not topic:
+            continue
+        thread_item: dict[str, Any] = {
+            "topic": topic,
+            "subtopics": normalize_string_list(item.get("subtopics")),
+            "source_event_ids": normalize_string_list(item.get("source_event_ids")),
+        }
+        energy = clean_string(item.get("energy"))
+        summary = clean_string(item.get("summary"))
+        if energy:
+            thread_item["energy"] = energy
+        if summary:
+            thread_item["summary"] = summary
+        items.append(thread_item)
+    return items
+
+
+def normalize_personal_signals(value: Any) -> list[dict[str, Any]]:
+    items = []
+    for item in (value if isinstance(value, list) else []):
+        if not isinstance(item, dict):
+            continue
+        text = clean_string(item.get("text"))
+        category = clean_string(item.get("category"))
+        if not text or not category:
+            continue
+        signal: dict[str, Any] = {
+            "text": text,
+            "category": category,
+            "confidence": clamp_float(item.get("confidence"), 0.5),
+            "source_event_ids": normalize_string_list(item.get("source_event_ids")),
+        }
+        evidence = clean_string(item.get("evidence"))
+        if evidence:
+            signal["evidence"] = evidence
+        items.append(signal)
+    return items
+
+
+def normalize_relational_tone(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    tone: dict[str, Any] = {
+        "source_event_ids": normalize_string_list(value.get("source_event_ids")),
+    }
+    for key in (
+        "warmth",
+        "intellectual_engagement",
+        "intimacy",
+        "trust",
+        "playfulness",
+        "tension",
+    ):
+        if value.get(key) is not None:
+            tone[key] = clamp_float(value.get(key), 0.0)
+    summary = clean_string(value.get("summary"))
+    if summary:
+        tone["summary"] = summary
+    return tone
+
+
+def normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [cleaned for item in value if (cleaned := clean_string(item))]
+
+
+def clean_string(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def clamp_float(value: Any, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(1.0, number))
 
 
 def recall(engine: memory_engine.MemoryEngine, session_id: str, query_text: str, explain: bool) -> dict[str, Any]:

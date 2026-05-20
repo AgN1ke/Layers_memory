@@ -97,9 +97,48 @@ def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine
             )
         )
     )
-    assert len(package["session_trace"]) == 15
-    assert package["session_trace"][0]["text"] == "Подія 35"
+    assert len(package["session_trace"]) == 50
+    assert package["session_trace"][0]["text"] == "Подія 0"
     assert package["session_trace"][-1]["text"] == "Подія 49"
+    assert package.get("archive_relevant", []) == []
+
+    engine.resume_sleep_compression(
+        auto_sleep["pending_task"]["task_id"],
+        json.dumps(
+            {
+                "schema_version": "sleep_compression_result.v1",
+                "archive_id": auto_sleep["archive_entry"]["archive_id"],
+                "gist": "Стиснені події 0-34.",
+                "narrative": "Старша частина auto-sleep сесії була перенесена в архів.",
+                "facts": [],
+                "quotes": [],
+                "tags": ["auto_sleep"],
+                "theme": "test_memory",
+                "weight": 0.85,
+                "links": [],
+            }
+        ),
+    )
+
+    completed_package = json.loads(
+        engine.core_context_package(
+            json.dumps(
+                {
+                    "schema_version": "core_context_request.v1",
+                    "session_id": "auto_sleep_session",
+                    "domain_state": {"current_text": "Що зараз активне?"},
+                    "query_text": "Подія",
+                    "recall_limit": 5,
+                    "session_recent_limit": 50,
+                    "session_trace_event_limit": 50,
+                    "include_core": False,
+                }
+            )
+        )
+    )
+    assert len(completed_package["session_trace"]) == 15
+    assert completed_package["session_trace"][0]["text"] == "Подія 35"
+    assert completed_package["session_trace"][-1]["text"] == "Подія 49"
 
 
 def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngine):

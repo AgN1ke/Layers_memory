@@ -159,6 +159,7 @@ impl<S: Storage> MemoryEngine<S> {
             .read_archive(&ArchiveFilters::default())?
             .into_iter()
             .filter(|entry| entry.source_session_id == session_id)
+            .filter(|entry| entry.status == ArchiveStatus::Complete)
             .flat_map(|entry| entry.source_event_ids)
             .collect())
     }
@@ -521,6 +522,9 @@ impl<S: Storage> MemoryEngine<S> {
         let mut archive_entries = if archive_enabled {
             self.storage
                 .read_archive(&archive_filters_from_recall(&query.filters))?
+                .into_iter()
+                .filter(|entry| entry.status == ArchiveStatus::Complete)
+                .collect()
         } else {
             Vec::new()
         };

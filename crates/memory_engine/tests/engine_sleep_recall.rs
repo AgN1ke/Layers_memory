@@ -12,7 +12,7 @@ use memory_engine::types::{
     CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
     SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
-use memory_engine::{EngineOptions, FileStorage, MemoryEngine};
+use memory_engine::{EngineOptions, FileStorage, MemoryEngine, SleepStage1Result};
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -68,6 +68,44 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
 }
 
 #[test]
+fn engine_context_keeps_preliminary_sleep_events_active() {
+    let root = unique_temp_dir("engine_context_keeps_preliminary_sleep_events_active");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Ми говорили про кішечку Іржу.",
+        vec!["personal_story"],
+    );
+    engine.sleep("live_session").expect("sleep stage1");
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "Про що ми говорили?" }),
+            core_scope: None,
+            query_text: Some("Іржа".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 5,
+            session_trace_event_limit: 5,
+            include_core: false,
+        })
+        .expect("core context package");
+
+    assert!(package.archive_relevant.is_empty());
+    assert!(package.session_trace.iter().any(|event| event
+        .text
+        .as_deref()
+        .unwrap_or("")
+        .contains("Іржу")));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_sleep_uses_unarchived_events_only() {
     let root = unique_temp_dir("engine_sleep_uses_unarchived_events_only");
     let storage = FileStorage::with_host_id(&root, "terminal");
@@ -80,6 +118,12 @@ fn engine_sleep_uses_unarchived_events_only() {
         vec!["first_topic"],
     );
     let first_sleep = engine.sleep("live_session").expect("first sleep");
+    resume_test_sleep(
+        &mut engine,
+        &first_sleep,
+        "Перша тема вже була стиснута.",
+        "Користувач говорив про першу тему.",
+    );
 
     ingest_text(
         &mut engine,
@@ -136,6 +180,12 @@ fn engine_sleep_preserves_configured_active_tail() {
     assert!(selected_texts.iter().any(|text| text.contains("Подія 5")));
     assert!(!selected_texts.iter().any(|text| text.contains("Подія 6")));
     assert!(!selected_texts.iter().any(|text| text.contains("Подія 7")));
+    resume_test_sleep(
+        &mut engine,
+        &sleep_result,
+        "Стиснуто старші події rolling sleep.",
+        "Старша частина сесії була перенесена в архів, активний tail лишився в сесії.",
+    );
 
     let package = engine
         .core_context_package(CoreContextRequest {
@@ -215,7 +265,13 @@ fn engine_recall_finds_archived_memory_by_text() {
         "Я живу в Берліні і часто питаю про місцевий контекст.",
         vec!["personal_fact", "location"],
     );
-    engine.sleep("live_session").expect("sleep stage1");
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    resume_test_sleep(
+        &mut engine,
+        &sleep_result,
+        "Користувач живе в Берліні.",
+        "Користувач прямо повідомив, що живе в Берліні і часто питає про місцевий контекст.",
+    );
 
     let result = engine
         .recall(RecallQuery {
@@ -263,14 +319,10 @@ fn engine_recall_returns_complete_entry_after_resume_sleep_compression() {
         ))
         .expect("preliminary recall");
 
-    assert_eq!(preliminary_recall.items.len(), 1);
-    let preliminary_item = &preliminary_recall.items[0];
-    assert!(preliminary_item.gist.starts_with("Попередній спогад"));
-    assert!(preliminary_item
-        .narrative
-        .as_deref()
-        .unwrap_or("")
-        .contains("Попередній архівний спогад"));
+    assert!(
+        preliminary_recall.items.is_empty(),
+        "preliminary archives must not appear in recall before sleep compression is resumed"
+    );
 
     let llm_gist = "Користувач живе в Берліні, Німеччина.";
     let llm_narrative =
@@ -328,7 +380,13 @@ fn engine_recall_with_zero_limit_uses_engine_default() {
             &format!("Факт номер {index} про Берлін."),
             vec!["personal_fact", "location"],
         );
-        engine.sleep("live_session").expect("sleep stage1");
+        let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+        resume_test_sleep(
+            &mut engine,
+            &sleep_result,
+            &format!("Факт номер {index} про Берлін."),
+            &format!("Користувач згадав факт номер {index} про Берлін."),
+        );
     }
 
     let result = engine
@@ -620,6 +678,35 @@ fn make_recall_query(query_text: &str, created_at: &str, query_id: &str) -> Reca
         include_core: false,
         explain: true,
     }
+}
+
+fn resume_test_sleep(
+    engine: &mut MemoryEngine<FileStorage>,
+    sleep_result: &SleepStage1Result,
+    gist: &str,
+    narrative: &str,
+) {
+    engine
+        .resume_sleep_compression(
+            &sleep_result.pending_task.task_id,
+            SleepCompressionResult {
+                schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                gist: gist.to_string(),
+                narrative: narrative.to_string(),
+                facts: vec![],
+                quotes: vec![],
+                tags: vec![],
+                theme: Some("test_memory".to_string()),
+                weight: 0.9,
+                links: vec![],
+                emotional_markers: vec![],
+                topic_thread: vec![],
+                personal_signals: vec![],
+                relational_tone: None,
+            },
+        )
+        .expect("resume test sleep compression");
 }
 
 #[test]
