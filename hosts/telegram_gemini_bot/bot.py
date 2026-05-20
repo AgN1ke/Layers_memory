@@ -1014,4 +1014,14 @@ def truncate_chars(text: str, limit: int) -> str:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as err:
+        log_exception("bot startup failed", err)
+        print(f"[fatal] {type(err).__name__}: {err}", file=sys.stderr)
+        if os.environ.get("MEMORY_BOT_KEEP_CONSOLE_OPEN") == "1":
+            try:
+                input("Bot stopped. Press Enter to close this window...")
+            except EOFError:
+                pass
+        raise

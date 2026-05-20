@@ -68,6 +68,12 @@ def main() -> None:
         if not token or not key:
             messagebox.showerror("Missing values", "Telegram token and Gemini API key are required.")
             return
+        if token == key:
+            messagebox.showerror(
+                "Tokens look identical",
+                "Telegram token and Gemini API key are identical. Paste the Telegram token in the first field and the Google/Gemini API key in the second field.",
+            )
+            return
 
         if not PYTHON_EXE.exists():
             messagebox.showerror(
@@ -87,10 +93,18 @@ def main() -> None:
             auto_sleep_var.get().strip() or DEFAULT_AUTO_SLEEP_AFTER_EVENTS
         )
         env["MEMORY_BOT_NONINTERACTIVE"] = "1"
+        env["MEMORY_BOT_KEEP_CONSOLE_OPEN"] = "1"
 
         creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         subprocess.Popen(
-            [str(PYTHON_EXE), str(BOT_PY)],
+            [
+                "powershell.exe",
+                "-NoExit",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                f"& '{PYTHON_EXE}' '{BOT_PY}'; Write-Host ''; Write-Host 'Bot process exited. Review the error above or check runtime logs.'",
+            ],
             cwd=str(ROOT),
             env=env,
             creationflags=creation_flags,
