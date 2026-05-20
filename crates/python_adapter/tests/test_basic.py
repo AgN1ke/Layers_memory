@@ -78,7 +78,28 @@ def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine
     assert last_result is not None
     auto_sleep = last_result["auto_sleep"]
     assert auto_sleep["archive_entry"]["source_session_id"] == "auto_sleep_session"
+    assert len(auto_sleep["archive_entry"]["source_event_ids"]) == 35
     assert auto_sleep["pending_task"]["task_type"] == "sleep_compression"
+
+    package = json.loads(
+        engine.core_context_package(
+            json.dumps(
+                {
+                    "schema_version": "core_context_request.v1",
+                    "session_id": "auto_sleep_session",
+                    "domain_state": {"current_text": "Що зараз активне?"},
+                    "query_text": "Подія",
+                    "recall_limit": 5,
+                    "session_recent_limit": 50,
+                    "session_trace_event_limit": 50,
+                    "include_core": False,
+                }
+            )
+        )
+    )
+    assert len(package["session_trace"]) == 15
+    assert package["session_trace"][0]["text"] == "Подія 35"
+    assert package["session_trace"][-1]["text"] == "Подія 49"
 
 
 def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngine):

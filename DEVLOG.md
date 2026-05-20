@@ -2364,3 +2364,67 @@ Partial sleep все ще не реалізовано. Це лишається v
 
 **Наступні кроки:**
 Перезапустити bot і live-тестувати multi-pass sleep. У live archive треба перевірити дві речі: old covered events не дублюються в `session_trace`, а стислий зміст повертається через `archive_relevant` і multi-track поля archive.
+
+### Запис 41
+
+**Час:** 2026-05-20 15:29:32 +03:00
+
+**Проблематика:**
+Після виправлення дублювання raw events і archive лишався відкритий фундаментальний борг: sleep переносив у archive всі unarchived events, які потрапляли в selection. Це прибирало дублювання, але могло зробити active context занадто різким: після auto-sleep щойно обговорений хвіст ставав уже archive memory, а не короткостроковою памʼяттю.
+
+**Задум:**
+Реалізувати базовий rolling / partial sleep у ядрі:
+
+- старші unarchived events переходять у archive;
+- молодший tail лишається unarchived і далі потрапляє в `session_recent` / `session_trace`;
+- ratio і threshold мають бути конфігом, не хардкодом у bot host.
+
+**Що робили:**
+
+- оновлено `SleepStage1Config`;
+- додано helper-и rolling selection у `crates/memory_engine/src/engine.rs`;
+- додано Rust integration test;
+- оновлено Python adapter test для default auto-sleep;
+- оновлено `docs/architecture.md`, `docs/contracts.md`, `docs/local-development.md`, `hosts/telegram_gemini_bot/README.md`.
+
+**Що зроблено:**
+
+1. `SleepStage1Config` отримав:
+   - `active_tail_ratio: f64`;
+   - `partial_sleep_min_events: usize`.
+
+2. Default:
+   - `active_tail_ratio = 0.30`;
+   - `partial_sleep_min_events = 10`.
+
+3. `MemoryEngine::sleep()` тепер перед `select_sleep_events` ділить unarchived window:
+   - якщо window менший за `partial_sleep_min_events`, стискається все;
+   - якщо window достатній, найсвіжіший tail не потрапляє в sleep task;
+   - compactable частина далі проходить через існуючий salience/weight selection.
+
+4. При default auto-sleep threshold `50` очікувана поведінка така:
+   - приблизно 35 старших events переходять в archive;
+   - приблизно 15 найсвіжіших лишаються active tail.
+
+5. Додано тест `engine_sleep_preserves_configured_active_tail`: 8 unarchived events при ratio 0.25 стискають перші 6, а останні 2 лишаються в `session_trace`.
+
+6. Python test `test_ingest_returns_auto_sleep_after_default_threshold` тепер перевіряє default behavior: auto-sleep archive покриває 35 events, а `session_trace` лишає `Подія 35` ... `Подія 49`.
+
+**Проблеми чи виклики:**
+Це базова rolling-логіка, не повна lifecycle-ротація raw session files. `events.jsonl` ще росте як audit log. Snapshotting/rotation старих raw events лишається окремим v0.2+ кроком.
+
+**Фідбек користувача:**
+Користувач попросив "роби далі" після уточнення, що наступний правильний архітектурний крок — partial sleep.
+
+**Перевірки:**
+
+- `cargo fmt --check` проходить;
+- `cargo test --workspace` проходить;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить;
+- `maturin develop` у `crates/python_adapter/.venv` проходить;
+- `pytest tests -v` у `crates/python_adapter` проходить: 11/11;
+- `git diff --check` проходить.
+
+**Наступні кроки:**
+Перезапустити Telegram bot і перевірити live: після `/sleep` або auto-sleep у `session_trace` має лишатись свіжий хвіст, а старше має повертатися через `archive_relevant`.

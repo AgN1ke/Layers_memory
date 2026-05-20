@@ -104,6 +104,64 @@ fn engine_sleep_uses_unarchived_events_only() {
 }
 
 #[test]
+fn engine_sleep_preserves_configured_active_tail() {
+    let root = unique_temp_dir("engine_sleep_preserves_configured_active_tail");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut options = EngineOptions::default();
+    options.sleep.partial_sleep_min_events = 4;
+    options.sleep.active_tail_ratio = 0.25;
+    options.sleep.max_events = 20;
+    let mut engine = MemoryEngine::with_options(storage, options);
+
+    for index in 0..8 {
+        ingest_text(
+            &mut engine,
+            &format!("2026-05-17T16:{index:02}:00.000Z"),
+            &format!("Подія {index}"),
+            vec!["rolling_sleep"],
+        );
+    }
+
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    let task_events = sleep_result.pending_task.inputs["events"]
+        .as_array()
+        .expect("sleep task events");
+    let selected_texts = task_events
+        .iter()
+        .filter_map(|event| event["payload"]["text"].as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(selected_texts.len(), 6);
+    assert!(selected_texts.iter().any(|text| text.contains("Подія 0")));
+    assert!(selected_texts.iter().any(|text| text.contains("Подія 5")));
+    assert!(!selected_texts.iter().any(|text| text.contains("Подія 6")));
+    assert!(!selected_texts.iter().any(|text| text.contains("Подія 7")));
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "Що зараз активне?" }),
+            core_scope: None,
+            query_text: Some("Подія".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 10,
+            session_trace_event_limit: 10,
+            include_core: false,
+        })
+        .expect("core context package");
+
+    let active_texts = package
+        .session_trace
+        .iter()
+        .filter_map(|event| event.text.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(active_texts, vec!["Подія 6", "Подія 7"]);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_sleep_keeps_late_events_when_weights_tie() {
     let root = unique_temp_dir("engine_sleep_keeps_late_events_when_weights_tie");
     let storage = FileStorage::with_host_id(&root, "terminal");

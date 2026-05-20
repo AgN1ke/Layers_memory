@@ -75,6 +75,8 @@ Plain text без `/`:
 6. Додає до user event мʼякі теги на кшталт `name_reference`, `age_reference`, `preference_signal`, якщо текст схожий на потенційно важливу інформацію.
 7. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернений `sleep_compression` task через multi-pass Gemini flow і завершує `resume_sleep_compression`.
 
+Після sleep context package не дублює archived raw events у `session_recent` / `session_trace`. Старша частина unarchived window переходить в `archive_relevant`, а приблизно 30% найсвіжіших events лишаються active tail для плавного продовження розмови.
+
 Core-факти ізольовані по Telegram chat id. Якщо bot-у пишуть два різні користувачі з різних чатів, `/core` і prompt-контекст кожного чату бачать тільки свій scope.
 
 Якщо повідомлення містить `запам...`, `памʼят...`, `пам'ят...` або `важлив...`, bot автоматично робить `/sleep` після відповіді, щоб ця подія швидше стала archive memory. В Core вона не потрапляє без `/remember` або майбутнього reflection/promotion.

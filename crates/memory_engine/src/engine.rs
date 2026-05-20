@@ -430,7 +430,8 @@ impl<S: Storage> MemoryEngine<S> {
             )));
         }
 
-        let selected_events = select_sleep_events(&unarchived_events, &self.options.sleep);
+        let compactable_events = compactable_sleep_events(&unarchived_events, &self.options.sleep);
+        let selected_events = select_sleep_events(&compactable_events, &self.options.sleep);
         let now = now_rfc3339()?;
         let archive_id = new_id("archive")?;
         let archive_entry =
@@ -596,6 +597,8 @@ pub struct EventScoringConfig {
 pub struct SleepStage1Config {
     pub min_event_weight: f64,
     pub max_events: usize,
+    pub active_tail_ratio: f64,
+    pub partial_sleep_min_events: usize,
     pub prompt_id: String,
     pub prompt_version: u32,
 }
@@ -605,6 +608,8 @@ impl Default for SleepStage1Config {
         Self {
             min_event_weight: 0.55,
             max_events: 80,
+            active_tail_ratio: 0.30,
+            partial_sleep_min_events: 10,
             prompt_id: "sleep_compression".to_string(),
             prompt_version: 1,
         }
@@ -904,6 +909,29 @@ fn session_context_events(
             theme: event.theme.clone(),
         })
         .collect()
+}
+
+fn compactable_sleep_events<'a>(
+    events: &[&'a StoredEvent],
+    config: &SleepStage1Config,
+) -> Vec<&'a StoredEvent> {
+    let tail_count = active_tail_event_count(events.len(), config);
+    let compactable_len = events.len().saturating_sub(tail_count);
+    events[..compactable_len].to_vec()
+}
+
+fn active_tail_event_count(total_events: usize, config: &SleepStage1Config) -> usize {
+    if total_events <= 1 || total_events < config.partial_sleep_min_events {
+        return 0;
+    }
+
+    if !config.active_tail_ratio.is_finite() || config.active_tail_ratio <= 0.0 {
+        return 0;
+    }
+
+    let ratio = config.active_tail_ratio.min(0.95);
+    let tail_count = ((total_events as f64) * ratio).ceil() as usize;
+    tail_count.min(total_events.saturating_sub(1))
 }
 
 fn select_sleep_events<'a>(
