@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::archive::{EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem};
 use crate::types::{Id, Link, Quote, WeightedFact};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -19,6 +20,14 @@ pub struct SleepCompressionResult {
     pub weight: f64,
     #[serde(default)]
     pub links: Vec<Link>,
+    #[serde(default)]
+    pub emotional_markers: Vec<EmotionalMarker>,
+    #[serde(default)]
+    pub topic_thread: Vec<TopicThreadItem>,
+    #[serde(default)]
+    pub personal_signals: Vec<PersonalSignal>,
+    #[serde(default)]
+    pub relational_tone: Option<RelationalTone>,
 }
 
 impl SleepCompressionResult {
@@ -39,6 +48,42 @@ impl SleepCompressionResult {
             return Err(crate::MemoryEngineError::Validation(
                 "sleep compression weight must be between 0.0 and 1.0".to_string(),
             ));
+        }
+
+        for marker in &self.emotional_markers {
+            if !(0.0..=1.0).contains(&marker.strength) {
+                return Err(crate::MemoryEngineError::Validation(
+                    "emotional marker strength must be between 0.0 and 1.0".to_string(),
+                ));
+            }
+        }
+
+        for signal in &self.personal_signals {
+            if !(0.0..=1.0).contains(&signal.confidence) {
+                return Err(crate::MemoryEngineError::Validation(
+                    "personal signal confidence must be between 0.0 and 1.0".to_string(),
+                ));
+            }
+        }
+
+        if let Some(tone) = &self.relational_tone {
+            for value in [
+                tone.warmth,
+                tone.intellectual_engagement,
+                tone.intimacy,
+                tone.trust,
+                tone.playfulness,
+                tone.tension,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !(0.0..=1.0).contains(&value) {
+                    return Err(crate::MemoryEngineError::Validation(
+                        "relational tone values must be between 0.0 and 1.0".to_string(),
+                    ));
+                }
+            }
         }
 
         Ok(())

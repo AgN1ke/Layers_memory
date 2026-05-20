@@ -138,6 +138,81 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
     assert recall["items"][0]["narrative"] == llm_result["narrative"]
 
 
+def test_sleep_resume_persists_multi_track_fields(engine: memory_engine.MemoryEngine):
+    _ingest(
+        engine,
+        "multi_track_session",
+        "У мене є кішечка Іржа, і мені тепло про неї розповідати.",
+        tags=["personal_story"],
+        theme="personal_pet",
+        importance_hint="high",
+    )
+
+    sleep_result = json.loads(engine.sleep("multi_track_session"))
+    archive = sleep_result["archive_entry"]
+    task = sleep_result["pending_task"]
+    source_ids = archive["source_event_ids"]
+
+    llm_result = {
+        "schema_version": "sleep_compression_result.v1",
+        "archive_id": archive["archive_id"],
+        "gist": "Користувач тепло розповів про кішечку Іржу.",
+        "narrative": "Користувач поділився особистим теплим епізодом про свою кішечку Іржу.",
+        "facts": [],
+        "quotes": [],
+        "tags": ["personal_pet", "emotional_memory"],
+        "theme": "personal_pet",
+        "weight": 0.95,
+        "links": [],
+        "emotional_markers": [
+            {
+                "target": "cat_named_irzha",
+                "affect": "fondness",
+                "strength": 0.95,
+                "source_event_ids": source_ids,
+                "quote": "У мене є кішечка Іржа",
+                "evidence": "Користувач прямо описав тепле ставлення.",
+            }
+        ],
+        "topic_thread": [
+            {
+                "topic": "personal_pet",
+                "subtopics": ["cat_named_irzha"],
+                "energy": "warm",
+                "source_event_ids": source_ids,
+                "summary": "Користувач розповів про кішечку.",
+            }
+        ],
+        "personal_signals": [
+            {
+                "text": "Користувач має кішечку на ім'я Іржа.",
+                "category": "relationships_with_pets",
+                "confidence": 0.95,
+                "source_event_ids": source_ids,
+                "evidence": "Пряма заява користувача.",
+            }
+        ],
+        "relational_tone": {
+            "warmth": 0.8,
+            "intellectual_engagement": 0.2,
+            "intimacy": 0.5,
+            "trust": 0.4,
+            "playfulness": 0.3,
+            "tension": 0.0,
+            "summary": "Користувач поділився теплим особистим фактом.",
+            "source_event_ids": source_ids,
+        },
+    }
+
+    updated = json.loads(
+        engine.resume_sleep_compression(task["task_id"], json.dumps(llm_result))
+    )
+
+    assert updated["emotional_markers"][0]["target"] == "cat_named_irzha"
+    assert updated["personal_signals"][0]["category"] == "relationships_with_pets"
+    assert updated["relational_tone"]["warmth"] == 0.8
+
+
 def test_core_context_package_combines_session_and_archive(engine: memory_engine.MemoryEngine):
     _ingest(engine, "context_session", "Ми говорили про МіГ-15.")
     sleep_result = json.loads(engine.sleep("context_session"))

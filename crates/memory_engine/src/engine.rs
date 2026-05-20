@@ -484,6 +484,10 @@ impl<S: Storage> MemoryEngine<S> {
         archive_entry.quotes = result.quotes;
         archive_entry.weight = result.weight;
         archive_entry.links = result.links;
+        archive_entry.emotional_markers = result.emotional_markers;
+        archive_entry.topic_thread = result.topic_thread;
+        archive_entry.personal_signals = result.personal_signals;
+        archive_entry.relational_tone = result.relational_tone;
         archive_entry.status = ArchiveStatus::Complete;
         archive_entry.llm_enhanced = true;
         archive_entry.prompt_id = Some(task.prompt_id.clone());
@@ -964,6 +968,10 @@ fn build_preliminary_archive(
             .iter()
             .flat_map(|event| event.links.iter().cloned())
             .collect(),
+        emotional_markers: Vec::new(),
+        topic_thread: Vec::new(),
+        personal_signals: Vec::new(),
+        relational_tone: None,
         status: ArchiveStatus::Preliminary,
         llm_enhanced: false,
         prompt_id: None,

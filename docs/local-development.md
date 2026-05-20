@@ -241,7 +241,8 @@ Offset зберігається після кожного обробленого
 - Telegram host додає мʼякі event-теги (`personal_fact_signal`, `name_reference`, `age_reference`, `preference_signal`) і піднімає `importance_hint`, щоб sleep/reflection потім уважніше переглянули ці події;
 - Telegram host записує і читає Core-факти зі scope `telegram_<chat_id>`, щоб факти різних чатів не змішувались;
 - Core можна перевірити командою `/core`, явно додати факт командою `/remember text`, оновити через `/core_update id text`, або прибрати з активного контексту через `/core_forget id`;
-- archive memory створюється через `/sleep`, auto-sleep keywords або engine-level auto-sleep після порога незаархівованих подій.
+- archive memory створюється через `/sleep`, auto-sleep keywords або engine-level auto-sleep після порога незаархівованих подій;
+- Telegram host за замовчуванням виконує multi-pass sleep: emotional pass, topic thread pass, personal signal pass, relational pass і consolidator. Для debug старий single-pass режим можна увімкнути env `MEMORY_BOT_SLEEP_MODE=single`.
 - активний чат-промпт Telegram host-а лежить у `prompts/telegram_chat_system.md`, а не захардкоджений у Python.
 
 ## Поточний Очікуваний Результат

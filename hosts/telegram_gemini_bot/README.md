@@ -14,7 +14,8 @@
 - виконує engine-level `auto_sleep`, якщо `ingest` повернув sleep task;
 - зберігає explicit Core-факти тільки через `/remember` у scope поточного `telegram_<chat_id>`;
 - додає мʼякі event-теги для можливих профільних фактів, щоб майбутній reflection міг їх переглянути;
-- виконує `sleep_compression` pending task через Gemini і повертає результат у `resume_sleep_compression`.
+- виконує `sleep_compression` pending task через Gemini; default flow є multi-pass: emotional pass, topic thread pass, personal signal pass, relational pass і consolidator;
+- повертає один `sleep_compression_result.v1` у `resume_sleep_compression`.
 
 ## Запуск
 
@@ -55,7 +56,7 @@
 ## Telegram Команди
 
 - `/start` або `/help` - показати довідку.
-- `/sleep` - стиснути поточну сесію в archive memory і виконати LLM-доробку через Gemini.
+- `/sleep` - стиснути поточну сесію в archive memory і виконати multi-pass LLM-доробку через Gemini.
 - `/recall текст` - пошукати archive memory.
 - `/core` - показати стабільні Core-факти разом із `core_fact_id`.
 - `/remember текст` - вручну записати стабільний Core-факт.
@@ -72,11 +73,13 @@ Plain text без `/`:
 4. Дає Gemini відповідь з готовим context package.
 5. Зберігає відповідь bot-а як `assistant_message`.
 6. Додає до user event мʼякі теги на кшталт `name_reference`, `age_reference`, `preference_signal`, якщо текст схожий на потенційно важливу інформацію.
-7. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернений `sleep_compression` task через Gemini і завершує `resume_sleep_compression`.
+7. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернений `sleep_compression` task через multi-pass Gemini flow і завершує `resume_sleep_compression`.
 
 Core-факти ізольовані по Telegram chat id. Якщо bot-у пишуть два різні користувачі з різних чатів, `/core` і prompt-контекст кожного чату бачать тільки свій scope.
 
 Якщо повідомлення містить `запам...`, `памʼят...`, `пам'ят...` або `важлив...`, bot автоматично робить `/sleep` після відповіді, щоб ця подія швидше стала archive memory. В Core вона не потрапляє без `/remember` або майбутнього reflection/promotion.
+
+Для debug можна повернути старий single-pass sleep через env `MEMORY_BOT_SLEEP_MODE=single`. За замовчуванням використовується multi-pass sleep.
 
 Активний system prompt для Telegram-чату лежить у:
 

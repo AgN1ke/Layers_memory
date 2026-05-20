@@ -419,6 +419,8 @@ def complete_sleep_result(
         f"Task: {task['task_id']}\n"
         f"Model role: {task['role_hint']}\n"
         f"Model: {llm_config.for_role(task['role_hint']).model}\n"
+        f"Emotional markers: {len(updated.get('emotional_markers', []))}\n"
+        f"Personal signals: {len(updated.get('personal_signals', []))}\n"
         f"Gist: {updated['gist']}"
     )
 
@@ -445,20 +447,104 @@ def execute_sleep_compression(
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
 ) -> dict[str, Any]:
-    prompt_path = PROMPTS_DIR / f"{task['prompt_id']}.md"
+    sleep_mode = os.environ.get("MEMORY_BOT_SLEEP_MODE", "multi_pass").strip().lower()
+    if sleep_mode == "single":
+        return execute_single_pass_sleep_compression(task, gemini, llm_config)
+    return execute_multi_pass_sleep_compression(task, gemini, llm_config)
+
+
+def execute_single_pass_sleep_compression(
+    task: dict[str, Any],
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+) -> dict[str, Any]:
+    parsed = execute_prompt_json(
+        prompt_id=task["prompt_id"],
+        prompt_input=task["inputs"],
+        role_hint=task["role_hint"],
+        gemini=gemini,
+        llm_config=llm_config,
+    )
+    normalize_sleep_compression_result(parsed, task)
+    return parsed
+
+
+def execute_multi_pass_sleep_compression(
+    task: dict[str, Any],
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+) -> dict[str, Any]:
+    sleep_input = task["inputs"]
+    pass_input = {"sleep_task": sleep_input}
+    emotional = execute_prompt_json(
+        "sleep_emotional_pass", pass_input, task["role_hint"], gemini, llm_config
+    )
+    topic_thread = execute_prompt_json(
+        "sleep_topic_thread_pass", pass_input, task["role_hint"], gemini, llm_config
+    )
+    personal_signals = execute_prompt_json(
+        "sleep_personal_signal_pass", pass_input, task["role_hint"], gemini, llm_config
+    )
+    relational = execute_prompt_json(
+        "sleep_relational_pass", pass_input, task["role_hint"], gemini, llm_config
+    )
+
+    consolidated = execute_prompt_json(
+        "sleep_consolidator",
+        {
+            "sleep_task": sleep_input,
+            "emotional_pass": emotional,
+            "topic_thread_pass": topic_thread,
+            "personal_signal_pass": personal_signals,
+            "relational_pass": relational,
+        },
+        task["role_hint"],
+        gemini,
+        llm_config,
+    )
+
+    normalize_sleep_compression_result(consolidated, task)
+    if not consolidated["emotional_markers"]:
+        consolidated["emotional_markers"] = emotional.get("emotional_markers", [])
+    if not consolidated["topic_thread"]:
+        consolidated["topic_thread"] = topic_thread.get("topic_thread", [])
+    if not consolidated["personal_signals"]:
+        consolidated["personal_signals"] = personal_signals.get("personal_signals", [])
+    if consolidated.get("relational_tone") is None:
+        consolidated["relational_tone"] = relational.get("relational_tone")
+    return consolidated
+
+
+def execute_prompt_json(
+    prompt_id: str,
+    prompt_input: dict[str, Any],
+    role_hint: str,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+) -> dict[str, Any]:
+    prompt_path = PROMPTS_DIR / f"{prompt_id}.md"
     prompt_text = prompt_path.read_text(encoding="utf-8")
-    selection = llm_config.for_role(task["role_hint"])
+    selection = llm_config.for_role(role_hint)
     raw = gemini.generate_text(
         model=selection.model,
         system_instruction=prompt_text,
-        prompt=json.dumps(task["inputs"], ensure_ascii=False, indent=2),
+        prompt=json.dumps(prompt_input, ensure_ascii=False, indent=2),
     )
-    parsed = parse_json_object(raw)
+    return parse_json_object(raw)
+
+
+def normalize_sleep_compression_result(parsed: dict[str, Any], task: dict[str, Any]) -> None:
     if parsed.get("archive_id") != task["inputs"]["preliminary_archive_id"]:
         parsed["archive_id"] = task["inputs"]["preliminary_archive_id"]
     parsed.setdefault("schema_version", task["expected_output_schema"])
+    parsed.setdefault("facts", [])
+    parsed.setdefault("quotes", [])
+    parsed.setdefault("tags", [])
     parsed.setdefault("links", [])
-    return parsed
+    parsed.setdefault("emotional_markers", [])
+    parsed.setdefault("topic_thread", [])
+    parsed.setdefault("personal_signals", [])
+    parsed.setdefault("relational_tone", None)
 
 
 def recall(engine: memory_engine.MemoryEngine, session_id: str, query_text: str, explain: bool) -> dict[str, Any]:

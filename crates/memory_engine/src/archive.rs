@@ -38,6 +38,14 @@ pub struct ArchiveEntry {
     pub last_recalled_at: Option<Timestamp>,
     #[serde(default)]
     pub links: Vec<Link>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emotional_markers: Vec<EmotionalMarker>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topic_thread: Vec<TopicThreadItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub personal_signals: Vec<PersonalSignal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relational_tone: Option<RelationalTone>,
     pub status: ArchiveStatus,
     pub llm_enhanced: bool,
     #[serde(default)]
@@ -48,6 +56,63 @@ pub struct ArchiveEntry {
     pub embedding_model_id: Option<String>,
     #[serde(default)]
     pub embedding: Option<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmotionalMarker {
+    pub target: String,
+    pub affect: String,
+    pub strength: f64,
+    #[serde(default)]
+    pub source_event_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TopicThreadItem {
+    pub topic: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtopics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy: Option<String>,
+    #[serde(default)]
+    pub source_event_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersonalSignal {
+    pub text: String,
+    pub category: String,
+    pub confidence: f64,
+    #[serde(default)]
+    pub source_event_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelationalTone {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warmth: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intellectual_engagement: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intimacy: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playfulness: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tension: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub source_event_ids: Vec<Id>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

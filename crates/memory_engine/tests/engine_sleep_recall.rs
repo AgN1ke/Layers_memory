@@ -1,4 +1,6 @@
-use memory_engine::archive::ArchiveStatus;
+use memory_engine::archive::{
+    ArchiveStatus, EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem,
+};
 use memory_engine::core_store::{
     CoreContextRequest, CoreFactInput, CoreFactPatchInput, CoreFactStatus,
 };
@@ -230,6 +232,10 @@ fn engine_recall_returns_complete_entry_after_resume_sleep_compression() {
                 theme: Some("personal_background".to_string()),
                 weight: 0.95,
                 links: vec![],
+                emotional_markers: vec![],
+                topic_thread: vec![],
+                personal_signals: vec![],
+                relational_tone: None,
             },
         )
         .expect("resume sleep compression");
@@ -311,6 +317,10 @@ fn engine_core_context_package_combines_session_and_archive_context() {
                 theme: Some("aviation".to_string()),
                 weight: 0.9,
                 links: vec![],
+                emotional_markers: vec![],
+                topic_thread: vec![],
+                personal_signals: vec![],
+                relational_tone: None,
             },
         )
         .expect("resume sleep compression");
@@ -578,6 +588,10 @@ fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
                 theme: Some("personal_background".to_string()),
                 weight: 0.9,
                 links: vec![],
+                emotional_markers: vec![],
+                topic_thread: vec![],
+                personal_signals: vec![],
+                relational_tone: None,
             },
         )
         .expect("resume sleep compression");
@@ -586,6 +600,88 @@ fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
     assert!(updated.llm_enhanced);
     assert_eq!(updated.prompt_id.as_deref(), Some("sleep_compression"));
     assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_resume_sleep_compression_persists_multi_track_memory() {
+    let root = unique_temp_dir("engine_resume_sleep_compression_persists_multi_track_memory");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "У мене є кішечка Іржа, вона мені дуже дорога.",
+        vec!["personal_story"],
+    );
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+
+    let updated = engine
+        .resume_sleep_compression(
+            &sleep_result.pending_task.task_id,
+            SleepCompressionResult {
+                schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                gist: "Користувач тепло розповів про кішечку Іржу.".to_string(),
+                narrative: "Користувач поділився особистим теплим фактом: у нього є кішечка Іржа, яка для нього важлива.".to_string(),
+                facts: vec![],
+                quotes: vec![],
+                tags: vec!["personal_pet".to_string(), "emotional_memory".to_string()],
+                theme: Some("personal_pet".to_string()),
+                weight: 0.95,
+                links: vec![],
+                emotional_markers: vec![EmotionalMarker {
+                    target: "cat_named_irzha".to_string(),
+                    affect: "fondness".to_string(),
+                    strength: 0.95,
+                    source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
+                    quote: Some("У мене є кішечка Іржа".to_string()),
+                    evidence: Some("Користувач назвав кішку дорогою для себе.".to_string()),
+                }],
+                topic_thread: vec![TopicThreadItem {
+                    topic: "personal_pet".to_string(),
+                    subtopics: vec!["cat_named_irzha".to_string()],
+                    energy: Some("warm".to_string()),
+                    source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
+                    summary: Some("Користувач розповів про кішечку.".to_string()),
+                }],
+                personal_signals: vec![PersonalSignal {
+                    text: "Користувач має кішечку на ім'я Іржа.".to_string(),
+                    category: "relationships_with_pets".to_string(),
+                    confidence: 0.95,
+                    source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
+                    evidence: Some("Пряма заява користувача.".to_string()),
+                }],
+                relational_tone: Some(RelationalTone {
+                    warmth: Some(0.8),
+                    intellectual_engagement: None,
+                    intimacy: Some(0.5),
+                    trust: None,
+                    playfulness: None,
+                    tension: None,
+                    summary: Some("Користувач поділився особистим теплим фактом.".to_string()),
+                    source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
+                }),
+            },
+        )
+        .expect("resume sleep compression");
+
+    assert_eq!(updated.emotional_markers.len(), 1);
+    assert_eq!(updated.emotional_markers[0].target, "cat_named_irzha");
+    assert_eq!(updated.personal_signals.len(), 1);
+    assert_eq!(
+        updated.personal_signals[0].category,
+        "relationships_with_pets"
+    );
+    assert_eq!(
+        updated
+            .relational_tone
+            .as_ref()
+            .and_then(|tone| tone.warmth),
+        Some(0.8)
+    );
 
     fs::remove_dir_all(root).ok();
 }

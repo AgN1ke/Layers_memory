@@ -2210,3 +2210,73 @@ relational_tone
 
 **Наступні кроки:**
 Не починати v0.2 реалізацію до завершення v0.1 live-test. Найближче: перезапустити bot, виконати повторний `/sleep` для unarchived tail поточної clean-runtime сесії і перевірити, що епізод про Іржу тепер потрапляє в archive.
+
+### Запис 38
+
+**Час:** 2026-05-20 13:06:54 +03:00
+
+**Проблематика:**
+Після документування multi-pass compression користувач уточнив, що йому потрібна не тільки ідеологічна фіксація, а реальна реалізація нового sleep-flow. Базовий one-pass sleep працював, але міг стискати діалог як сухий список великих тем і втрачати особистий або емоційний зміст.
+
+**Задум:**
+Зробити практичний крок без ламання меж ядра: Rust engine лишається власником `sleep_compression` task і archive storage, а Telegram host навколо цього task виконує кілька LLM-проходів. Це дає нову якість sleep уже зараз, але не змушує всі майбутні хости приймати незрілий core-level task graph.
+
+**Що робили:**
+
+- оновлено Rust-схеми archive і sleep result;
+- оновлено resume sleep у engine;
+- додано multi-pass orchestration у Telegram bot;
+- додано пʼять реальних prompt-файлів у `prompts/`;
+- оновлено `prompts/README.md`, `docs/architecture.md`, `docs/contracts.md`, `docs/local-development.md`, `hosts/telegram_gemini_bot/README.md`;
+- додано Rust і Python adapter тести для multi-track archive.
+
+**Що зроблено:**
+
+1. `ArchiveEntry` отримав multi-track поля:
+   - `emotional_markers`;
+   - `topic_thread`;
+   - `personal_signals`;
+   - `relational_tone`.
+
+2. `SleepCompressionResult` отримав ті самі поля. Engine validation перевіряє, що `strength`, `confidence` і числові tone-поля лежать у діапазоні `0..=1`.
+
+3. `resume_sleep_compression` тепер переносить multi-track дані з LLM-result у archive entry. Старі archive JSON лишаються сумісними: відсутні arrays читаються як порожні, відсутній `relational_tone` — як `null`.
+
+4. Telegram bot за замовчуванням виконує multi-pass sleep:
+   - emotional pass;
+   - topic thread pass;
+   - personal signal pass;
+   - relational pass;
+   - consolidator.
+
+5. Усі проходи повертають JSON. Consolidator збирає один `sleep_compression_result.v1`, який віддається в існуючий engine API. Для debug лишено escape hatch `MEMORY_BOT_SLEEP_MODE=single`, щоб тимчасово повернутись до baseline one-pass sleep.
+
+6. Додано prompt-файли:
+   - `sleep_emotional_pass.md`;
+   - `sleep_topic_thread_pass.md`;
+   - `sleep_personal_signal_pass.md`;
+   - `sleep_relational_pass.md`;
+   - `sleep_consolidator.md`.
+
+7. У промптах немає доменного правила на кшталт "тварини важливі". Вони шукають загальні ознаки людської значущості: емоційний тон, особистий звʼязок, повторення, корекцію, зміну стосунку, теплоту, напруження, цікавість і майбутню корисність.
+
+8. `complete_sleep_result` у боті тепер показує, скільки `emotional_markers` і `personal_signals` записано в archive. Це потрібно для швидкої live-діагностики якості sleep.
+
+**Проблеми чи виклики:**
+Це ще не rolling / partial sleep і не reflection promotion у Core. Також це host-level orchestration, а не generalized core-level task graph. Це свідомий компроміс: ми отримали новий sleep у першому хості без ризикованої перебудови всього `PendingTask` API.
+
+**Фідбек користувача:**
+Користувач прямо попросив: "Ну давай новий роби". Попередній фідбек про кішку Іржу використано як тестовий приклад якості, але не як хардкод-правило. Принцип лишається: значущість визначає LLM-pass і прозорі поля archive, а не regex або доменна умова.
+
+**Перевірки:**
+
+- `cargo fmt --check` проходить;
+- `cargo test --workspace` проходить: Rust workspace tests зелені;
+- `cargo clippy --workspace --all-targets -- -D warnings` проходить;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/launch_gui.py` проходить у `crates/python_adapter/.venv`;
+- `maturin develop` у `crates/python_adapter/.venv` проходить;
+- `pytest tests -v` у `crates/python_adapter` проходить: 11/11;
+- `git diff --check` проходить.
+
+**Наступні кроки:**
+Перезапустити Telegram bot і виконати live `/sleep`, щоб подивитись реальні `emotional_markers` / `personal_signals` у archive JSON. Якщо якість multi-pass archive добра, наступний великий крок — не ще один prompt-patch, а reflection/candidate pipeline поверх нових archive tracks.

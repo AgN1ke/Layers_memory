@@ -434,6 +434,44 @@ updated_at: 2026-05-17T16:45:00.000Z
   "recall_count": 0,
   "last_recalled_at": null,
   "links": [],
+  "emotional_markers": [
+    {
+      "target": "cat_named_irzha",
+      "affect": "fondness",
+      "strength": 0.95,
+      "source_event_ids": ["event_01J00000000000000000000002"],
+      "quote": "У мене є кішечка Іржа",
+      "evidence": "Користувач тепло розповів про важливу для нього тварину."
+    }
+  ],
+  "topic_thread": [
+    {
+      "topic": "personal_pet",
+      "subtopics": ["cat_name", "appearance"],
+      "energy": "warm",
+      "source_event_ids": ["event_01J00000000000000000000002"],
+      "summary": "Користувач розповів про кішечку і походження її імені."
+    }
+  ],
+  "personal_signals": [
+    {
+      "text": "Користувач має кішечку на ім'я Іржа.",
+      "category": "relationships_with_pets",
+      "confidence": 0.95,
+      "source_event_ids": ["event_01J00000000000000000000002"],
+      "evidence": "Пряма заява користувача."
+    }
+  ],
+  "relational_tone": {
+    "warmth": 0.8,
+    "intellectual_engagement": 0.3,
+    "intimacy": 0.5,
+    "trust": 0.4,
+    "playfulness": 0.3,
+    "tension": 0.0,
+    "summary": "Розмова стала теплішою через особисту згадку.",
+    "source_event_ids": ["event_01J00000000000000000000002"]
+  },
   "status": "preliminary",
   "llm_enhanced": false,
   "prompt_id": null,
@@ -463,6 +501,10 @@ updated_at: 2026-05-17T16:45:00.000Z
 - `recall_count`;
 - `last_recalled_at`;
 - `links`;
+- `emotional_markers`;
+- `topic_thread`;
+- `personal_signals`;
+- `relational_tone`;
 - `status`;
 - `llm_enhanced`;
 - `prompt_id`;
@@ -478,6 +520,8 @@ updated_at: 2026-05-17T16:45:00.000Z
 - `needs_review` - потребує ручного огляду.
 
 `embedding_model_id` і `embedding` на v0.1 завжди `null`.
+
+Multi-track поля `emotional_markers`, `topic_thread`, `personal_signals`, `relational_tone` заповнюються multi-pass sleep у host-і. Старі archive entries можуть не мати цих полів; reader має трактувати відсутні масиви як порожні, а відсутній `relational_tone` як `null`.
 
 Поля, які мають бути присутні в JSON, але дозволено значення `null`:
 
@@ -1024,7 +1068,11 @@ PendingTask - спосіб, яким ядро системи просить хо
   "tags": ["personal_fact", "location"],
   "theme": "personal_background",
   "weight": 0.82,
-  "links": []
+  "links": [],
+  "emotional_markers": [],
+  "topic_thread": [],
+  "personal_signals": [],
+  "relational_tone": null
 }
 ```
 
@@ -1038,6 +1086,8 @@ PendingTask - спосіб, яким ядро системи просить хо
 - `quotes` можуть бути порожніми;
 - `weight` має бути `0.0..1.0`;
 - `tags` мають бути короткими машинними рядками.
+- `emotional_markers`, `topic_thread`, `personal_signals` можуть бути порожніми масивами;
+- `relational_tone` може бути `null`.
 
 Тіло промпта для отримання такого результату не створюється в цьому документі. Воно з'явиться у `prompts/sleep_compression.md` тільки разом із реальною sleep-stage-2 реалізацією.
 
