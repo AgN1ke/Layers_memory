@@ -58,6 +58,15 @@ MEMORY_KEYWORD_PARTS = (
     "памʼят",
     "важлив",
 )
+MEMORY_UPDATE_KEYWORD_PARTS = (
+    "запам",
+    "збережи в пам",
+    "запиши в пам",
+    "це важлив",
+    "це дуже важлив",
+    "важлива інформація",
+    "онови пам",
+)
 
 
 @dataclass(frozen=True)
@@ -93,28 +102,42 @@ class AutoSleepRunner:
         self._lock = threading.Lock()
         self._running_task_ids: set[str] = set()
 
-    def submit(self, sleep_result: dict[str, Any]) -> None:
+    def submit(
+        self,
+        sleep_result: dict[str, Any],
+        telegram: "TelegramClient | None" = None,
+        chat_id: int | None = None,
+        reason: str = "auto-sleep",
+    ) -> bool:
         task_id = sleep_result.get("pending_task", {}).get("task_id")
         if not task_id:
-            log_line("auto-sleep ignored: missing task_id")
-            return
+            log_line(f"{reason} ignored: missing task_id")
+            return False
 
         with self._lock:
             if task_id in self._running_task_ids:
-                log_line(f"auto-sleep already running task={task_id}")
-                return
+                log_line(f"{reason} already running task={task_id}")
+                return False
             self._running_task_ids.add(task_id)
 
         thread = threading.Thread(
             target=self._run,
-            args=(task_id, sleep_result),
-            name=f"auto-sleep-{task_id}",
+            args=(task_id, sleep_result, telegram, chat_id, reason),
+            name=f"sleep-{task_id}",
             daemon=True,
         )
         thread.start()
-        log_line(f"auto-sleep queued task={task_id}")
+        log_line(f"{reason} queued task={task_id}")
+        return True
 
-    def _run(self, task_id: str, sleep_result: dict[str, Any]) -> None:
+    def _run(
+        self,
+        task_id: str,
+        sleep_result: dict[str, Any],
+        telegram: "TelegramClient | None",
+        chat_id: int | None,
+        reason: str,
+    ) -> None:
         try:
             engine = memory_engine.MemoryEngine(
                 str(MEMORY_DIR),
@@ -122,9 +145,17 @@ class AutoSleepRunner:
                 auto_sleep_after_events=0,
             )
             summary = complete_sleep_result(engine, self._gemini, self._llm_config, sleep_result)
-            log_line(f"auto-sleep completed: {summary.replace(chr(10), ' | ')}")
+            log_line(f"{reason} completed: {summary.replace(chr(10), ' | ')}")
+            if telegram is not None and chat_id is not None:
+                telegram.send_message(chat_id, f"Memory updated.\n\n{summary}")
         except Exception as err:
-            log_exception("auto-sleep completion failed", err)
+            log_exception(f"{reason} completion failed", err)
+            if telegram is not None and chat_id is not None:
+                telegram.send_message(
+                    chat_id,
+                    f"Memory update failed. Check runtime log: {LOG_PATH}\n\n"
+                    f"{type(err).__name__}: {err}",
+                )
         finally:
             with self._lock:
                 self._running_task_ids.discard(task_id)
@@ -196,13 +227,21 @@ class GeminiClient:
         if not isinstance(payload.get("models"), list):
             raise RuntimeError(f"Gemini key validation returned unexpected payload: {payload}")
 
-    def generate_text(self, model: str, system_instruction: str, prompt: str) -> str:
+    def generate_text(
+        self,
+        model: str,
+        system_instruction: str,
+        prompt: str,
+        response_mime_type: str | None = None,
+    ) -> str:
         url_model = urllib.parse.quote(model, safe="")
         url = f"{GEMINI_API}/models/{url_model}:generateContent"
         payload = {
             "system_instruction": {"parts": [{"text": system_instruction}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         }
+        if response_mime_type:
+            payload["generationConfig"] = {"responseMimeType": response_mime_type}
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             url,
@@ -374,7 +413,14 @@ def handle_update(
         return
 
     if text == "/sleep":
-        telegram.send_message(chat_id, run_sleep(engine, gemini, llm_config, session_id))
+        queue_sleep_update(
+            engine=engine,
+            auto_sleep_runner=auto_sleep_runner,
+            telegram=telegram,
+            chat_id=chat_id,
+            session_id=session_id,
+            reason="manual sleep",
+        )
         return
 
     if text.startswith("/recall"):
@@ -428,15 +474,46 @@ def handle_update(
             if result.get("auto_sleep")
         ]
         if auto_sleep_results:
-            summary = "\n\n".join(
-                complete_sleep_result(engine, gemini, llm_config, sleep_result)
-                for sleep_result in auto_sleep_results
-            )
+            queued = False
+            for sleep_result in auto_sleep_results:
+                queued = auto_sleep_runner.submit(
+                    sleep_result,
+                    telegram=telegram,
+                    chat_id=chat_id,
+                    reason="memory keyword sleep",
+                ) or queued
+            if queued:
+                telegram.send_message(chat_id, "Memory update queued.")
         else:
-            summary = run_sleep(engine, gemini, llm_config, session_id)
-        telegram.send_message(chat_id, f"Memory updated.\n\n{summary}")
+            queue_sleep_update(
+                engine=engine,
+                auto_sleep_runner=auto_sleep_runner,
+                telegram=telegram,
+                chat_id=chat_id,
+                session_id=session_id,
+                reason="memory keyword sleep",
+            )
     else:
         run_auto_sleep_results(auto_sleep_runner, user_ingest, assistant_ingest)
+
+
+def queue_sleep_update(
+    engine: memory_engine.MemoryEngine,
+    auto_sleep_runner: AutoSleepRunner,
+    telegram: TelegramClient,
+    chat_id: int,
+    session_id: str,
+    reason: str,
+) -> None:
+    sleep_result = json.loads(engine.sleep(session_id))
+    queued = auto_sleep_runner.submit(
+        sleep_result,
+        telegram=telegram,
+        chat_id=chat_id,
+        reason=reason,
+    )
+    if queued:
+        telegram.send_message(chat_id, "Memory update queued.")
 
 
 def run_sleep(
@@ -571,6 +648,7 @@ def execute_prompt_json(
         model=selection.model,
         system_instruction=prompt_text,
         prompt=json.dumps(prompt_input, ensure_ascii=False, indent=2),
+        response_mime_type="application/json",
     )
     return parse_json_object(raw)
 
@@ -1092,7 +1170,7 @@ def help_text() -> str:
         "/models - show model role mapping\n"
         "\n"
         "Plain text is stored as an event and answered by Gemini with memory context.\n"
-        "Messages containing 'запам...', 'памʼят...', or 'важлив...' auto-run /sleep."
+        "Messages with explicit memory update wording like 'запам...' or 'це важливо' queue sleep."
     )
 
 
@@ -1109,8 +1187,10 @@ def event_tags(text: str) -> list[str]:
     lowered = text.lower()
     tags = ["telegram_message"]
 
-    if has_memory_request(lowered):
+    if should_auto_sleep(lowered):
         tags.append("explicit_memory_request")
+    elif has_memory_request(lowered):
+        tags.append("memory_reference")
     if has_name_reference(lowered):
         tags.extend(["personal_fact_signal", "name_reference"])
     if has_age_reference(lowered):
@@ -1137,7 +1217,7 @@ def has_core_signal(lowered: str) -> bool:
 
 def should_auto_sleep(text: str) -> bool:
     lowered = text.lower()
-    return any(keyword in lowered for keyword in MEMORY_KEYWORD_PARTS)
+    return any(keyword in lowered for keyword in MEMORY_UPDATE_KEYWORD_PARTS)
 
 
 def has_memory_request(lowered: str) -> bool:
