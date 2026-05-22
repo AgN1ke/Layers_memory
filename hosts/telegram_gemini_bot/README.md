@@ -75,7 +75,7 @@ Harness читає Gemini key із `runtime/state/secrets.local.json` або `GE
 - `balanced` -> `gemini-2.5-flash`
 - `fast` -> `gemini-2.5-flash-lite`
 - chatbot replies -> `balanced`
-- auto-sleep threshold -> `50`
+- dev/test auto-sleep threshold -> `50`
 
 Під час запуску можна натиснути Enter і лишити defaults, або ввести іншу модель.
 
@@ -98,7 +98,7 @@ Harness читає Gemini key із `runtime/state/secrets.local.json` або `GE
 Plain text без `/`:
 
 1. Зберігається як event.
-2. Якщо engine повертає `auto_sleep`, bot запамʼятовує цей sleep task для виконання після відповіді.
+2. Якщо engine повертає `auto_sleep`, bot запамʼятовує цей sleep task для виконання після відповіді. Поточний `auto_sleep_after_events` — dev/test-прискорювач, а не продуктовий sleep trigger.
 3. Просить `core_context_package` у engine.
 4. Дає Gemini відповідь з готовим context package.
 5. Зберігає відповідь bot-а як `assistant_message`.

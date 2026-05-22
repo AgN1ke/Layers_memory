@@ -196,7 +196,7 @@ hosts/telegram_gemini_bot/
 - Telegram bot token;
 - Gemini API key;
 - model mapping для ролей `reasoning`, `balanced`, `fast`.
-- `auto-sleep events` або env `MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS`.
+- `auto-sleep events` або env `MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS` для dev/test-прискорення sleep.
 
 Defaults:
 
@@ -204,7 +204,9 @@ Defaults:
 - `balanced` -> `gemini-2.5-flash`;
 - `fast` -> `gemini-2.5-flash-lite`;
 - chatbot replies -> `balanced`.
-- auto-sleep threshold -> `50` незаархівованих подій (`0` вимикає engine-level auto-sleep).
+- dev/test auto-sleep threshold -> `50` незаархівованих подій (`0` вимикає event-count trigger).
+
+Event-count trigger потрібен для локальної перевірки й emergency guard. Продуктова логіка sleep має йти від token/context budget pressure або від scheduled idle sleep, наприклад нічного запуску о 04:00.
 
 Runtime memory host-бота:
 

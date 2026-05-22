@@ -3526,3 +3526,34 @@ Compact memory має бути не квотою, а результатом аг
 
 **Висновок перевірки:**
 Штучної квоти тез у compact memory більше не видно: однотемна розмова не роздулась до кількох тез, а багатотемна не була стиснута в одну. Водночас `multi_topic_compact` не виніс у compact memory шоколад і dislike до mid-dialog greeting, хоча full archive/Core signals їх побачили. Це не структурна помилка квоти, але prompt-quality спостереження: compact memory природно відкидає частину другорядних деталей, і треба уважно стежити, чи не випадають важливі для користувача речі.
+
+## Запис 59 — 2026-05-22 — Event-count sleep переведено в dev/test, продуктові тригери sleep уточнено
+
+**Проблематика:**
+У roadmap і acceptance `50+ events` почало звучати як головний критерій live-перевірки sleep. Це помилка: поріг за кількістю подій був доданий для швидкого локального тестування, щоб не чекати довгої розмови або ночі. Він не є нормальним продуктовим режимом памʼяті.
+
+**Задум:**
+Продуктова логіка sleep має мати два основні режими:
+
+1. budget-pressure sleep — коли active session/current memory наближається до token/context budget;
+2. scheduled idle sleep — нічний запуск у період типової неактивності, наприклад о 04:00 локального часу.
+
+`after_events` лишається тільки dev/test accelerator і emergency guard.
+
+**Що робили:**
+- `docs/architecture.md`: переписано опис тригерів sleep; event-count більше не подано як канонічний продуктовий trigger.
+- `docs/roadmap.md`: додано відкриті пункти для product sleep trigger від budget pressure і scheduled idle sleep; сценарний тест базової памʼяті більше не привʼязаний до "50+ івентів" як продуктової межі.
+- `docs/v0.1-acceptance.md`: секцію `Auto-Sleep` перейменовано в `Sleep Triggers`; acceptance тепер розрізняє production triggers і dev/test shortcut.
+- `docs/local-development.md` і `hosts/telegram_gemini_bot/README.md`: `auto-sleep events` описано як dev/test-прискорювач.
+
+**Що зробили детально:**
+Зафіксовано, що event-count trigger можна використовувати для preflight/harness, але він не закриває production acceptance. Наступна реальна робота по sleep — не ганяти 50 повідомлень, а реалізувати і перевірити budget-pressure trigger та нічний scheduled sleep.
+
+**Проблеми чи виклики:**
+Код поки має `EngineOptions.auto_sleep.after_events` і GUI-поле `auto-sleep events`; це нормально для тестового режиму, але в продуктову логіку треба додати budget/scheduler triggers. Саме вони мають стати наступним змістовним кроком v0.1.
+
+**Фідбек користувача:**
+Користувач прямо вказав, що `50+ events` — тестовий режим, а не production: реальні режими мають бути "досягли лімітів і стискаємо" або "по таймеру вночі, о 4, коли бот зазвичай не активний".
+
+**Перевірки:**
+Документальна корекція; код не змінювався.
