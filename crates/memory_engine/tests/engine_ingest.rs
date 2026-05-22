@@ -118,6 +118,14 @@ fn engine_ingest_returns_auto_sleep_when_unarchived_threshold_is_reached() {
     );
     assert_eq!(auto_sleep.archive_entry.source_event_ids.len(), 3);
     assert_eq!(auto_sleep.pending_task.prompt_id, "sleep_compression");
+    assert_eq!(
+        auto_sleep
+            .compact_memory_task
+            .as_ref()
+            .expect("compact memory task")
+            .prompt_id,
+        "compact_memory_pass"
+    );
 
     assert!(
         fourth.auto_sleep.is_none(),

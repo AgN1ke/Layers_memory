@@ -65,6 +65,8 @@ pub struct RecallItem {
     pub id: Id,
     pub gist: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_memory: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub narrative: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub facts: Vec<String>,

@@ -3442,3 +3442,53 @@ Harness корисний як preflight, але він не замінює Teleg
 
 **Наступні кроки:**
 Не закривати v0.1 лише на основі harness. Далі потрібен або довший local harness `--scenario all` з auto-sleep, або живий Telegram acceptance за `docs/v0.1-acceptance.md`, щоб перевірити повний цикл 50+ events, sleep, archive recall, Core bridge, token budget і відсутність mid-dialog greeting у production-like інтерфейсі.
+
+## Запис 57 — 2026-05-22 — Compact memory як окрема prompt-facing памʼять
+
+**Проблематика:**
+Після token telemetry стало видно концептуальну помилку: повний multi-track archive може бути більшим за raw transcript, бо це audit/enrichment, а не власне компресія для prompt. Навіть компактний JSON із `gist`, `personal_signals` і `emotional_markers` все ще тягнув у звичайний chat prompt форму сховища, а не людську памʼять. Це суперечило цілі 11k memory budget і вимозі не витрачати токени на службові поля та довгі ID.
+
+**Задум:**
+Розділити дві форми памʼяті:
+
+- full archive — повний audit/debug запис із narrative, фактами, цитатами і multi-track полями;
+- compact memory — короткі LLM-написані тези "подія -> висновок", які йдуть у `archive_relevant` як природна памʼять.
+
+Компресія має бути окремою LLM-задачею, а не програмним `take()` / `truncate()` і не проекцією JSON-треків.
+
+**Що робили:**
+- додано `TaskType::CompactMemoryPass`;
+- sleep stage 1 тепер створює два persisted tasks: `sleep_compression` і `compact_memory_pass`;
+- додано `MemoryEngine::resume_compact_memory_pass(task_id, text)`;
+- Python adapter отримав метод `resume_compact_memory_pass`;
+- `ArchiveEntry`, `SleepCompressionResult` і `RecallItem` отримали поле `compact_memory`;
+- додано `prompts/compact_memory_pass.md`;
+- Telegram host виконує compact pass окремо від consolidator-а;
+- `archive_relevant` у prompt тепер бере `compact_memory`, а не JSON-проекцію full archive tracks;
+- `/archive_last` показує compact memory для ручного огляду;
+- sleep token telemetry розділяє `raw`, `stored_archive`, `prompt_archive` і `compact_memory` ratios.
+
+**Що зробили детально:**
+1. `compact_memory_pass` отримує ті самі raw sleep events, що й full archive pass, і повертає plain text.
+2. Якщо archive має `compact_memory`, `recall_item_from_archive` повертає його як `gist`, додає `compact_memory` і не тягне `narrative`, `facts`, `quotes` у prompt-facing item.
+3. Full archive лишається на диску з усіма треками для audit, Core bridge і майбутнього reflection.
+4. `prompts/telegram_chat_system.md` тепер описує `archive_relevant` як compact human theses і забороняє показувати archive ids/debug internals без запиту.
+5. Документи `architecture`, `contracts`, `roadmap`, `local-development`, `v0.1-acceptance`, README і HISTORY синхронізовані з новим boundary.
+
+**Проблеми чи виклики:**
+Поточна реалізація ще не робить `forget_review_pass`; природне забування винесено у v0.2. Також потрібен live/harness прогін на довгій сесії, щоб побачити реальні `compact_memory_ratio` і якість тез на живому діалозі.
+
+**Фідбек від користувача:**
+Користувач прямо розділив "stored full archive" і "compact memory" та наголосив, що памʼять у prompt має бути короткими тезами, а не JSON-аудитом. Також було зафіксовано принцип: компресія через агента, не через механічне обрізання.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py hosts\telegram_gemini_bot\local_harness.py` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `.\\.venv\\Scripts\\maturin.exe develop` у `crates/python_adapter` — пройшло.
+- `crates\\python_adapter\\.venv\\Scripts\\python.exe -m pytest crates\\python_adapter\\tests` — 11 passed.
+- `git diff --check` — пройшло.
+
+**Наступні кроки:**
+Зробити короткий live або local-harness sleep-прогін і перевірити в `token_usage.jsonl`, що `compact_memory_ratio` реально показує економію на живому діалозі.

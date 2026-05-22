@@ -416,6 +416,7 @@ updated_at: 2026-05-17T16:45:00.000Z
   "tags": ["personal_fact", "location"],
   "gist": "Користувач повідомив, що переїхав у Берлін минулого місяця.",
   "narrative": "Під час розмови користувач уточнив важливу зміну в особистому контексті: він нещодавно переїхав у Берлін.",
+  "compact_memory": "Переїзд у Берлін -> користувач повідомив стабільний особистий контекст, який варто пам'ятати.",
   "facts": [
     {
       "text": "Користувач переїхав у Берлін приблизно у квітні 2026 року.",
@@ -521,11 +522,14 @@ updated_at: 2026-05-17T16:45:00.000Z
 
 `embedding_model_id` і `embedding` на v0.1 завжди `null`.
 
-Multi-track поля `emotional_markers`, `topic_thread`, `personal_signals`, `relational_tone` заповнюються multi-pass sleep у host-і. Старі archive entries можуть не мати цих полів; reader має трактувати відсутні масиви як порожні, а відсутній `relational_tone` як `null`.
+`compact_memory` — prompt-facing стиснута памʼять: plain-text тези "подія -> висновок", створені окремим LLM `compact_memory_pass`. Це не debug JSON і не програмна проекція з full archive. Якщо поле є, ordinary chat prompt має використовувати його як `archive_relevant` memory. Якщо поля немає у legacy/preliminary entry, host може fallback-нути на `gist`.
 
-Поля, які мають бути присутні в JSON, але дозволено значення `null`:
+Multi-track поля `emotional_markers`, `topic_thread`, `personal_signals`, `relational_tone` заповнюються multi-pass sleep у host-і для storage/debug audit, Core bridge і майбутнього reflection. Старі archive entries можуть не мати цих полів; reader має трактувати відсутні масиви як порожні, а відсутній `relational_tone` як `null`.
+
+Поля, які дозволено лишати `null` або пропускати, якщо вони ще не створені:
 
 - `theme` (сесія могла не мати чіткої теми);
+- `compact_memory` може бути відсутнім у preliminary або legacy archive entry;
 - `last_recalled_at` (поки спогад не повертався recall'ом);
 - `prompt_id` (preliminary запис без LLM-доробки);
 - `prompt_version` (те саме);
@@ -787,10 +791,8 @@ Core Context Package не обов'язково зберігається на д
     {
       "source_layer": "archive",
       "id": "archive_01J00000000000000000000001",
-      "gist": "Розмова про МіГ-15.",
-      "narrative": "Користувач питав про радянський винищувач МіГ-15.",
-      "facts": [],
-      "quotes": [],
+      "gist": "Обговорили МіГ-15 і F-86 -> користувач цікавиться військовою авіацією Корейської війни.",
+      "compact_memory": "Обговорили МіГ-15 і F-86 -> користувач цікавиться військовою авіацією Корейської війни.",
       "source_session_id": "2026-05-17_005",
       "tags": ["aircraft"],
       "theme": "aviation",
@@ -827,7 +829,9 @@ Core Context Package не обов'язково зберігається на д
 
 `budget` завжди показує, скільки memory context приблизно займає після trimming. Active session events зберігаються від найсвіжіших назад, `archive_relevant` — за recall ranking, `core_facts` — за confidence. Якщо `budget_exceeded: true`, host має логувати це як warning і перевірити `domain_state` або власний prompt overhead.
 
-Важливо: цей JSON-контракт є API/debug формою, а не обовʼязковим дослівним prompt payload. Для LLM має використовуватись компактне prompt-facing представлення: без `schema_version`, довгих `event_id` / `archive_id` / `core_fact_id`, службових `source`, зайвих timestamp/source полів і дубльованих технічних ключів, якщо вони не потрібні для конкретної відповіді або debug-команди. Канонічні storage-файли лишаються повними; prompt view має нести сенс, а не аудитну обвʼязку. На v0.1 Telegram host реалізує compact projection перед chat prompt; спільний engine-level `prompt_view` контракт лишається задачею v0.2.
+`archive_relevant` пріоритезує `compact_memory`, якщо archive entry має це поле. У такому випадку `gist` у recall item дорівнює compact thesis, а `narrative`, `facts` і `quotes` не повертаються в prompt-facing форму. Full archive із narrative, tracks і цитатами лишається у storage/debug entry.
+
+Важливо: цей JSON-контракт є API/debug формою, а не обовʼязковим дослівним prompt payload. Для LLM має використовуватись компактне prompt-facing представлення: без `schema_version`, довгих `event_id` / `archive_id` / `core_fact_id`, службових `source`, зайвих timestamp/source полів і дубльованих технічних ключів, якщо вони не потрібні для конкретної відповіді або debug-команди. Канонічні storage-файли лишаються повними; prompt view має нести сенс, а не аудитну обвʼязку. На v0.1 Telegram host реалізує compact projection перед chat prompt через role transcript і compact memory theses; спільний engine-level `prompt_view` контракт лишається задачею v0.2.
 
 ---
 
@@ -1041,6 +1045,7 @@ PendingTask - спосіб, яким ядро системи просить хо
 `task_type` v0.1:
 
 - `sleep_compression`;
+- `compact_memory_pass`;
 - `score_event` опціонально.
 
 Зарезервовані на v0.2+:
@@ -1079,7 +1084,29 @@ PendingTask - спосіб, яким ядро системи просить хо
 
 ---
 
-## 10. SleepCompressionResult
+## 10. CompactMemoryPass Result
+
+Результат, який хост повертає у `engine.resume_compact_memory_pass(task_id, text)` для `compact_memory_pass`.
+
+Це **plain text**, не JSON:
+
+```text
+Обговорили МіГ-15 і F-86 -> користувач цікавиться військовою авіацією Корейської війни.
+Розмова про кішку Іржу -> у користувача є кішка, і ця згадка має теплий особистий окрас.
+Повернулись до Маріанської западини й Європи Юпітера -> користувачу цікаві крайні середовища, де може існувати життя.
+```
+
+Правила:
+
+- 5-7 коротких тез для нормальної довгої сесії;
+- одна теза — одне речення;
+- форма змісту: "подія -> висновок";
+- без markdown table, JSON, службових ID і пояснень формату;
+- це prompt-facing стиснута памʼять, а не audit/debug archive.
+
+---
+
+## 11. SleepCompressionResult
 
 Результат, який хост повертає у `engine.resume(task_id, result)` для `sleep_compression`.
 
@@ -1089,6 +1116,7 @@ PendingTask - спосіб, яким ядро системи просить хо
   "archive_id": "archive_01J00000000000000000000001",
   "gist": "Користувач повідомив, що нещодавно переїхав у Берлін.",
   "narrative": "У розмові користувач поділився важливою зміною в особистому контексті: він переїхав у Берлін минулого місяця. Це може впливати на майбутні розмови про побут, роботу, подорожі й локальний контекст.",
+  "compact_memory": "Переїзд у Берлін -> користувач повідомив стабільний особистий контекст, який варто пам'ятати.",
   "facts": [
     {
       "text": "Користувач живе в Берліні з приблизно квітня 2026 року.",
@@ -1121,6 +1149,7 @@ PendingTask - спосіб, яким ядро системи просить хо
 - `narrative` не має бути порожнім і має передавати не лише "про що говорили", а й "що сталося / що це означало / який емоційний тон був прямо підтриманий подіями";
 - `facts` може бути порожнім, але якщо факт є, він має мати `text` і `confidence`;
 - `quotes` можуть бути порожніми;
+- `compact_memory` може бути відсутнім, якщо host ще не виконав `compact_memory_pass`, але якщо присутнє — не може бути порожнім;
 - `weight` має бути `0.0..1.0`;
 - `tags` мають бути короткими машинними рядками.
 - `emotional_markers`, `topic_thread`, `personal_signals` можуть бути порожніми масивами;
@@ -1130,7 +1159,7 @@ PendingTask - спосіб, яким ядро системи просить хо
 
 ---
 
-## 11. Manifest
+## 12. Manifest
 
 Файл: `memory/manifest.json`.
 
@@ -1171,7 +1200,7 @@ PendingTask - спосіб, яким ядро системи просить хо
 
 ---
 
-## 12. JournalOperation
+## 13. JournalOperation
 
 JournalOperation описує мульти-файлову операцію, яку потрібно або завершити, або безпечно розібрати після обриву.
 
@@ -1221,7 +1250,7 @@ JournalOperation описує мульти-файлову операцію, як
 
 ---
 
-## 13. Файли і джерела правди
+## 14. Файли і джерела правди
 
 Мінімальна файлова структура v0.1:
 
@@ -1262,7 +1291,7 @@ memory/
 
 ---
 
-## 14. Що цей документ не задає
+## 15. Що цей документ не задає
 
 Цей документ не задає:
 

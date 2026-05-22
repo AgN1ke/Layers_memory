@@ -7,10 +7,11 @@ use memory_engine::core_store::{
 use memory_engine::event::IngestEvent;
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::SleepCompressionResult;
+use memory_engine::tasks::TaskType;
 use memory_engine::types::{
-    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
-    CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
-    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    COMPACT_MEMORY_RESULT_SCHEMA_VERSION, CORE_CONTEXT_REQUEST_SCHEMA_VERSION,
+    CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
+    RECALL_QUERY_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{EngineOptions, FileStorage, MemoryEngine, SleepStage1Result};
 use serde_json::json;
@@ -54,14 +55,33 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
         sleep_result.pending_task.expected_output_schema,
         SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION
     );
+    let compact_task = sleep_result
+        .compact_memory_task
+        .as_ref()
+        .expect("compact memory task");
+    assert_eq!(compact_task.task_type, TaskType::CompactMemoryPass);
+    assert_eq!(compact_task.prompt_id, "compact_memory_pass");
+    assert_eq!(
+        compact_task.expected_output_schema,
+        COMPACT_MEMORY_RESULT_SCHEMA_VERSION
+    );
 
     let tasks = engine.pending_tasks().expect("pending tasks");
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].task_id, sleep_result.pending_task.task_id);
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks
+        .iter()
+        .any(|task| task.task_id == sleep_result.pending_task.task_id));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task_id == compact_task.task_id));
 
     assert!(root
         .join("tasks")
         .join(format!("{}.json", sleep_result.pending_task.task_id))
+        .exists());
+    assert!(root
+        .join("tasks")
+        .join(format!("{}.json", compact_task.task_id))
         .exists());
 
     fs::remove_dir_all(root).ok();
@@ -338,6 +358,7 @@ fn engine_recall_returns_complete_entry_after_resume_sleep_compression() {
                 archive_id: sleep_result.archive_entry.archive_id.clone(),
                 gist: llm_gist.to_string(),
                 narrative: llm_narrative.to_string(),
+                compact_memory: None,
                 facts: vec![],
                 quotes: vec![],
                 tags: vec!["personal_fact".to_string(), "location".to_string()],
@@ -499,6 +520,7 @@ fn engine_core_context_package_combines_session_and_archive_context() {
                 archive_id: sleep_result.archive_entry.archive_id.clone(),
                 gist: "Розмова про МіГ-15.".to_string(),
                 narrative: "Користувач питав про радянський винищувач МіГ-15.".to_string(),
+                compact_memory: None,
                 facts: vec![],
                 quotes: vec![],
                 tags: vec!["aircraft".to_string()],
@@ -692,6 +714,10 @@ fn engine_core_context_package_enforces_token_budget_by_layer() {
                 gist: "Користувач тепло згадав кішечку Іржу.".to_string(),
                 narrative: "Емоційний центр спогаду — тепла особиста згадка про кішечку Іржу."
                     .to_string(),
+                compact_memory: Some(
+                    "Розмова про кішечку Іржу — теплий особистий спогад, важливий для користувача."
+                        .to_string(),
+                ),
                 facts: vec![],
                 quotes: vec![],
                 tags: vec!["personal_pet".to_string(), "emotional_memory".to_string()],
@@ -777,6 +803,12 @@ fn engine_core_context_package_enforces_token_budget_by_layer() {
     assert!(report.dropped_core_facts > 0);
     assert!(!package.archive_relevant.is_empty());
     assert!(package.archive_relevant[0].gist.contains("Іржу"));
+    assert_eq!(
+        package.archive_relevant[0].compact_memory.as_deref(),
+        Some("Розмова про кішечку Іржу — теплий особистий спогад, важливий для користувача.")
+    );
+    assert!(package.archive_relevant[0].narrative.is_none());
+    assert!(package.archive_relevant[0].facts.is_empty());
 
     fs::remove_dir_all(root).ok();
 }
@@ -886,6 +918,7 @@ fn resume_test_sleep(
                 archive_id: sleep_result.archive_entry.archive_id.clone(),
                 gist: gist.to_string(),
                 narrative: narrative.to_string(),
+                compact_memory: None,
                 facts: vec![],
                 quotes: vec![],
                 tags: vec![],
@@ -924,6 +957,7 @@ fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
                 archive_id: sleep_result.archive_entry.archive_id.clone(),
                 gist: "Користувач живе в Берліні.".to_string(),
                 narrative: "Користувач прямо повідомив, що живе в Берліні.".to_string(),
+                compact_memory: None,
                 facts: vec![],
                 quotes: vec![],
                 tags: vec!["personal_fact".to_string(), "location".to_string()],
@@ -941,6 +975,16 @@ fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
     assert_eq!(updated.status, ArchiveStatus::Complete);
     assert!(updated.llm_enhanced);
     assert_eq!(updated.prompt_id.as_deref(), Some("sleep_compression"));
+    engine
+        .resume_compact_memory_pass(
+            &sleep_result
+                .compact_memory_task
+                .as_ref()
+                .expect("compact memory task")
+                .task_id,
+            "Берлін -> користувач повідомив стабільний особистий контекст.",
+        )
+        .expect("resume compact memory");
     assert!(engine.pending_tasks().expect("pending tasks").is_empty());
 
     fs::remove_dir_all(root).ok();
@@ -968,6 +1012,7 @@ fn engine_resume_sleep_compression_persists_multi_track_memory() {
                 archive_id: sleep_result.archive_entry.archive_id.clone(),
                 gist: "Користувач тепло розповів про кішечку Іржу.".to_string(),
                 narrative: "Користувач поділився особистим теплим фактом: у нього є кішечка Іржа, яка для нього важлива.".to_string(),
+                compact_memory: None,
                 facts: vec![],
                 quotes: vec![],
                 tags: vec!["personal_pet".to_string(), "emotional_memory".to_string()],

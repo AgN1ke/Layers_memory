@@ -7,6 +7,7 @@ use crate::types::{Id, ModelRole, Timestamp};
 #[serde(rename_all = "snake_case")]
 pub enum TaskType {
     SleepCompression,
+    CompactMemoryPass,
     ScoreEvent,
     ReflectionAnalyze,
     RecallRerank,

@@ -87,6 +87,9 @@ fn archive_entry_serializes_reserved_embedding_fields() {
         tags: vec!["personal_fact".to_string()],
         gist: "Користувач переїхав у Берлін.".to_string(),
         narrative: "Користувач повідомив важливий особистий факт.".to_string(),
+        compact_memory: Some(
+            "Переїзд у Берлін — користувач повідомив стабільний особистий контекст.".to_string(),
+        ),
         facts: vec![WeightedFact {
             text: "Користувач живе в Берліні.".to_string(),
             confidence: 0.8,
@@ -183,6 +186,7 @@ fn sleep_compression_result_validates_basic_shape() {
         archive_id: "archive_01".to_string(),
         gist: "Короткий зміст.".to_string(),
         narrative: "Людський наратив спогаду.".to_string(),
+        compact_memory: Some("Подія → короткий людський висновок.".to_string()),
         facts: vec![],
         quotes: vec![],
         tags: vec!["test".to_string()],

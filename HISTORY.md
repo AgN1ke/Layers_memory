@@ -46,6 +46,42 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-22 — Compact memory theses for archive recall
+
+The owner flagged that the full multi-track archive is an audit/enrichment record, not the thing that should be carried back into every chat prompt. A real memory prompt needs short human theses: event -> conclusion. The archive now stores both forms separately.
+
+**What changed:**
+- Added `TaskType::CompactMemoryPass` and a persisted `compact_memory_pass` task alongside `sleep_compression` during sleep stage 1.
+- Added `ArchiveEntry.compact_memory`, `SleepCompressionResult.compact_memory`, and `RecallItem.compact_memory`.
+- Added `MemoryEngine::resume_compact_memory_pass(task_id, text)` and the Python adapter method with the same boundary.
+- Added `prompts/compact_memory_pass.md`: plain-text, 5-7 short theses, no JSON, no debug IDs.
+- Telegram sleep now runs compact memory separately from the full multi-pass/consolidator archive enrichment.
+- `archive_relevant` now prefers `compact_memory`: when present, recall returns compact theses instead of narrative/facts/quotes in the prompt-facing item.
+- Token telemetry now distinguishes raw transcript, stored full archive, prompt archive payload, and compact memory ratios.
+
+**What is retracted (if applicable):**
+- The claim that a shortened JSON projection of `gist` plus selected `personal_signals` / `emotional_markers` is the right compressed memory for ordinary chat. It was smaller than full archive JSON, but it still mixed audit structure with prompt memory.
+
+**What is still true:**
+- Full multi-track archive entries remain canonical storage/debug records for audit, Core bridge, future reflection, and embeddings.
+- The 11k/7k/3k/1k memory prompt budget still applies.
+- Rust core still does not call any provider or choose a model.
+
+**What we are doing:**
+- Keep `compact_memory` as the ordinary prompt-facing archive layer.
+- Keep full multi-track archive data out of normal chat prompts unless the user asks for debug/archive details.
+- Defer `forget_review_pass` and vector recall to v0.2.
+
+**Reproducibility anchor:**
+- `cargo fmt --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `maturin develop`
+- `python -m pytest crates/python_adapter/tests`
+
+**Thanks:**
+- Mykyta Zagamula for separating real compression from audit enrichment and for insisting that token economy be measured, not assumed.
+
 ## 2026-05-22 — Local harness and session-scoped archive recall
 
 The first local non-Telegram harness run exposed a real memory isolation defect: a brand-new local session could receive `archive_relevant` from older sessions. That made the bot answer with stale personal context such as the user's name before the new session had supplied it.

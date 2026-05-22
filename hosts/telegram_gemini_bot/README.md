@@ -15,8 +15,8 @@
 - зберігає explicit Core-факти через `/remember` у scope поточного `telegram_<chat_id>`;
 - після успішного sleep переносить достатньо впевнені `personal_signals` з archive у Core без regex-хардкоду;
 - додає мʼякі event-теги для можливих профільних фактів, щоб майбутній reflection міг їх переглянути;
-- виконує `sleep_compression` pending task через Gemini; default flow є multi-pass: emotional pass, topic thread pass, personal signal pass, relational pass і consolidator;
-- повертає один `sleep_compression_result.v1` у `resume_sleep_compression`.
+- виконує `compact_memory_pass` і `sleep_compression` pending tasks через Gemini; default flow є multi-pass: compact memory pass, emotional pass, topic thread pass, personal signal pass, relational pass і consolidator;
+- повертає plain-text compact memory у `resume_compact_memory_pass` і один `sleep_compression_result.v1` у `resume_sleep_compression`.
 
 ## Запуск
 
@@ -80,7 +80,7 @@ Harness читає Gemini key із `runtime/state/secrets.local.json` або `GE
 - `/start` або `/help` - показати довідку.
 - `/sleep` - стиснути поточну сесію в archive memory і виконати multi-pass LLM-доробку через Gemini.
 - `/archives` - показати останні завершені archive-записи, їх gist і кількість emotional/personal треків.
-- `/archive_last` - показати повний останній archive-запис: gist, narrative, emotional markers, personal signals, relational tone.
+- `/archive_last` - показати повний останній archive-запис: compact memory, gist, narrative, emotional markers, personal signals, relational tone.
 - `/archive id` - показати конкретний archive-запис за id.
 - `/recall текст` - пошукати archive memory.
 - `/core` - показати стабільні Core-факти разом із `core_fact_id`.
@@ -99,9 +99,9 @@ Plain text без `/`:
 4. Дає Gemini відповідь з готовим context package.
 5. Зберігає відповідь bot-а як `assistant_message`.
 6. Додає до user event мʼякі теги на кшталт `name_reference`, `age_reference`, `preference_signal`, якщо текст схожий на потенційно важливу інформацію.
-7. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернений `sleep_compression` task через multi-pass Gemini flow і завершує `resume_sleep_compression`.
+7. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернені `compact_memory_pass` і `sleep_compression` tasks через Gemini flow і завершує `resume_compact_memory_pass` / `resume_sleep_compression`.
 
-Після sleep context package не дублює archived raw events у `session_recent` / `session_trace`. Старша частина unarchived window переходить в `archive_relevant`, а приблизно 30% найсвіжіших events лишаються active tail для плавного продовження розмови.
+Після sleep context package не дублює archived raw events у `session_recent` / `session_trace`. Старша частина unarchived window переходить в `archive_relevant` як `compact_memory` тези "подія -> висновок", а приблизно 30% найсвіжіших events лишаються active tail для плавного продовження розмови.
 
 Core-факти ізольовані по Telegram chat id. Якщо bot-у пишуть два різні користувачі з різних чатів, `/core` і prompt-контекст кожного чату бачать тільки свій scope.
 
@@ -109,7 +109,7 @@ Core-факти ізольовані по Telegram chat id. Якщо bot-у пи
 
 Після успішного sleep host бере `personal_signals`, які виділив LLM-прохід, і переносить у Core тільки сигнали з confidence `>= 0.85`, підтримкою хоча б одного `user_message` source event і без near-duplicate у поточному Core scope. Категорія є вільним normalized `snake_case` полем (`name`, `pet`, `physical_trait`, `food_preference`, тощо), а не whitelist. Це не regex-витяг фактів із raw text: код не шукає "кішку", "імʼя" чи інші конкретні сутності. Він лише застосовує загальні gate-правила до структурованого результату sleep. `/core_seed` повторює цей крок для вже завершених archive-записів.
 
-Для debug можна повернути старий single-pass sleep через env `MEMORY_BOT_SLEEP_MODE=single`. За замовчуванням використовується multi-pass sleep.
+Для debug можна повернути старий single-pass sleep через env `MEMORY_BOT_SLEEP_MODE=single`. `compact_memory_pass` все одно виконується окремо, бо саме він створює prompt-facing стиснуту памʼять. За замовчуванням використовується multi-pass sleep.
 
 Активний system prompt для Telegram-чату лежить у:
 

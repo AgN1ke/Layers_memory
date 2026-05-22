@@ -630,17 +630,23 @@ def complete_sleep_result(
 ) -> str:
     task = sleep_result["pending_task"]
     archive = sleep_result["archive_entry"]
-    llm_result = execute_sleep_compression(task, gemini, llm_config)
+    compact_task = sleep_result.get("compact_memory_task")
+    llm_result = execute_sleep_compression(task, gemini, llm_config, compact_task=compact_task)
+    compact_memory = clean_string(llm_result.get("compact_memory"))
+    if isinstance(compact_task, dict) and compact_memory:
+        engine.resume_compact_memory_pass(compact_task["task_id"], compact_memory)
     updated = json.loads(
         engine.resume_sleep_compression(task["task_id"], json.dumps(llm_result, ensure_ascii=False))
     )
     log_sleep_compression_metrics(task, llm_result)
     core_summary = promote_archive_personal_signals(engine, updated)
+    compact_tokens = estimate_tokens(clean_string(updated.get("compact_memory")))
     return (
         f"Archive: {archive['archive_id']}\n"
         f"Task: {task['task_id']}\n"
         f"Model role: {task['role_hint']}\n"
         f"Model: {llm_config.for_role(task['role_hint']).model}\n"
+        f"Compact memory tokens: {compact_tokens}\n"
         f"Emotional markers: {len(updated.get('emotional_markers', []))}\n"
         f"Personal signals: {len(updated.get('personal_signals', []))}\n"
         f"Core signals: {format_core_signal_counts(core_summary)}\n"
@@ -812,18 +818,21 @@ def execute_sleep_compression(
     task: dict[str, Any],
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    compact_task: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sleep_mode = os.environ.get("MEMORY_BOT_SLEEP_MODE", "multi_pass").strip().lower()
     if sleep_mode == "single":
-        return execute_single_pass_sleep_compression(task, gemini, llm_config)
-    return execute_multi_pass_sleep_compression(task, gemini, llm_config)
+        return execute_single_pass_sleep_compression(task, gemini, llm_config, compact_task)
+    return execute_multi_pass_sleep_compression(task, gemini, llm_config, compact_task)
 
 
 def execute_single_pass_sleep_compression(
     task: dict[str, Any],
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    compact_task: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    compact_memory = execute_compact_memory_pass(compact_task or task, gemini, llm_config)
     parsed = execute_prompt_json(
         prompt_id=task["prompt_id"],
         prompt_input=task["inputs"],
@@ -832,6 +841,7 @@ def execute_single_pass_sleep_compression(
         llm_config=llm_config,
     )
     normalize_sleep_compression_result(parsed, task)
+    parsed["compact_memory"] = compact_memory
     return parsed
 
 
@@ -839,9 +849,11 @@ def execute_multi_pass_sleep_compression(
     task: dict[str, Any],
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    compact_task: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sleep_input = task["inputs"]
     pass_input = {"sleep_task": sleep_input}
+    compact_memory = execute_compact_memory_pass(compact_task or task, gemini, llm_config)
     emotional = execute_prompt_json(
         "sleep_emotional_pass", pass_input, task["role_hint"], gemini, llm_config
     )
@@ -885,6 +897,7 @@ def execute_multi_pass_sleep_compression(
         completion_mode = "fallback_from_tracks"
 
     normalize_sleep_compression_result(consolidated, task)
+    consolidated["compact_memory"] = compact_memory
     if not consolidated["emotional_markers"]:
         consolidated["emotional_markers"] = emotional.get("emotional_markers", [])
     if not consolidated["topic_thread"]:
@@ -898,6 +911,27 @@ def execute_multi_pass_sleep_compression(
     )
     normalize_sleep_compression_result(consolidated, task)
     return consolidated
+
+
+def execute_compact_memory_pass(
+    task: dict[str, Any],
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+) -> str:
+    prompt_id = clean_string(task.get("prompt_id")) or "compact_memory_pass"
+    prompt_path = PROMPTS_DIR / f"{prompt_id}.md"
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+    selection = llm_config.for_role(task["role_hint"])
+    prompt_payload = json.dumps({"sleep_task": task["inputs"]}, ensure_ascii=False, indent=2)
+    response = gemini.generate_text(
+        model=selection.model,
+        system_instruction=prompt_text,
+        prompt=prompt_payload,
+        operation="compact_memory_pass",
+        model_role=task["role_hint"],
+        telemetry={"prompt_id": prompt_id},
+    )
+    return normalize_compact_memory_text(response.text)
 
 
 def fallback_sleep_compression_result(
@@ -958,6 +992,7 @@ def fallback_sleep_compression_result(
         "theme": primary_topic or None,
         "weight": fallback_weight(emotional_markers, signals),
         "links": [],
+        "compact_memory": None,
         "emotional_markers": emotional_markers,
         "topic_thread": topic_items,
         "personal_signals": signals,
@@ -1026,6 +1061,8 @@ def normalize_sleep_compression_result(parsed: dict[str, Any], task: dict[str, A
     if parsed.get("archive_id") != task["inputs"]["preliminary_archive_id"]:
         parsed["archive_id"] = task["inputs"]["preliminary_archive_id"]
     parsed.setdefault("schema_version", task["expected_output_schema"])
+    compact_memory = normalize_compact_memory_text(parsed.get("compact_memory"))
+    parsed["compact_memory"] = compact_memory or None
     parsed["facts"] = normalize_weighted_facts(parsed.get("facts"))
     parsed["quotes"] = normalize_quotes(parsed.get("quotes"))
     parsed["tags"] = normalize_string_list(parsed.get("tags"))
@@ -1034,6 +1071,24 @@ def normalize_sleep_compression_result(parsed: dict[str, Any], task: dict[str, A
     parsed["topic_thread"] = normalize_topic_thread(parsed.get("topic_thread"))
     parsed["personal_signals"] = normalize_personal_signals(parsed.get("personal_signals"))
     parsed["relational_tone"] = normalize_relational_tone(parsed.get("relational_tone"))
+
+
+def normalize_compact_memory_text(value: Any) -> str:
+    text = clean_string(value)
+    if not text:
+        return ""
+    text = re.sub(r"^```(?:text|markdown)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^\s*[-*]\s+", "", line)
+        line = re.sub(r"^\s*\d+[.)]\s+", "", line)
+        if line:
+            lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def normalize_weighted_facts(value: Any) -> list[dict[str, Any]]:
@@ -1617,18 +1672,24 @@ def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) 
     events = task.get("inputs", {}).get("events", [])
     transcript = sleep_events_transcript(events if isinstance(events, list) else [])
     raw_tokens = estimate_tokens(transcript)
-    compressed_payload = {
+    stored_archive_payload = {
         "gist": result.get("gist"),
         "narrative": result.get("narrative"),
+        "compact_memory": result.get("compact_memory"),
         "facts": result.get("facts", []),
+        "quotes": result.get("quotes", []),
         "emotional_markers": result.get("emotional_markers", []),
         "topic_thread": result.get("topic_thread", []),
         "personal_signals": result.get("personal_signals", []),
         "relational_tone": result.get("relational_tone"),
     }
-    compressed_text = json.dumps(compact_archive_for_prompt(compressed_payload), ensure_ascii=False)
-    compressed_tokens = estimate_tokens(compressed_text)
-    ratio = compressed_tokens / raw_tokens if raw_tokens else 0.0
+    prompt_archive_payload = compact_archive_for_prompt(stored_archive_payload)
+    stored_archive_tokens = estimate_tokens(json.dumps(stored_archive_payload, ensure_ascii=False))
+    prompt_archive_tokens = estimate_tokens(json.dumps(prompt_archive_payload, ensure_ascii=False))
+    compact_memory_tokens = estimate_tokens(clean_string(result.get("compact_memory")))
+    stored_ratio = stored_archive_tokens / raw_tokens if raw_tokens else 0.0
+    prompt_ratio = prompt_archive_tokens / raw_tokens if raw_tokens else 0.0
+    compact_ratio = compact_memory_tokens / raw_tokens if raw_tokens else 0.0
     record = {
         "timestamp": now_rfc3339(),
         "kind": "sleep_compression_metric",
@@ -1636,8 +1697,14 @@ def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) 
         "archive_id": task.get("inputs", {}).get("preliminary_archive_id"),
         "raw_event_count": len(events) if isinstance(events, list) else 0,
         "raw_chat_estimated_tokens": raw_tokens,
-        "compressed_estimated_tokens": compressed_tokens,
-        "compression_ratio": round(ratio, 4),
+        "stored_archive_estimated_tokens": stored_archive_tokens,
+        "stored_archive_ratio": round(stored_ratio, 4),
+        "prompt_archive_estimated_tokens": prompt_archive_tokens,
+        "prompt_archive_ratio": round(prompt_ratio, 4),
+        "compact_memory_estimated_tokens": compact_memory_tokens,
+        "compact_memory_ratio": round(compact_ratio, 4),
+        "compressed_estimated_tokens": compact_memory_tokens,
+        "compression_ratio": round(compact_ratio, 4),
         "emotional_markers": len(result.get("emotional_markers", [])),
         "personal_signals": len(result.get("personal_signals", [])),
         "topic_thread": len(result.get("topic_thread", [])),
@@ -1649,7 +1716,9 @@ def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) 
         "sleep_compression_tokens "
         f"task={record['task_id']} archive={record['archive_id']} "
         f"events={record['raw_event_count']} raw_est={raw_tokens} "
-        f"compressed_est={compressed_tokens} ratio={record['compression_ratio']}"
+        f"stored_est={stored_archive_tokens} stored_ratio={record['stored_archive_ratio']} "
+        f"prompt_est={prompt_archive_tokens} prompt_ratio={record['prompt_archive_ratio']} "
+        f"compact_est={compact_memory_tokens} compact_ratio={record['compact_memory_ratio']}"
     )
 
 
@@ -1772,28 +1841,16 @@ def render_archive_memories_for_prompt(value: Any) -> list[str]:
         if not isinstance(archive, dict):
             continue
         compact = compact_archive_for_prompt(archive)
-        gist = clean_string(compact.get("gist"))
-        if not gist:
+        memory = clean_string(compact.get("compact_memory")) or clean_string(compact.get("gist"))
+        if not memory:
             continue
         relevance = compact.get("relevance_score")
         prefix = f"- [{relevance}] " if relevance is not None else "- "
-        lines.append(prefix + gist)
-        personal = [
-            clean_string(item.get("text"))
-            for item in compact.get("personal_signals", [])
-            if isinstance(item, dict) and clean_string(item.get("text"))
-        ]
-        if personal:
-            lines.append("  personal: " + "; ".join(personal[:3]))
-        emotional = [
-            f"{clean_string(item.get('target'))}: {clean_string(item.get('affect'))}"
-            for item in compact.get("emotional_markers", [])
-            if isinstance(item, dict)
-            and clean_string(item.get("target"))
-            and clean_string(item.get("affect"))
-        ]
-        if emotional:
-            lines.append("  emotional: " + "; ".join(emotional[:3]))
+        for index, memory_line in enumerate(memory.splitlines()):
+            memory_line = memory_line.strip()
+            if not memory_line:
+                continue
+            lines.append((prefix if index == 0 else "  ") + memory_line)
     return lines
 
 
@@ -1886,7 +1943,17 @@ def compact_archive_for_prompt(archive: Any) -> dict[str, Any]:
     if not isinstance(archive, dict):
         return {}
     compact: dict[str, Any] = {}
-    gist = truncate_text(clean_string(archive.get("gist")), 420)
+    archive_id = clean_string(archive.get("id")) or clean_string(archive.get("archive_id"))
+    compact_memory = clean_string(archive.get("compact_memory"))
+    if archive_id:
+        compact["archive_id"] = archive_id
+    if compact_memory:
+        compact["compact_memory"] = compact_memory
+        if archive.get("relevance_score") is not None:
+            compact["relevance_score"] = round(clamp_float(archive.get("relevance_score"), 0.0), 2)
+        return compact
+
+    gist = clean_string(archive.get("gist"))
     theme = clean_string(archive.get("theme"))
     if gist:
         compact["gist"] = gist
@@ -1894,29 +1961,6 @@ def compact_archive_for_prompt(archive: Any) -> dict[str, Any]:
         compact["theme"] = theme
     if archive.get("relevance_score") is not None:
         compact["relevance_score"] = round(clamp_float(archive.get("relevance_score"), 0.0), 2)
-    compact["facts"] = [
-        {"text": truncate_text(clean_string(item.get("text")), 180)}
-        for item in safe_list(archive.get("facts"))[:3]
-        if isinstance(item, dict) and clean_string(item.get("text"))
-    ]
-    compact["emotional_markers"] = [
-        compact_emotional_marker(item)
-        for item in safe_list(archive.get("emotional_markers"))[:4]
-        if isinstance(item, dict)
-    ]
-    compact["topic_thread"] = [
-        compact_topic_thread_item(item)
-        for item in safe_list(archive.get("topic_thread"))[:5]
-        if isinstance(item, dict)
-    ]
-    compact["personal_signals"] = [
-        compact_personal_signal(item)
-        for item in safe_list(archive.get("personal_signals"))[:4]
-        if isinstance(item, dict)
-    ]
-    tone = compact_relational_tone(archive.get("relational_tone"))
-    if tone:
-        compact["relational_tone"] = tone
     return {key: value for key, value in compact.items() if value not in ("", [], None)}
 
 
@@ -2136,6 +2180,10 @@ def format_archive_detail(archive: dict[str, Any] | None) -> str:
     ]
     gist = clean_string(archive.get("gist"))
     narrative = clean_string(archive.get("narrative"))
+    compact_memory = clean_string(archive.get("compact_memory"))
+    if compact_memory:
+        lines.append("Compact memory:")
+        lines.extend(f"- {line}" for line in compact_memory.splitlines() if line.strip())
     if gist:
         lines.append(f"Gist: {gist}")
     if narrative:

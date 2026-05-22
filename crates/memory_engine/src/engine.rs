@@ -24,13 +24,13 @@ use crate::tasks::{PendingTask, TaskState, TaskType};
 use crate::types::{
     ImportanceHint, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
     ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION,
-    CORE_CONTEXT_PACKAGE_SCHEMA_VERSION, CORE_CONTEXT_REQUEST_SCHEMA_VERSION,
-    CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_INPUT_SCHEMA_VERSION,
-    CORE_FACT_PATCH_RESULT_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
-    CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
-    INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
-    PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION,
-    SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    COMPACT_MEMORY_RESULT_SCHEMA_VERSION, CORE_CONTEXT_PACKAGE_SCHEMA_VERSION,
+    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
+    CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_RESULT_SCHEMA_VERSION,
+    CORE_FACT_SCHEMA_VERSION, CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION,
+    EVENT_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
+    RECALL_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use crate::{MemoryEngineError, Result};
 
@@ -459,11 +459,15 @@ impl<S: Storage> MemoryEngine<S> {
             &self.options.sleep,
             &now,
         )?;
+        let compact_memory_task =
+            build_compact_memory_task(&session, &selected_events, &archive_entry, &now)?;
         self.storage.save_task(&pending_task)?;
+        self.storage.save_task(&compact_memory_task)?;
 
         Ok(SleepStage1Result {
             archive_entry,
             pending_task,
+            compact_memory_task: Some(compact_memory_task),
         })
     }
 
@@ -497,6 +501,9 @@ impl<S: Storage> MemoryEngine<S> {
         archive_entry.tags = result.tags;
         archive_entry.gist = result.gist;
         archive_entry.narrative = result.narrative;
+        if result.compact_memory.is_some() {
+            archive_entry.compact_memory = result.compact_memory;
+        }
         archive_entry.facts = result.facts;
         archive_entry.quotes = result.quotes;
         archive_entry.weight = result.weight;
@@ -510,6 +517,50 @@ impl<S: Storage> MemoryEngine<S> {
         archive_entry.prompt_id = Some(task.prompt_id.clone());
         archive_entry.prompt_version = Some(task.prompt_version);
 
+        self.storage
+            .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
+
+        task.state = TaskState::Completed;
+        task.updated_at = now;
+        task.last_error = None;
+        self.storage.save_task(&task)?;
+
+        Ok(archive_entry)
+    }
+
+    pub fn resume_compact_memory_pass(
+        &mut self,
+        task_id: &str,
+        compact_memory: &str,
+    ) -> Result<ArchiveEntry> {
+        let compact_memory = normalize_optional_string(Some(compact_memory)).ok_or_else(|| {
+            MemoryEngineError::Validation(
+                "compact memory pass result must not be empty".to_string(),
+            )
+        })?;
+        self.ensure_manifest()?;
+
+        let mut task = self.storage.load_task(task_id)?;
+        if task.task_type != TaskType::CompactMemoryPass {
+            return Err(MemoryEngineError::Validation(format!(
+                "task is not compact_memory_pass: {task_id}"
+            )));
+        }
+
+        let archive_id = task
+            .inputs
+            .get("preliminary_archive_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                MemoryEngineError::Validation(format!(
+                    "compact_memory_pass task has no preliminary_archive_id: {task_id}"
+                ))
+            })?;
+        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
+
+        let now = now_rfc3339()?;
+        archive_entry.updated_at = now.clone();
+        archive_entry.compact_memory = Some(compact_memory);
         self.storage
             .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
 
@@ -713,6 +764,8 @@ pub struct IngestResult {
 pub struct SleepStage1Result {
     pub archive_entry: ArchiveEntry,
     pub pending_task: PendingTask,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_memory_task: Option<PendingTask>,
 }
 
 impl Default for EventScoringConfig {
@@ -1190,6 +1243,7 @@ fn build_preliminary_archive(
         tags,
         gist: preliminary_gist(events),
         narrative: preliminary_narrative(&session.metadata.session_id, events),
+        compact_memory: None,
         facts: preliminary_facts(events),
         quotes,
         weight: archive_weight(events),
@@ -1247,6 +1301,47 @@ fn build_sleep_compression_task(
             "hints": {
                 "target_style": "compact_human_readable_memory",
                 "preserve_quotes": true,
+                "do_not_invent_facts": true
+            }
+        }),
+        attempts: Vec::new(),
+        last_error: None,
+    })
+}
+
+fn build_compact_memory_task(
+    session: &SessionRecord,
+    events: &[&StoredEvent],
+    archive_entry: &ArchiveEntry,
+    now: &str,
+) -> Result<PendingTask> {
+    Ok(PendingTask {
+        schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
+        task_id: new_id("task")?,
+        task_type: TaskType::CompactMemoryPass,
+        state: TaskState::Pending,
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+        prompt_id: "compact_memory_pass".to_string(),
+        prompt_version: 1,
+        role_hint: ModelRole::Balanced,
+        expected_output_schema: COMPACT_MEMORY_RESULT_SCHEMA_VERSION.to_string(),
+        inputs: json!({
+            "session_id": &session.metadata.session_id,
+            "preliminary_archive_id": &archive_entry.archive_id,
+            "events": events.iter().map(|event| json!({
+                "event_id": &event.event_id,
+                "type": &event.event_type,
+                "timestamp": &event.timestamp,
+                "payload": &event.payload,
+                "tags": &event.tags,
+                "theme": &event.theme,
+                "initial_weight": event.initial_weight,
+                "weight_reason": &event.weight_reason,
+            })).collect::<Vec<Value>>(),
+            "hints": {
+                "target_style": "short_human_memory_theses",
+                "plain_text_only": true,
                 "do_not_invent_facts": true
             }
         }),
@@ -1321,13 +1416,32 @@ fn recall_item_from_archive(
     scored: ScoredArchiveEntry,
     explain: bool,
 ) -> RecallItem {
+    let compact_memory = normalize_optional_string(entry.compact_memory.as_deref());
+    let prompt_gist = compact_memory.clone().unwrap_or_else(|| entry.gist.clone());
+    let narrative = if compact_memory.is_some() {
+        None
+    } else {
+        Some(entry.narrative)
+    };
+    let facts = if compact_memory.is_some() {
+        Vec::new()
+    } else {
+        entry.facts.into_iter().map(|fact| fact.text).collect()
+    };
+    let quotes = if compact_memory.is_some() {
+        Vec::new()
+    } else {
+        entry.quotes.into_iter().map(|quote| quote.text).collect()
+    };
+
     RecallItem {
         source_layer: RecallSourceLayer::Archive,
         id: entry.archive_id,
-        gist: entry.gist,
-        narrative: Some(entry.narrative),
-        facts: entry.facts.into_iter().map(|fact| fact.text).collect(),
-        quotes: entry.quotes.into_iter().map(|quote| quote.text).collect(),
+        gist: prompt_gist,
+        compact_memory,
+        narrative,
+        facts,
+        quotes,
         source_session_id: Some(entry.source_session_id),
         time_range: Some(entry.time_range),
         tags: entry.tags,
@@ -1460,6 +1574,10 @@ fn query_tokens(query: &RecallQuery) -> BTreeSet<String> {
 
 fn archive_tokens(entry: &ArchiveEntry) -> BTreeSet<String> {
     let mut text = String::new();
+    if let Some(compact_memory) = &entry.compact_memory {
+        text.push_str(compact_memory);
+        text.push(' ');
+    }
     text.push_str(&entry.gist);
     text.push(' ');
     text.push_str(&entry.narrative);

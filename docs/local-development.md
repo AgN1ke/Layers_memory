@@ -228,7 +228,7 @@ hosts/telegram_gemini_bot/runtime/logs/bot.log
 hosts/telegram_gemini_bot/runtime/logs/token_usage.jsonl
 ```
 
-Там кожен рядок — JSON record. Для Gemini-викликів пишуться `operation`, `model_role`, `model`, provider `usageMetadata` (`prompt_tokens`, `output_tokens`, `total_tokens`, `thoughts_tokens`), estimated prompt/output tokens і, для chat replies, estimated baseline "raw history without compression" та savings estimate. Для sleep пишеться `sleep_compression_metric`: скільки estimated tokens мав raw transcript і скільки має compact compressed archive payload.
+Там кожен рядок — JSON record. Для Gemini-викликів пишуться `operation`, `model_role`, `model`, provider `usageMetadata` (`prompt_tokens`, `output_tokens`, `total_tokens`, `thoughts_tokens`), estimated prompt/output tokens і, для chat replies, estimated baseline "raw history without compression" та savings estimate. Для sleep пишеться `sleep_compression_metric`: raw transcript, stored full archive, prompt-facing archive payload і `compact_memory` tokens/ratios. `compressed_estimated_tokens` лишається legacy alias для `compact_memory_estimated_tokens`.
 
 ## Локальний Conversation Harness Без Telegram
 
@@ -264,7 +264,7 @@ Offset зберігається після кожного обробленого
 - plain text користувача зберігається як `user_message`;
 - `engine.ingest()` повертає `IngestResult` з `stored_event` і можливим `auto_sleep`;
 - bot просить `engine.core_context_package(...)`, а не збирає recent/trace/archive сам;
-- Gemini отримує compact prompt view із `session_recent`, `session_trace`, `archive_relevant`, `core_facts`, `domain_state`; повний debug/API package лишається в engine response і log/report, але не тягнеться в ordinary chat prompt із довгими IDs;
+- Gemini отримує compact prompt view із `session_recent`, `session_trace`, `archive_relevant` як `compact_memory` тези, `core_facts`, `domain_state`; повний debug/API package лишається в engine response і log/report, але не тягнеться в ordinary chat prompt із довгими IDs;
 - `session_recent` і `session_trace` містять тільки unarchived active tail; події, які вже пройшли sleep, мають приходити через `archive_relevant`;
 - rolling sleep за замовчуванням лишає приблизно 30% найсвіжіших unarchived events active, тому після auto-sleep бот не має різко втрачати щойно обговорений хвіст;
 - відповідь bot-а зберігається як `assistant_message`;
@@ -273,7 +273,7 @@ Offset зберігається після кожного обробленого
 - Telegram host записує і читає Core-факти зі scope `telegram_<chat_id>`, щоб факти різних чатів не змішувались;
 - Core можна перевірити командою `/core`, явно додати факт командою `/remember text`, оновити через `/core_update id text`, або прибрати з активного контексту через `/core_forget id`;
 - archive memory створюється через `/sleep`, auto-sleep keywords або engine-level auto-sleep після порога незаархівованих подій;
-- Telegram host за замовчуванням виконує multi-pass sleep: emotional pass, topic thread pass, personal signal pass, relational pass і consolidator. Для debug старий single-pass режим можна увімкнути env `MEMORY_BOT_SLEEP_MODE=single`.
+- Telegram host за замовчуванням виконує multi-pass sleep: compact memory pass, emotional pass, topic thread pass, personal signal pass, relational pass і consolidator. `compact_memory_pass` створює короткі тези для prompt, а решта проходів створює повний audit/archive. Для debug старий single-pass режим можна увімкнути env `MEMORY_BOT_SLEEP_MODE=single`.
 - активний чат-промпт Telegram host-а лежить у `prompts/telegram_chat_system.md`, а не захардкоджений у Python.
 
 ## Поточний Очікуваний Результат

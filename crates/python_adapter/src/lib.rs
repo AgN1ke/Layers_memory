@@ -6,7 +6,8 @@
 //! No LLM, no provider, no model selection lives here. The Python caller
 //! receives `PendingTask` objects in the returned JSON and is fully
 //! responsible for executing them with whatever provider it chooses, then
-//! submitting the result back through `resume_sleep_compression`.
+//! submitting results back through `resume_sleep_compression` or
+//! `resume_compact_memory_pass`.
 
 // PyO3 0.22 `#[pymethods]` expansion produces an `Into<PyErr>` step that
 // clippy 1.95 flags as `useless_conversion`. Silencing this lint locally
@@ -79,6 +80,18 @@ impl PyMemoryEngine {
         let updated = self
             .inner
             .resume_sleep_compression(task_id, result)
+            .map_err(map_err)?;
+        dump_json(&updated, "archive entry")
+    }
+
+    fn resume_compact_memory_pass(
+        &mut self,
+        task_id: &str,
+        compact_memory: &str,
+    ) -> PyResult<String> {
+        let updated = self
+            .inner
+            .resume_compact_memory_pass(task_id, compact_memory)
             .map_err(map_err)?;
         dump_json(&updated, "archive entry")
     }

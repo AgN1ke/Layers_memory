@@ -27,6 +27,8 @@ pub struct ArchiveEntry {
     pub tags: Vec<String>,
     pub gist: String,
     pub narrative: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_memory: Option<String>,
     #[serde(default)]
     pub facts: Vec<WeightedFact>,
     #[serde(default)]

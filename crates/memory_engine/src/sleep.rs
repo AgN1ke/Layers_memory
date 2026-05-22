@@ -9,6 +9,8 @@ pub struct SleepCompressionResult {
     pub archive_id: Id,
     pub gist: String,
     pub narrative: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_memory: Option<String>,
     #[serde(default)]
     pub facts: Vec<WeightedFact>,
     #[serde(default)]
@@ -42,6 +44,14 @@ impl SleepCompressionResult {
             return Err(crate::MemoryEngineError::Validation(
                 "sleep compression narrative must not be empty".to_string(),
             ));
+        }
+
+        if let Some(compact_memory) = &self.compact_memory {
+            if compact_memory.trim().is_empty() {
+                return Err(crate::MemoryEngineError::Validation(
+                    "sleep compression compact_memory must not be empty when provided".to_string(),
+                ));
+            }
         }
 
         if !(0.0..=1.0).contains(&self.weight) {
