@@ -238,12 +238,14 @@ hosts/telegram_gemini_bot/runtime/logs/token_usage.jsonl
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --list-scenarios
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --dry-run
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --turn-limit 4 --no-force-sleep-at-end
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario one_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario multi_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario all
 ```
 
 Він використовує той самий `memory_engine`, Gemini client, `core_context_package`, prompt builder, sleep flow і Archive → Core bridge, що й Telegram host. Telegram token не потрібен. Gemini key і model mapping читаються з `hosts/telegram_gemini_bot/runtime/state/secrets.local.json` або з env-змінних (`GEMINI_API_KEY`, `MEMORY_BOT_MODEL_*`).
 
-Сценарії навмисно не є одним жорстким golden path: `mixed_short`, `topic_switching`, `identity_noise` перевіряють різні переходи тем, особисті твердження, шум і контроль mid-dialog greeting. Reports пишуться сюди:
+Сценарії навмисно не є одним жорстким golden path: `mixed_short`, `topic_switching`, `identity_noise` перевіряють різні переходи тем, особисті твердження, шум і контроль mid-dialog greeting. `one_topic_compact` і `multi_topic_compact` перевіряють, що compact memory не має штучної квоти тез: однотемна розмова має стискатись в одну змістову тезу, а багатотемна — у стільки тез, скільки реально підтримують епізоди розмови. Reports пишуться сюди:
 
 ```text
 hosts/telegram_gemini_bot/runtime/logs/local_harness/

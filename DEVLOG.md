@@ -3516,4 +3516,13 @@ Compact memory має бути не квотою, а результатом аг
 Користувач прямо сформулював принцип: агент має виділяти стільки шматків розмови, скільки там реально є тем/епізодів, і стискати кожен, прибираючи подробиці, але залишаючи факт і висновок.
 
 **Перевірки:**
-Потрібно прогнати prompt/documentation checks і повторити sleep-тест на однотемній та багатотемній розмові.
+- Перший inline-Python sleep-прогін відхилено як невалідний: PowerShell pipe зіпсував український текст у `????`, тому результат не можна вважати перевіркою prompt-а.
+- Додано harness-сценарій `one_topic_compact`: одна розмова про кішку Іржу і пігмент шерсті.
+- Додано harness-сценарій `multi_topic_compact`: імʼя, космос, авіація, кішка, шоколад і правило не вітатись посеред діалогу.
+- `crates\python_adapter\.venv\Scripts\python.exe hosts\telegram_gemini_bot\local_harness.py --scenario one_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0` — пройшло; report `runtime/logs/local_harness/local_harness_one_topic_compact_20260522_171127.md`.
+- `one_topic_compact` дав одну compact-тезу про Іржу, пігмент шерсті, сонце/харчування/вік і емоційний сенс назви. `compact_memory_ratio=0.0707`, prompt-facing archive ratio `0.0779`.
+- `crates\python_adapter\.venv\Scripts\python.exe hosts\telegram_gemini_bot\local_harness.py --scenario multi_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0` — пройшло; report `runtime/logs/local_harness/local_harness_multi_topic_compact_20260522_171306.md`.
+- `multi_topic_compact` дав чотири compact-тези: імʼя, супутники з екстремальними умовами, МіГ-15/F-86 як технічний інтерес, кішка Іржа як тепла тема. `compact_memory_ratio=0.3385`, prompt-facing archive ratio `0.3607`.
+
+**Висновок перевірки:**
+Штучної квоти тез у compact memory більше не видно: однотемна розмова не роздулась до кількох тез, а багатотемна не була стиснута в одну. Водночас `multi_topic_compact` не виніс у compact memory шоколад і dislike до mid-dialog greeting, хоча full archive/Core signals їх побачили. Це не структурна помилка квоти, але prompt-quality спостереження: compact memory природно відкидає частину другорядних деталей, і треба уважно стежити, чи не випадають важливі для користувача речі.

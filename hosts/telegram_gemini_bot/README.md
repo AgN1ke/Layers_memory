@@ -50,18 +50,22 @@ hosts/telegram_gemini_bot/runtime/state/secrets.local.json
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --list-scenarios
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --dry-run
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --turn-limit 4 --no-force-sleep-at-end
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario one_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario multi_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario all
 ```
 
 Harness читає Gemini key із `runtime/state/secrets.local.json` або `GEMINI_API_KEY`, створює окремі `local_harness_*` сесії і пише reports у `runtime/logs/local_harness/`. Він використовує ті самі функції `bot.py`, що й Telegram host: `core_context_package`, prompt rendering, Gemini call, ingest відповіді, sleep completion і Archive → Core bridge.
+
+Сценарії `one_topic_compact` і `multi_topic_compact` потрібні саме для перевірки compact memory: агент має сам визначити кількість змістових одиниць, а не виконувати фіксовану квоту тез.
 
 Скрипт:
 
 1. Увімкне UTF-8 для термінала.
 2. Перевірить/створить venv у `crates/python_adapter/.venv`.
 3. Збере Python adapter через `maturin develop`.
-4. Запустить `bot.py`.
-5. Попросить ввести Telegram token і Gemini API key.
+4. Запустить `local_harness.py` з переданими аргументами.
+5. Візьме Gemini key і model mapping із локального кешу або env; Telegram token не потрібен.
 
 ## Моделі За Ролями
 
