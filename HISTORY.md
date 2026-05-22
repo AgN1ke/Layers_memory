@@ -46,6 +46,32 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-22 — Removed fixed compact-memory thesis quota
+
+The first `compact_memory_pass` prompt incorrectly told the model to return 5-7 theses. That was a narrow quota, not a memory principle. It could force over-splitting a one-topic conversation or under-represent a session with many distinct memory units.
+
+**What changed:**
+- `prompts/compact_memory_pass.md` now tells the model to segment events into coherent memory units and return as many theses as the conversation actually supports.
+- A one-topic conversation may produce one thesis.
+- Multiple distinct episodes may produce multiple theses.
+- Routine repetition can be omitted.
+- Timestamps are explicitly available for ordering and time boundaries, but raw ISO timestamps should not be emitted unless useful.
+- `docs/architecture.md` and `docs/contracts.md` no longer describe compact memory as a fixed 5-7 item output.
+
+**What is retracted (if applicable):**
+- The fixed "5-7 short theses" instruction and the related claim in the previous HISTORY entry.
+
+**What is still true:**
+- `compact_memory_pass` remains the prompt-facing compression layer.
+- Full multi-track archive entries remain storage/debug records.
+- Token budget and telemetry remain in force.
+
+**What we are doing:**
+- Treat numeric limits differently depending on their purpose: transport/UI/budget limits can be configured and measured; LLM memory reasoning should not be constrained by arbitrary thematic quotas.
+
+**Thanks:**
+- Mykyta Zagamula for catching the quota before it became another hidden architecture constraint.
+
 ## 2026-05-22 — Compact memory theses for archive recall
 
 The owner flagged that the full multi-track archive is an audit/enrichment record, not the thing that should be carried back into every chat prompt. A real memory prompt needs short human theses: event -> conclusion. The archive now stores both forms separately.
@@ -54,7 +80,7 @@ The owner flagged that the full multi-track archive is an audit/enrichment recor
 - Added `TaskType::CompactMemoryPass` and a persisted `compact_memory_pass` task alongside `sleep_compression` during sleep stage 1.
 - Added `ArchiveEntry.compact_memory`, `SleepCompressionResult.compact_memory`, and `RecallItem.compact_memory`.
 - Added `MemoryEngine::resume_compact_memory_pass(task_id, text)` and the Python adapter method with the same boundary.
-- Added `prompts/compact_memory_pass.md`: plain-text, 5-7 short theses, no JSON, no debug IDs.
+- Added `prompts/compact_memory_pass.md`: plain-text compact theses, no JSON, no debug IDs.
 - Telegram sleep now runs compact memory separately from the full multi-pass/consolidator archive enrichment.
 - `archive_relevant` now prefers `compact_memory`: when present, recall returns compact theses instead of narrative/facts/quotes in the prompt-facing item.
 - Token telemetry now distinguishes raw transcript, stored full archive, prompt archive payload, and compact memory ratios.
