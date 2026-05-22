@@ -1068,18 +1068,45 @@ def execute_multi_pass_sleep_compression(
 ) -> dict[str, Any]:
     sleep_input = task["inputs"]
     pass_input = {"sleep_task": sleep_input}
-    compact_memory = execute_compact_memory_pass(compact_task or task, gemini, llm_config)
-    emotional = execute_prompt_json(
-        "sleep_emotional_pass", pass_input, task["role_hint"], gemini, llm_config
+    failed_passes: list[str] = []
+    compact_memory = safe_execute_compact_memory_pass(
+        compact_task or task, gemini, llm_config, failed_passes
     )
-    topic_thread = execute_prompt_json(
-        "sleep_topic_thread_pass", pass_input, task["role_hint"], gemini, llm_config
+    emotional = safe_execute_sleep_pass_json(
+        prompt_id="sleep_emotional_pass",
+        prompt_input=pass_input,
+        role_hint=task["role_hint"],
+        gemini=gemini,
+        llm_config=llm_config,
+        fallback={"emotional_markers": []},
+        failed_passes=failed_passes,
     )
-    personal_signals = execute_prompt_json(
-        "sleep_personal_signal_pass", pass_input, task["role_hint"], gemini, llm_config
+    topic_thread = safe_execute_sleep_pass_json(
+        prompt_id="sleep_topic_thread_pass",
+        prompt_input=pass_input,
+        role_hint=task["role_hint"],
+        gemini=gemini,
+        llm_config=llm_config,
+        fallback={"topic_thread": []},
+        failed_passes=failed_passes,
     )
-    relational = execute_prompt_json(
-        "sleep_relational_pass", pass_input, task["role_hint"], gemini, llm_config
+    personal_signals = safe_execute_sleep_pass_json(
+        prompt_id="sleep_personal_signal_pass",
+        prompt_input=pass_input,
+        role_hint=task["role_hint"],
+        gemini=gemini,
+        llm_config=llm_config,
+        fallback={"personal_signals": []},
+        failed_passes=failed_passes,
+    )
+    relational = safe_execute_sleep_pass_json(
+        prompt_id="sleep_relational_pass",
+        prompt_input=pass_input,
+        role_hint=task["role_hint"],
+        gemini=gemini,
+        llm_config=llm_config,
+        fallback={"relational_tone": None},
+        failed_passes=failed_passes,
     )
 
     consolidator_input = {
@@ -1121,11 +1148,50 @@ def execute_multi_pass_sleep_compression(
         consolidated["personal_signals"] = personal_signals.get("personal_signals", [])
     if consolidated.get("relational_tone") is None:
         consolidated["relational_tone"] = relational.get("relational_tone")
-    consolidated["tags"] = unique_preserve_order(
-        [*consolidated.get("tags", []), f"completion_mode:{completion_mode}"]
-    )
+    tags = [*consolidated.get("tags", []), f"completion_mode:{completion_mode}"]
+    tags.extend(f"pass_failed:{prompt_id}" for prompt_id in failed_passes)
+    consolidated["tags"] = unique_preserve_order(tags)
     normalize_sleep_compression_result(consolidated, task)
     return consolidated
+
+
+def safe_execute_compact_memory_pass(
+    task: dict[str, Any],
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    failed_passes: list[str],
+) -> str:
+    try:
+        return execute_compact_memory_pass(task, gemini, llm_config)
+    except Exception as err:
+        prompt_id = clean_string(task.get("prompt_id")) or "compact_memory_pass"
+        failed_passes.append(prompt_id)
+        log_exception(f"{prompt_id} failed; continuing without compact memory", err)
+        return ""
+
+
+def safe_execute_sleep_pass_json(
+    prompt_id: str,
+    prompt_input: dict[str, Any],
+    role_hint: str,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    fallback: dict[str, Any],
+    failed_passes: list[str],
+) -> dict[str, Any]:
+    try:
+        return execute_prompt_json(
+            prompt_id,
+            prompt_input,
+            role_hint,
+            gemini,
+            llm_config,
+            retry_on_json_error=True,
+        )
+    except Exception as err:
+        failed_passes.append(prompt_id)
+        log_exception(f"{prompt_id} failed; using empty track fallback", err)
+        return fallback.copy()
 
 
 def execute_compact_memory_pass(

@@ -46,6 +46,30 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-23 — Sleep pass failures no longer leave pending tasks stuck
+
+A live Telegram test showed that a single specialized sleep pass can be blocked by Gemini safety/no-candidates while the other passes are fine. The failed `sleep_personal_signal_pass` left both `sleep_compression` and `compact_memory_pass` tasks pending, which blocked all future sleep for the session.
+
+**What changed:**
+- Telegram host now wraps `compact_memory_pass` and the four specialized sleep passes in fail-soft handlers.
+- If one pass fails, the host logs the full error, records `pass_failed:<prompt_id>` in archive tags, and continues with an empty track for that pass.
+- The sleep task can still complete through consolidator or fallback from remaining tracks.
+- The stuck live pending task from `telegram_311422683` was repaired with the new code; all runtime tasks are completed again.
+
+**What is retracted (if applicable):**
+- The assumption that robust `sleep_consolidator` handling is enough. Individual upstream passes also need fail-soft handling because provider safety blocks can happen before consolidator runs.
+
+**What is still true:**
+- Core promotion still requires `personal_signals`; if `sleep_personal_signal_pass` fails, that archive will not seed Core from personal signals.
+- Full traceback stays in `bot.log`; Telegram users should not see it directly.
+- This is a host-side LLM reliability fix. Rust core still receives only valid completed results.
+
+**What we are doing:**
+- Continue long live testing and watch for `pass_failed:*` tags. If a pass fails often, adjust the prompt or provider/model policy for that pass.
+
+**Thanks:**
+- Mykyta Zagamula for running the long test that exposed the stuck pending task path.
+
 ## 2026-05-22 — Removed message-count sleep trigger
 
 The owner rejected the message-count sleep path as a test-era shortcut that kept leaking into product planning. The product model has two sleep triggers: token/context budget pressure and scheduled idle sleep during a quiet time window.

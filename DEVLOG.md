@@ -3609,3 +3609,50 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Наступні кроки:**
 Зробити commit, стерти runtime-памʼять Telegram host-а без видалення кешу ключів, підняти bot і провести новий довгий live-тест. Очікування тесту: sleep має спрацювати через token pressure або ручний `/sleep`/нічний schedule, а не через кількість повідомлень.
+
+## Запис 61 — 2026-05-23 00:18 +03:00 — Live-тест token-pressure sleep і stuck pending repair
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Користувач провів довгий живий Telegram-тест після видалення подієвого sleep-trigger. У логах token-pressure sleep справді спрацьовував, але четвертий sleep завис: `sleep_personal_signal_pass` отримав від Gemini `PROHIBITED_CONTENT`, через що `task_1779480353076839200_65` і `task_1779480353077013300_66` лишились pending. Після цього `/sleep` відповідав фактично skip-ом у логах: "pending sleep task already exists", і вся подальша довга розмова не архівувалась.
+
+Друга проблема: у системі було два процеси `bot.py` одночасно (`python.exe` з venv і системний Python). Це знову створює ризик race condition у Telegram polling.
+
+**Задум:**
+Зробити sleep robust не тільки на рівні consolidator-а, а й на рівні кожного спеціалізованого pass-а. Один заблокований LLM-прохід не має валити весь sleep і не має блокувати майбутню памʼять.
+
+**Що робили:**
+- переглянуто `bot.log`, `token_usage.jsonl`, `tasks`, `archive`, `core`;
+- зупинено дубльовані процеси bot-а;
+- додано fail-soft wrappers для `compact_memory_pass`, `sleep_emotional_pass`, `sleep_topic_thread_pass`, `sleep_personal_signal_pass`, `sleep_relational_pass`;
+- доремонтовано live pending sleep новим кодом через одноразовий repair-виклик `complete_sleep_result(...)`.
+
+**Що зробили детально:**
+1. `safe_execute_sleep_pass_json(...)` виконує pass із JSON retry, але якщо provider повернув safety/no-candidates або іншу помилку, повертає пустий трек (`[]` або `None`) і пише повний traceback у `bot.log`.
+2. `safe_execute_compact_memory_pass(...)` аналогічно не валить sleep, якщо compact memory pass не повернув текст.
+3. Archive отримує теги `pass_failed:<prompt_id>`, щоб під час audit було видно, який саме канал не спрацював.
+4. Поточний stuck archive `archive_1779480353073556200_64` дороблено: status став `complete`, compact memory збережено, emotional/topic/relational пройшли, `personal_signals` лишились порожніми через repeated safety block.
+5. Після repair усі 8 runtime tasks у `hosts/telegram_gemini_bot/runtime/memory/tasks` мають `state=completed`.
+
+**Проблеми чи виклики:**
+Personal signal pass у live-архіві двічі отримав `PROHIBITED_CONTENT`. Це не JSON/parse проблема, а provider safety block на prompt input. Новий fail-soft шлях не витягує personal signals із цього archive, тому Core не поповнюється з нього. Це правильніше, ніж regex чи хардкод, але означає: якщо важливі факти були саме в failed personal pass, вони лишаться тільки в compact/full archive до наступного sleep/reflection.
+
+Також після repair лишилось 151 незаархівована подія. Це нормально для поточного стану: після рестарту наступний token-pressure sleep має продовжити консолідацію вже новим кодом.
+
+**Фідбек користувача:**
+Користувач попросив подивитись результат довгого тесту. Прямого transcript у чат не кидав — перевірка зроблена по runtime logs/files.
+
+**Перевірки:**
+- `bot.log`: token-pressure sleep спрацював 4 рази; перші 3 завершились, 4-й спочатку впав на `sleep_personal_signal_pass`.
+- `token_usage.jsonl`: 98 chat replies, max estimated raw-history baseline `31470`, max compact prompt estimate `5566`, max provider prompt `3488`, max estimated savings `26364`.
+- Sleep compression metrics:
+  - `archive_1779479225979474400_23`: raw `353`, compact `79`, ratio `0.2238`;
+  - `archive_1779480034565523600_35`: raw `1310`, compact `171`, ratio `0.1305`;
+  - `archive_1779480190069492000_47`: raw `1466`, compact `133`, ratio `0.0907`;
+  - repaired `archive_1779480353073556200_64`: raw `1075`, compact `175`, ratio `0.1628`.
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+
+**Наступні кроки:**
+Прогнати `git diff --check`, зробити commit, підняти рівно один bot-процес і продовжити live-тест. Особливо дивитись на `pass_failed:*` у future archives і на те, чи token-pressure sleep більше не блокується pending task-ом.
