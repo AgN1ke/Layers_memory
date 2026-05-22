@@ -42,6 +42,19 @@ hosts/telegram_gemini_bot/runtime/state/secrets.local.json
 
 Це plaintext-кеш для зручності локального тестування. Уся тека `hosts/*/runtime/` ігнорується git, тому файл не потрапляє в commit/GitHub. У GUI є кнопка `Clear saved keys`, яка видаляє цей кеш.
 
+## Локальний Harness Без Telegram
+
+Для швидкої перевірки memory/prompt/sleep циклу без Telegram token:
+
+```powershell
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --list-scenarios
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --dry-run
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --turn-limit 4 --no-force-sleep-at-end
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario all
+```
+
+Harness читає Gemini key із `runtime/state/secrets.local.json` або `GEMINI_API_KEY`, створює окремі `local_harness_*` сесії і пише reports у `runtime/logs/local_harness/`. Він використовує ті самі функції `bot.py`, що й Telegram host: `core_context_package`, prompt rendering, Gemini call, ingest відповіді, sleep completion і Archive → Core bridge.
+
 Скрипт:
 
 1. Увімкне UTF-8 для термінала.
@@ -94,7 +107,7 @@ Core-факти ізольовані по Telegram chat id. Якщо bot-у пи
 
 Якщо повідомлення містить явне прохання оновити памʼять (`запам...`, `запиши в пам...`, `це важливо`, `онови пам...`), bot автоматично ставить sleep у фон після відповіді, щоб ця подія швидше стала archive memory.
 
-Після успішного sleep host бере `personal_signals`, які виділив LLM-прохід, і переносить у Core тільки сигнали з confidence `>= 0.85`, підтримкою хоча б одного `user_message` source event і дозволеною загальною категорією (`profile`, `preferences`, `relationship`). Це не regex-витяг фактів із raw text: код не шукає "кішку", "імʼя" чи інші конкретні сутності. Він лише застосовує загальний поріг до структурованого результату sleep. `/core_seed` повторює цей крок для вже завершених archive-записів.
+Після успішного sleep host бере `personal_signals`, які виділив LLM-прохід, і переносить у Core тільки сигнали з confidence `>= 0.85`, підтримкою хоча б одного `user_message` source event і без near-duplicate у поточному Core scope. Категорія є вільним normalized `snake_case` полем (`name`, `pet`, `physical_trait`, `food_preference`, тощо), а не whitelist. Це не regex-витяг фактів із raw text: код не шукає "кішку", "імʼя" чи інші конкретні сутності. Він лише застосовує загальні gate-правила до структурованого результату sleep. `/core_seed` повторює цей крок для вже завершених archive-записів.
 
 Для debug можна повернути старий single-pass sleep через env `MEMORY_BOT_SLEEP_MODE=single`. За замовчуванням використовується multi-pass sleep.
 

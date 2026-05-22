@@ -2998,3 +2998,447 @@ hosts/telegram_gemini_bot/runtime/state/secrets.local.json
 
 **Наступні кроки:**
 Реалізувати token-budget allocator і сценарний тест, який доводить, що active tail, archive memories і Core вкладаються в задані ліміти без втрати ключових сенсів.
+
+### Запис 51
+
+**Час:** 2026-05-20 23:20:31 +03:00
+
+**Проблематика:**
+Після фіксації benchmark 11k/7k/3k/1k сама вимога ще не була реалізована. `core_context_package` міг повернути надто багато active session events, archive memories або Core facts, а host потім безконтрольно клав увесь JSON у prompt.
+
+**Задум:**
+Зробити бюджетування на межі Rust core, щоб усі майбутні хости отримували вже обрізаний пакет і звіт про те, що було відкинуто. Не додавати provider tokenizer у ядро: Rust core не повинен знати Gemini/OpenAI/Anthropic. На v0.1 використати консервативний детермінований estimator.
+
+**Що робили:**
+
+- оновлено `crates/memory_engine/src/core_store.rs`;
+- оновлено `crates/memory_engine/src/engine.rs`;
+- оновлено `crates/memory_engine/tests/engine_sleep_recall.rs`;
+- оновлено `docs/contracts.md`;
+- оновлено `docs/architecture.md`;
+- оновлено `docs/roadmap.md`;
+- оновлено `HISTORY.md`.
+
+**Що зроблено:**
+
+1. Додано `CoreContextTokenBudget`.
+   Request може передати budget явно, а якщо не передає — `ContextPackageConfig` використовує default:
+   - `total_tokens = 11000`;
+   - `current_memory_tokens = 7000`;
+   - `compressed_memory_tokens = 3000`;
+   - `core_tokens = 1000`.
+
+2. Додано `CoreContextBudgetReport`.
+   `core_context_package` тепер повертає `budget` із:
+   - estimator id;
+   - estimated tokens по шарах;
+   - dropped counts для `session_recent`, `session_trace`, `archive_relevant`, `core_facts`;
+   - `budget_exceeded`.
+
+3. Додано trimming logic:
+   - active session context зберігає найновіші events;
+   - archive memory зберігає highest-ranked recall items;
+   - Core зберігає highest-confidence facts;
+   - `domain_state` не ріжеться ядром, але рахується в current memory estimate і може створити warning.
+
+4. Додано тест `engine_core_context_package_enforces_token_budget_by_layer`.
+   Він створює archive memory, активний tail і Core facts, передає малий custom budget і перевіряє, що package вкладається в ліміти, а dropped counts справді показують trimming.
+
+5. Оновлено contracts і HISTORY, бо зміни торкнулись публічного контракту `core_context_request.v1` / `core_context_package.v1`.
+
+**Проблеми чи виклики:**
+Поточний estimator — не точний tokenizer конкретної моделі. Він навмисно консервативний: `unicode_chars_div_2_ceil_json_v1`. Це краще, ніж відсутність контролю, але для production benchmark потрібен host-level provider tokenizer або окремий tokenizer service.
+
+Також `core_context_package` не може різати `domain_state`, бо це поточний стан хоста. Якщо хост передасть туди дуже великий текст, `budget_exceeded` може лишитись true навіть після trimming memory-шарів.
+
+**Фідбек користувача:**
+Користувач задав конкретний token budget і підкреслив, що стискання має зберігати сенси, а не просто зменшувати текст.
+
+**Перевірки:**
+
+- `cargo fmt --check` — пройшло;
+- `cargo test --workspace` — пройшло;
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло;
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest crates\python_adapter\tests` — 11 passed.
+
+Системний `python -m pytest crates\python_adapter\tests` не пройшов, бо глобальний Python 3.9 не має встановленого PyO3-модуля `memory_engine`. Це проблема середовища запуску; локальний venv адаптера проходить.
+
+**Наступні кроки:**
+Наступний відкритий пункт roadmap — partial sleep acceptance або demotion acceptance. Перед змінами треба не переписувати roadmap самовільно, а виконати конкретний пункт і лише потім відмічати його.
+
+### Запис 52
+
+**Час:** 2026-05-21 23:04:16 +03:00
+
+**Проблематика:**
+Після реалізації token budget і multi-pass sleep потрібно було нарешті виконати живий Telegram-тест, а не додавати нові фічі. Власник проєкту провів довгу реальну сесію, наприкінці вручну запустив `/sleep`, після чого попросив перевірити runtime-логи і фактичний стан памʼяті.
+
+**Задум:**
+Перевірити foundation як живий цикл:
+
+- session events пишуться без втрат;
+- auto-sleep спрацьовує у фоні;
+- multi-pass sleep створює completed archive з emotional/personal tracks;
+- Archive → Core bridge переносить достатньо впевнені `personal_signals` у Core;
+- token budget вкладає memory package у 11k/7k/3k/1k;
+- помилки не приховуються і дають конкретні наступні задачі.
+
+**Що робили:**
+
+- переглянуто `hosts/telegram_gemini_bot/runtime/logs/bot.log`;
+- переглянуто archive entries у `hosts/telegram_gemini_bot/runtime/memory/archive/2026/05/`;
+- переглянуто Core store у `hosts/telegram_gemini_bot/runtime/memory/core/store/`;
+- прочитано session metadata і tail `events.jsonl`;
+- окремим read-only викликом `engine.core_context_package(...)` отримано `CoreContextBudgetReport` для реальної сесії.
+
+**Що зроблено / побачено:**
+
+1. Сесія реально велика:
+   - `session_id = telegram_311422683`;
+   - `event_count = 177`;
+   - session активна;
+   - останні events після ручного sleep продовжили писатись нормально.
+
+2. Auto-sleep спрацював двічі успішно:
+   - `archive_1779383622359162300_51`: 35 source events, 7 emotional markers, 5 personal signals, 3 new Core signals;
+   - `archive_1779384045445277400_91`: 35 source events, 7 emotional markers, 8 personal signals, 6 new Core signals.
+
+3. Критичний кейс із кішкою Іржею пройшов добре.
+   `archive_1779384045445277400_91` має:
+   - gist про сильну привʼязаність користувача до кішки Іржі;
+   - narrative з поясненням імені, триколірного забарвлення і теплого емоційного контексту;
+   - emotional marker `user_love_cat` зі strength `1.0`;
+   - personal signals: `User has a cat`, `User's cat is named Іржа`, опис зовнішності, сильна взаємна привʼязаність;
+   - relational tone з warmth `0.9`, intimacy `0.7`, trust `0.8`.
+
+4. Archive → Core bridge теж спрацював.
+   У Core store є активні факти:
+   - `User has a cat`;
+   - `User's cat is named Іржа (Irza)`;
+   - опис триколірної / рудуватої зовнішності Іржі;
+   - `User has a strong, mutual affection for their cat Іржа`;
+   - імʼя користувача Mykyta;
+   - імʼя асистента `Маяк`;
+   - інтереси: космос, авіація, динозаври;
+   - вподобання: суші, Японія, сучасні пернаті реконструкції рапторів;
+   - комунікаційний сигнал: користувача дратує, коли асистент надмірно підкреслює свою AI-ідентичність і відмовляється виконувати соціально природні прохання на кшталт "вгадай".
+
+5. Ручний `/sleep` завершився успішно:
+   - `archive_1779393340528343900_183`;
+   - 67 source events;
+   - 10 emotional markers;
+   - 11 personal signals;
+   - 8 new Core signals, 3 skipped;
+   - gist правильно вловив головну напругу: користувач розсердився через відмови асистента вгадувати вік або мати вподобання.
+
+6. Token budget на реальній сесії вклався в benchmark:
+   - `total_budget_tokens = 11000`;
+   - `current_memory_budget_tokens = 7000`;
+   - `compressed_memory_budget_tokens = 3000`;
+   - `core_budget_tokens = 1000`;
+   - `estimated_total_tokens = 9670`;
+   - `estimated_current_memory_tokens = 6902`;
+   - `estimated_compressed_memory_tokens = 1816`;
+   - `estimated_core_tokens = 952`;
+   - `budget_exceeded = false`.
+
+   Водночас allocator реально обрізав пакет:
+   - `dropped_session_recent = 15`;
+   - `dropped_session_trace = 40`;
+   - `dropped_archive_relevant = 2`;
+   - `dropped_core_facts = 9`.
+
+   Для запиту про Іржу пакет лишив найважливіші Core facts про кішку і релевантний archive про кішку.
+
+**Проблеми чи виклики:**
+
+1. Один auto-sleep впав на `sleep_consolidator`:
+   - task `task_1779384961960181000_135`;
+   - archive `archive_1779384961955520200_134`;
+   - помилка: `JSONDecodeError: Expecting ',' delimiter: line 97 column 5`;
+   - preliminary archive залишився зі статусом `preliminary`;
+   - task залишився `pending`.
+
+   Це означає, що потрібно додати retry / repair для невалідного JSON від LLM або fallback, який завершує archive напряму з чотирьох pass results без consolidator.
+
+2. Один chat turn впав через Gemini safety:
+   - повідомлення користувача: "вона дурна якась";
+   - Gemini повернув `promptFeedback.blockReason = PROHIBITED_CONTENT`;
+   - `promptTokenCount = 9471`;
+   - bot показав користувачу технічний traceback.
+
+   Це не схоже на проблему memory engine. Це host-level error handling: треба ловити `no candidates` / safety block і відповідати нормальним людським fallback-повідомленням без runtime traceback.
+
+3. У runtime log немає регулярного запису budget report для кожного turn.
+   Budget можна отримати через `core_context_package`, але bot не пише `budget_exceeded`, dropped counts і estimate у `bot.log`. Для acceptance це незручно: треба або логувати короткий budget рядок на кожен turn, або хоча б при `budget_exceeded=true` і під час `/debug_context`.
+
+4. Core budget 1k працює, але при великій сесії вже відкидає частину фактів. Це нормально для benchmark, але якість сортування Core треба перевіряти окремо: зараз лишаються highest-confidence facts, не обовʼязково найрелевантніші до конкретного turn.
+
+5. `sleep_personal_signal_pass` пропустив явні profile facts із тієї ж живої сесії.
+   У transcript були прямі твердження:
+   - користувачу 36 з половиною;
+   - користувач має зріст 183 см;
+   - користувач любить молочний шоколад.
+
+   У completed archive `archive_1779393340528343900_183` ці факти не зʼявились у `personal_signals`, тому Archive → Core bridge не міг їх перенести. Це не причина повертати regex extraction, але це доказ, що personal-signal prompt/gating треба посилити: явні самопрофільні твердження мають зберігатись навіть тоді, коли головний емоційний центр фрагмента — конфлікт або напруга.
+
+**Фідбек користувача:**
+Користувач повідомив, що довго спілкувався з ботом, вручну зробив `/sleep`, а також показав один видимий збій: Gemini safety block призвів до технічного повідомлення в Telegram. Також користувач очікує, що оцінка буде зроблена по логах і runtime, без ручного копіювання всього transcript.
+
+**Перевірки:**
+
+- Живий Telegram runtime перевірено по `bot.log`, archive JSON, Core store, session metadata.
+- Read-only `core_context_package` на реальній памʼяті показав `budget_exceeded = false`.
+- Code tests під час цього запису не запускались, бо правок у код не було.
+
+**Наступні кроки:**
+
+До нових фіч треба закрити конкретні дефекти з live-тесту:
+
+1. Додати robust JSON repair / retry / fallback для `sleep_consolidator`, щоб failed auto-sleep не лишав task у `pending` назавжди.
+2. Додати host-level fallback для Gemini `PROHIBITED_CONTENT` / `no candidates`, щоб користувач не бачив traceback.
+3. Додати коротке логування budget report у bot runtime або debug-команду для acceptance.
+4. Посилити `sleep_personal_signal_pass`, щоб явні profile facts не губились у довгих емоційно напружених фрагментах.
+5. Після цих точкових правок повторити коротший live-тест саме на failure paths і explicit profile facts.
+
+### Запис 53
+
+**Час:** 2026-05-21 23:23:42 +03:00
+
+**Проблематика:**
+Після обговорення token budget власник звернув увагу на іншу сторону тієї ж проблеми: у шарах памʼяті багато довгих технічних ідентифікаторів (`event_id`, `archive_id`, `core_fact_id`, `task_id`) і verbose JSON-полів. У storage/debug вони корисні, але якщо тягнути їх у prompt, вони витрачають токени і прямо суперечать меті стиснення.
+
+**Задум:**
+Зафіксувати межу між повним канонічним storage/debug view і компактним prompt-facing view. Не міняти код зараз, а записати принцип і відкритий roadmap-пункт: memory context для LLM має бути семантично достатнім, але без службових ID і metadata, якщо вони не потрібні для відповіді.
+
+**Що робили:**
+
+- оновлено `docs/architecture.md`;
+- оновлено `docs/contracts.md`;
+- оновлено `docs/roadmap.md`;
+- оновлено `docs/v0.1-acceptance.md`;
+- додано запис у `HISTORY.md`, бо це змінює claim про те, що саме має йти в prompt.
+
+**Що зроблено:**
+
+1. В архітектурі додано принцип compact prompt representation:
+   - storage/debug JSON може бути повним;
+   - LLM prompt має отримувати компактний view;
+   - технічні ID потрапляють у prompt тільки для debug/admin-команд або операцій, де вони реально потрібні.
+
+2. У контрактах уточнено, що `core_context_package.v1` зараз є API/debug формою, а не обовʼязково дослівним payload для LLM prompt.
+
+3. У roadmap додано відкритий пункт:
+   - `Compact prompt representation для core_context_package`.
+
+4. В acceptance checklist додано перевірку:
+   - тест не зараховується, якщо budget витрачається на довгі ID або schema/source/debug metadata без потреби.
+
+**Проблеми чи виклики:**
+Це не просто косметика. Потрібно буде вирішити, де саме робити compact projection: у Rust core як режим `prompt_view`, у Python host перед складанням prompt, або обома шляхами з чітким контрактом. Важливо не втратити debug-керованість: ID мають залишитись доступними для `/core_update`, `/core_forget`, audit і logs.
+
+**Фідбек користувача:**
+Користувач прямо вказав, що довгі числові позначки в памʼяті створюють зайве token навантаження, а це суперечить заявленій меті економити токени.
+
+**Перевірки:**
+
+- `git diff --check` треба виконати після запису.
+- Code tests не потрібні, бо правки тільки в документах.
+
+**Наступні кроки:**
+Коли дійдемо до коду, реалізувати compact prompt projection і перевірити на живій сесії, що фактичний LLM prompt вкладається в 11k не за рахунок технічної обвʼязки, а за рахунок змістовного відбору.
+
+### Запис 54
+
+**Час:** 2026-05-21 23:38:25 +03:00
+
+**Проблематика:**
+Живий Telegram-тест довів, що foundation працює, але показав чотири конкретні дефекти: `sleep_consolidator` може повернути невалідний JSON, Gemini safety/no-candidates не має просочуватись traceback-ом у Telegram, personal-signal pass не повинен триматись за whitelist категорій, а token economy треба міряти по фактичних model calls і baseline без стиснення.
+
+**Задум:**
+Не додавати нові фічі, а стабілізувати v0.1 після тесту:
+
+- зробити sleep robust до зламаного JSON від consolidator;
+- показувати користувачу людські fallback-повідомлення, а traceback лишати в `bot.log`;
+- прибрати закритий mapping категорій і перейти до free normalized categories;
+- логувати actual provider token usage, estimated no-compression baseline і raw→compressed sleep ratio;
+- прибрати довгі storage/debug ID з ordinary chat prompt.
+
+**Що робили:**
+
+- оновлено `hosts/telegram_gemini_bot/bot.py`;
+- переписано `prompts/sleep_personal_signal_pass.md`;
+- оновлено `docs/architecture.md`;
+- оновлено `docs/contracts.md`;
+- оновлено `docs/local-development.md`;
+- оновлено `docs/roadmap.md`;
+- додано запис у `HISTORY.md`.
+
+**Що зроблено:**
+
+1. Додано token telemetry.
+   Кожен Gemini-виклик пише в `hosts/telegram_gemini_bot/runtime/logs/token_usage.jsonl`:
+   - `operation`;
+   - `model_role`;
+   - `model`;
+   - provider `usageMetadata`: `prompt_tokens`, `output_tokens`, `total_tokens`, `thoughts_tokens`;
+   - estimated prompt/output tokens;
+   - для chat turns — estimated baseline "raw history without compression" і estimated savings;
+   - для sleep — `sleep_compression_metric` із raw transcript estimated tokens, compressed archive estimated tokens і compression ratio.
+
+2. Додано runtime log рядки:
+   - `context_budget` на кожен `core_context_package`;
+   - `token_usage` на кожен Gemini model call;
+   - `sleep_compression_tokens` після sleep.
+
+3. Звичайний chat prompt тепер використовує compact prompt view.
+   У prompt не йдуть довгі `event_id`, `archive_id`, `core_fact_id`, schema/source/debug поля і службові числові хвости. Повний JSON лишається у storage/debug, а LLM бачить тільки змістовні поля.
+
+4. `sleep_consolidator` став robust:
+   - parser уже вміє діставати JSON із markdown/code fence;
+   - якщо JSON не парситься, consolidator отримує один retry із вимогою повернути тільки валідний JSON;
+   - якщо retry теж падає, archive збирається fallback-ом із чотирьох успішних проходів: emotional, topic_thread, personal_signal, relational;
+   - fallback позначається тегами `consolidator_fallback` і `completion_mode:fallback_from_tracks`.
+
+5. Telegram error UX більше не показує traceback користувачу.
+   Gemini `PROHIBITED_CONTENT`, no-candidates, invalid key, rate/quota і generic errors отримують короткі людські повідомлення. Повний traceback лишається в `bot.log`.
+
+6. `sleep_personal_signal_pass.md` переписано без whitelist-а категорій.
+   Тепер signal визначається критеріями:
+   - user-grounded;
+   - stable;
+   - specific to user;
+   - not transient.
+
+   Категорія — вільне normalized `snake_case` поле. Приклади у prompt показують ширину, але не задають закритий список.
+
+7. Archive → Core bridge більше не має `CORE_SIGNAL_CATEGORY_MAP`.
+   Він приймає будь-яку normalized category, якщо signal пройшов gate:
+   - confidence ≥ 0.85;
+   - source_event_ids містять user-authored event;
+   - немає near-duplicate у Core;
+   - archive complete.
+
+**Проблеми чи виклики:**
+Exact provider token usage доступний для реальних Gemini calls через `usageMetadata`. Baseline "без нашого стискання" і raw→compressed sleep ratio поки рахуються deterministic estimator-ом, бо ми не робимо додатковий `countTokens` API call на кожен turn, щоб не сповільнювати і не ускладнювати runtime. Якщо цього буде мало, v0.2 може додати opt-in exact `countTokens`.
+
+Fallback для consolidator зберігає повні треки, але narrative буде сухішим, ніж LLM-consolidated archive. Це свідомий tradeoff: краще завершений archive з emotional/personal tracks, ніж `pending` task і preliminary archive назавжди.
+
+**Фідбек користувача:**
+Користувач погодився з відмовою від category whitelist і додатково наголосив, що довгі числові позначки та verbose storage форми суперечать token economy. Також користувач попросив логувати всі токени "туди-сюди" по моделях і оцінювати, скільки коштував би raw-history режим без стиснення.
+
+**Перевірки:**
+
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `git diff --check` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest crates\python_adapter\tests` — 11 passed.
+
+Під час pytest виявився застарілий тестовий assumption: після додавання token budget default package може обрізати `session_trace`, тому тест auto-sleep із наміром перевірити preliminary/complete поведінку тепер передає великий explicit `token_budget`, щоб не змішувати цю перевірку з budget trimming.
+
+**Наступні кроки:**
+Короткий live retest failure paths:
+
+1. перевірити, що `token_usage.jsonl` заповнюється;
+2. перевірити, що `context_budget` і `sleep_compression_tokens` є в `bot.log`;
+3. перевірити direct stable self-statements без whitelist-а категорій;
+4. перевірити, що safety/no-candidates більше не показує traceback у Telegram.
+
+## Запис 55 — 2026-05-22 00:23 +03:00 — Виправлення геометрії діалогу і Core free categories
+
+**Проблематика:**
+Після live-тесту з чистою памʼяттю бот регулярно вітався всередині активного діалогу. Логи показали, що це відбувалось ще до використання archive/Core: у `context_budget` для проблемних turns було `archive=0` і `core=0`. Причина була на межі host prompt: Telegram host передавав моделі компактний JSON-пакет, а не рольовий діалог, ще й з перекриттям `session_recent`/`session_trace`. Модель бачила це як новий запит із довідковими даними, а не як продовження розмови.
+
+Другий дефект: після переходу на вільні категорії Core (`name`, `pet`, `age`, `physical_trait`, тощо) Rust `core_context_package` і `patch_core_fact` усе ще читали тільки старий whitelist `profile/preferences/relationship`. Через це Core-факти фізично лежали у `memory/core/store/*.json`, але не потрапляли в prompt і не завжди могли бути відредаговані командою `/core_forget`.
+
+**Задум:**
+Звичайний chat prompt має бути не storage/debug JSON, а компактним рольовим transcript. Storage може лишатись повним і аудитним, але LLM має отримувати рівно те, що допомагає відповісти: Core facts, короткі archive memories, активний transcript `user:` / `assistant:` і окремо current user message. Core Store має читатись як набір усіх category-файлів, бо категорії тепер є вільним normalized `snake_case`, а не enum.
+
+**Що робили:**
+- додано `Storage::read_core_store_categories()`;
+- `FileStorage` читає всі JSON-файли з `memory/core/store/`;
+- `MemoryEngine::core_context_facts()` тепер збирає активні факти з усіх категорій;
+- `MemoryEngine::patch_core_fact()` шукає факт у всіх категоріях, тому `/core_forget` і `/core_update` працюють для `name/pet/physical_trait/...`;
+- `ContextPackageConfig.core_categories` позначено як legacy seed, а не whitelist;
+- `chat_prompt()` переписано на `render_chat_prompt()`;
+- prompt тепер має `Conversation state`, `Stable Core facts`, `Relevant archived memories`, `Older active dialogue notes`, `Recent dialogue transcript` і `Current user message`;
+- current user message прибирається з recent transcript, щоб не дублювати останню репліку;
+- `session_trace` у prompt фільтрується від event ids, які вже є в `session_recent`;
+- archive prompt view стиснуто: gist, кілька personal signals, кілька emotional markers, короткі topics; повний narrative/quotes/debug payload не йде в звичайний chat prompt;
+- `prompts/telegram_chat_system.md` отримав правила геометрії діалогу: не вітатись всередині активного transcript, не плутати імʼя асистента з імʼям користувача, визнавати mid-dialog greeting як помилку.
+
+**Що зробили детально:**
+- `crates/memory_engine/src/storage.rs`: додано метод читання всіх Core Store категорій.
+- `crates/memory_engine/src/file_storage.rs`: реалізовано читання `core/store/*.json` із сортуванням за category.
+- `crates/memory_engine/src/engine.rs`: `core_context_facts` і `patch_core_fact` більше не залежать від `options.context.core_categories`.
+- `crates/memory_engine/tests/engine_sleep_recall.rs`: тести тепер перевіряють Core fact у non-legacy category `name` і patch/deprecate у category `pet`.
+- `hosts/telegram_gemini_bot/bot.py`: chat prompt став рольовим transcript, archive projection стала коротшою, додано helper-и для dedupe recent/current/trace.
+- `prompts/telegram_chat_system.md`: додано правила безпеки діалогової геометрії.
+- `docs/architecture.md`, `docs/contracts.md`, `docs/roadmap.md`: зафіксовано, що prompt-facing view не є debug JSON, а Core facts читаються з усіх free categories.
+
+**Проблеми чи виклики:**
+Це не гарантує, що Gemini ніколи не привітається невчасно, але прибирає головні структурні причини: JSON замість діалогу, дублювання контексту і відсутність явного правила в system prompt. Після цього потрібен короткий live retest на тій самій поведінці.
+
+**Фідбек від користувача:**
+Користувач помітив, що mid-dialog greeting повторюється майже кожен раз, і попросив визначити, чи це проблема памʼяті, промпта або випадкової поведінки моделі. Логи підтвердили, що це host prompt / system prompt, а не stale memory.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `cargo fmt` — виконано.
+- `cargo test --workspace` — пройшло.
+
+**Наступні кроки:**
+Після повного gate-прогону перезапустити бота і перевірити коротку живу сесію: кілька turns без привітання всередині, `/core` після sleep/Core bridge, питання про стару тему після archive recall.
+
+## Запис 56 — 2026-05-22 11:16 +03:00 — Local harness і виправлення витоку archive recall між сесіями
+
+**Проблематика:**
+Після виправлення prompt geometry треба було мати спосіб самому ганяти бота без Telegram-інтерфейсу, але не через один тупий golden path. Користувач прямо наголосив, що тест має бути схожим на живу розмову: різні теми, вподобання, шум, імена, зміна контексту. Перший реальний harness-прогін одразу показав серйозний дефект: свіжа локальна сесія отримувала `archive_relevant` зі старих сесій і могла відповідати зі старим контекстом, наприклад називати користувача Микитою ще до представлення у новій сесії.
+
+**Задум:**
+Зробити локальний conversation harness як preflight перед Telegram acceptance: він має використовувати той самий шлях, що й Telegram host (`core_context_package`, prompt builder, Gemini client, ingest, sleep completion, Archive → Core bridge), але без Telegram token і polling. Одночасно закрити boundary: звичайний recall для chat context не має тягнути archive entries з інших сесій. Глобальний recall має лишатись тільки для explicit debug/admin-виклику без `session_id`.
+
+**Що робили:**
+- додано `hosts/telegram_gemini_bot/local_harness.py`;
+- додано `hosts/telegram_gemini_bot/run_local_harness.ps1`;
+- harness читає Gemini key/model mapping з `runtime/state/secrets.local.json` або env, Telegram token не потрібен;
+- додано сценарії `mixed_short`, `topic_switching`, `identity_noise` і `all`;
+- harness пише markdown-звіти у `hosts/telegram_gemini_bot/runtime/logs/local_harness/`;
+- harness перевіряє mid-dialog greeting після першої відповіді;
+- `stdout/stderr` у harness переведено в UTF-8 із replacement, щоб Windows console не падала на emoji;
+- `MemoryEngine::recall()` тепер фільтрує archive candidates за `RecallQuery.session_id`, якщо він заданий;
+- explicit global archive recall лишився можливим, якщо `session_id` не передано;
+- додано тест `engine_recall_with_session_id_does_not_leak_other_sessions`;
+- оновлено `HISTORY.md`, `docs/architecture.md`, `docs/contracts.md`, `docs/local-development.md`, `docs/roadmap.md`, `docs/v0.1-acceptance.md`, `hosts/telegram_gemini_bot/README.md`.
+
+**Що зроблено детально:**
+1. Local harness створює окремі `local_harness_<scenario>_<timestamp>` сесії, щоб не псувати Telegram runtime-сесії.
+2. Сценарії не зводяться до одного шаблону:
+   - `mixed_short` — коротка змішана розмова;
+   - `topic_switching` — перемикання тем і повернення до старих контекстів;
+   - `identity_noise` — перевірка, що імʼя асистента і користувача не змішуються.
+3. Після першого smoke-run виявлено, що у fresh local session на першому turn був `archive=1748/3000`, тобто `core_context_package` отримував archive entries зі старих сесій.
+4. Причина була в `recall()`: stage1 archive recall ранжував усі completed archive entries, а `session_id` не був boundary.
+5. Після виправлення fresh harness session має `archive=0/3000` на першому turn, і старий контекст не просочується.
+6. `identity_noise` smoke-run підтвердив, що бот правильно розрізнив: "Маяк" — імʼя асистента у цій розмові, "Микита" — імʼя користувача.
+
+**Проблеми чи виклики:**
+Harness корисний як preflight, але він не замінює Telegram acceptance. У Telegram лишаються реальні ризики polling, дублювання process-ів, Telegram update offset і UX команд. Також короткі harness-прогони не доводять auto-sleep на 50+ events; для цього потрібен окремий сценарний прогін.
+
+**Фідбек від користувача:**
+Користувач попросив не робити тест "скриптом на один сценарій", а імітувати розмову живіше: по-різному, з загальними темами, вподобаннями і шумом. Це стало прямим обмеженням для harness-сценаріїв.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py hosts\telegram_gemini_bot\local_harness.py` — пройшло.
+- `git diff --check` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло; у `engine_sleep_recall` 16 тестів, включно з `engine_recall_with_session_id_does_not_leak_other_sessions`.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest crates\python_adapter\tests` — 11 passed.
+- `crates\python_adapter\.venv\Scripts\python.exe hosts\telegram_gemini_bot\local_harness.py --scenario mixed_short --turn-limit 4 --no-force-sleep-at-end` — пройшло; report: `runtime/logs/local_harness/local_harness_mixed_short_20260522_110803.md`.
+- `crates\python_adapter\.venv\Scripts\python.exe hosts\telegram_gemini_bot\local_harness.py --scenario identity_noise --turn-limit 4 --no-force-sleep-at-end` — пройшло; report: `runtime/logs/local_harness/local_harness_identity_noise_20260522_111557.md`.
+
+**Наступні кроки:**
+Не закривати v0.1 лише на основі harness. Далі потрібен або довший local harness `--scenario all` з auto-sleep, або живий Telegram acceptance за `docs/v0.1-acceptance.md`, щоб перевірити повний цикл 50+ events, sleep, archive recall, Core bridge, token budget і відсутність mid-dialog greeting у production-like інтерфейсі.

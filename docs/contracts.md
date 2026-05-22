@@ -723,13 +723,25 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
   "recall_limit": 5,
   "session_recent_limit": 40,
   "session_trace_event_limit": 120,
-  "include_core": false
+  "include_core": false,
+  "token_budget": {
+    "total_tokens": 11000,
+    "current_memory_tokens": 7000,
+    "compressed_memory_tokens": 3000,
+    "core_tokens": 1000
+  }
 }
 ```
 
 `domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
 
 `session_recent` і `session_trace` у відповіді містять тільки active tail: події поточної сесії, які ще не покриті жодним archive entry через `source_event_ids`. Події, які вже пройшли sleep, повертаються через `archive_relevant`, а не дублюються як raw session events. Default rolling sleep лишає приблизно 30% найсвіжіших unarchived events active, якщо window досяг `partial_sleep_min_events`.
+
+`token_budget` необовʼязковий. Якщо host його не передає, ядро використовує default 11k/7k/3k/1k. Це budget для memory context package, а не повний budget усього LLM-запиту. На v0.1 token count — детермінована оцінка за conservative estimator, не provider-specific tokenizer.
+
+На v0.1 `core_facts` читаються з усіх файлів `memory/core/store/*.json`, а не з фіксованого списку категорій. Категорія є вільним normalized `snake_case` рядком, який приходить із LLM personal-signal pass або explicit host command. Старі категорії `profile/preferences/relationship` не є whitelist.
+
+`core_context_package.v1` є API/debug контрактом. Звичайний LLM prompt може і повинен мати компактну host projection: рольовий transcript замість JSON-дампу, короткі archive bullets замість повного narrative/debug payload, без довгих технічних ID, якщо вони не потрібні для конкретної команди.
 
 ### 6.5 CoreContextPackage
 
@@ -741,7 +753,7 @@ Core Context Package не обов'язково зберігається на д
   "created_at": "2026-05-17T17:25:00.000Z",
   "core_facts": [
     {
-      "category": "profile",
+      "category": "location",
       "core_fact_id": "core_fact_01J00000000000000000000001",
       "scope": "telegram_311422683",
       "text": "Користувач живе в Берліні.",
@@ -787,6 +799,23 @@ Core Context Package не обов'язково зберігається на д
       "relevance_score": 0.8
     }
   ],
+  "budget": {
+    "estimator": "unicode_chars_div_2_ceil_json_v1",
+    "total_budget_tokens": 11000,
+    "current_memory_budget_tokens": 7000,
+    "compressed_memory_budget_tokens": 3000,
+    "core_budget_tokens": 1000,
+    "estimated_total_tokens": 2480,
+    "estimated_current_memory_tokens": 1710,
+    "estimated_compressed_memory_tokens": 520,
+    "estimated_core_tokens": 250,
+    "estimated_domain_state_tokens": 40,
+    "dropped_session_recent": 0,
+    "dropped_session_trace": 0,
+    "dropped_archive_relevant": 0,
+    "dropped_core_facts": 0,
+    "budget_exceeded": false
+  },
   "domain_state": {
     "active_topic": "travel_planning"
   },
@@ -794,7 +823,11 @@ Core Context Package не обов'язково зберігається на д
 }
 ```
 
-На v0.1 `core_facts` заповнюється з категорій `profile`, `preferences`, `relationship`, якщо host або користувач уже зберіг туди стабільні факти. Хости мають використовувати `CoreContextPackage` як єдину точку збору prompt-контексту, а не дублювати session/recent/archive/core логіку в кожному host-і.
+На v0.1 `core_facts` заповнюється стабільними фактами поточного `core_scope`; категорії є вільними normalized `snake_case`, а не закритим списком. Хости мають використовувати `CoreContextPackage` як єдину точку збору prompt-контексту, а не дублювати session/recent/archive/core логіку в кожному host-і.
+
+`budget` завжди показує, скільки memory context приблизно займає після trimming. Active session events зберігаються від найсвіжіших назад, `archive_relevant` — за recall ranking, `core_facts` — за confidence. Якщо `budget_exceeded: true`, host має логувати це як warning і перевірити `domain_state` або власний prompt overhead.
+
+Важливо: цей JSON-контракт є API/debug формою, а не обовʼязковим дослівним prompt payload. Для LLM має використовуватись компактне prompt-facing представлення: без `schema_version`, довгих `event_id` / `archive_id` / `core_fact_id`, службових `source`, зайвих timestamp/source полів і дубльованих технічних ключів, якщо вони не потрібні для конкретної відповіді або debug-команди. Канонічні storage-файли лишаються повними; prompt view має нести сенс, а не аудитну обвʼязку. На v0.1 Telegram host реалізує compact projection перед chat prompt; спільний engine-level `prompt_view` контракт лишається задачею v0.2.
 
 ---
 
@@ -900,6 +933,8 @@ CandidateBelief - кандидат на стабільний висновок у
 - `core`.
 
 На v0.1 основний recall працює по `archive` і `core`. Пошук у live-session може бути доданий як проста перевірка поточної сесії.
+
+`session_id` у `RecallQuery` є isolation boundary для archive recall. Якщо поле задане, ядро повертає тільки archive entries, де `source_session_id` дорівнює цьому `session_id`. Це default для `core_context_package` і звичайного chat prompt. Якщо хосту потрібен явний глобальний archive search для debug/admin-команди, він має передати `session_id: null` або не передавати поле.
 
 `limit`:
 

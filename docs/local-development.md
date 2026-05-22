@@ -181,7 +181,7 @@ hosts/telegram_gemini_bot/
 .\hosts\telegram_gemini_bot\run_gui.ps1
 ```
 
-Він відкриває маленьке вікно з полями для Telegram token, Gemini API key, model mapping і порога auto-sleep. Секрети передаються в bot через env-змінні й не записуються у файли.
+Він відкриває маленьке вікно з полями для Telegram token, Gemini API key, model mapping і порога auto-sleep. Для локальної зручності GUI може кешувати ці значення у `hosts/telegram_gemini_bot/runtime/state/secrets.local.json`; файл gitignored і має кнопку очищення.
 
 Скрипт:
 
@@ -220,7 +220,36 @@ Runtime log host-бота:
 hosts/telegram_gemini_bot/runtime/logs/bot.log
 ```
 
-У log пишуться старт bot-а, polling batches, message id, короткий текст обробленого update і traceback-и помилок. API keys не логуються.
+У log пишуться старт bot-а, polling batches, message id, короткий текст обробленого update, traceback-и помилок, `context_budget` для кожного chat turn, `token_usage` для кожного Gemini-виклику і `sleep_compression_tokens` для sleep. API keys не логуються.
+
+Детальна token telemetry:
+
+```text
+hosts/telegram_gemini_bot/runtime/logs/token_usage.jsonl
+```
+
+Там кожен рядок — JSON record. Для Gemini-викликів пишуться `operation`, `model_role`, `model`, provider `usageMetadata` (`prompt_tokens`, `output_tokens`, `total_tokens`, `thoughts_tokens`), estimated prompt/output tokens і, для chat replies, estimated baseline "raw history without compression" та savings estimate. Для sleep пишеться `sleep_compression_metric`: скільки estimated tokens мав raw transcript і скільки має compact compressed archive payload.
+
+## Локальний Conversation Harness Без Telegram
+
+Для перевірки памʼяті без Telegram polling є harness:
+
+```powershell
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --list-scenarios
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --dry-run
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --turn-limit 4 --no-force-sleep-at-end
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario all
+```
+
+Він використовує той самий `memory_engine`, Gemini client, `core_context_package`, prompt builder, sleep flow і Archive → Core bridge, що й Telegram host. Telegram token не потрібен. Gemini key і model mapping читаються з `hosts/telegram_gemini_bot/runtime/state/secrets.local.json` або з env-змінних (`GEMINI_API_KEY`, `MEMORY_BOT_MODEL_*`).
+
+Сценарії навмисно не є одним жорстким golden path: `mixed_short`, `topic_switching`, `identity_noise` перевіряють різні переходи тем, особисті твердження, шум і контроль mid-dialog greeting. Reports пишуться сюди:
+
+```text
+hosts/telegram_gemini_bot/runtime/logs/local_harness/
+```
+
+Harness — це preflight для швидкої діагностики. Він не замінює acceptance на реальному Telegram host, бо Telegram лишається першим production-like інтерфейсом.
 
 Telegram polling offset host-бота:
 
@@ -235,7 +264,7 @@ Offset зберігається після кожного обробленого
 - plain text користувача зберігається як `user_message`;
 - `engine.ingest()` повертає `IngestResult` з `stored_event` і можливим `auto_sleep`;
 - bot просить `engine.core_context_package(...)`, а не збирає recent/trace/archive сам;
-- Gemini отримує готовий context package: `session_recent`, `session_trace`, `archive_relevant`, `core_facts`, `domain_state`;
+- Gemini отримує compact prompt view із `session_recent`, `session_trace`, `archive_relevant`, `core_facts`, `domain_state`; повний debug/API package лишається в engine response і log/report, але не тягнеться в ordinary chat prompt із довгими IDs;
 - `session_recent` і `session_trace` містять тільки unarchived active tail; події, які вже пройшли sleep, мають приходити через `archive_relevant`;
 - rolling sleep за замовчуванням лишає приблизно 30% найсвіжіших unarchived events active, тому після auto-sleep бот не має різко втрачати щойно обговорений хвіст;
 - відповідь bot-а зберігається як `assistant_message`;

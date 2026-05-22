@@ -263,6 +263,21 @@ impl Storage for FileStorage {
         read_json(&path)
     }
 
+    fn read_core_store_categories(&self) -> Result<Vec<CoreStoreCategory>> {
+        let mut files = Vec::new();
+        collect_json_files(&self.root.join("core").join("store"), &mut files)?;
+
+        let mut categories = Vec::new();
+        for path in files {
+            categories.push(read_json(&path)?);
+        }
+        categories.sort_by(|left: &CoreStoreCategory, right: &CoreStoreCategory| {
+            left.category.cmp(&right.category)
+        });
+
+        Ok(categories)
+    }
+
     fn write_core_store_category(&mut self, category: &CoreStoreCategory) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.core_store_path(&category.category), category)

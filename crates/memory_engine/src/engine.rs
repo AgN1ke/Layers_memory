@@ -8,8 +8,9 @@ use time::OffsetDateTime;
 
 use crate::archive::{ArchiveEntry, ArchiveFilters, ArchiveStatus};
 use crate::core_store::{
-    CoreContextEvent, CoreContextFact, CoreContextPackage, CoreContextRequest, CoreFact,
-    CoreFactInput, CoreFactPatchInput, CoreFactPatchResult, CoreFactStatus, CoreFactUpsertResult,
+    CoreContextBudgetReport, CoreContextEvent, CoreContextFact, CoreContextPackage,
+    CoreContextRequest, CoreContextTokenBudget, CoreFact, CoreFactInput, CoreFactPatchInput,
+    CoreFactPatchResult, CoreFactStatus, CoreFactUpsertResult,
 };
 use crate::event::{IngestEvent, StoredEvent};
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
@@ -237,8 +238,7 @@ impl<S: Storage> MemoryEngine<S> {
         let patch_text = input.text.as_deref().map(normalize_whitespace);
         let patch_tags = input.tags.map(unique_strings);
 
-        for category_name in &self.options.context.core_categories {
-            let mut category = self.storage.read_core_store_category(category_name)?;
+        for mut category in self.storage.read_core_store_categories()? {
             let Some(fact) = category
                 .facts
                 .iter_mut()
@@ -349,7 +349,7 @@ impl<S: Storage> MemoryEngine<S> {
         } else {
             Vec::new()
         };
-        let notes = if request.include_core && core_facts.is_empty() {
+        let mut notes = if request.include_core && core_facts.is_empty() {
             vec![
                 "core_facts are empty; no stable Core Store facts have been saved yet.".to_string(),
             ]
@@ -357,14 +357,28 @@ impl<S: Storage> MemoryEngine<S> {
             Vec::new()
         };
 
-        Ok(CoreContextPackage {
-            schema_version: CORE_CONTEXT_PACKAGE_SCHEMA_VERSION.to_string(),
-            created_at,
+        let budget_config = request
+            .token_budget
+            .unwrap_or(self.options.context.token_budget);
+        let budgeted = apply_context_token_budget(
             core_facts,
             session_recent,
             session_trace,
             archive_relevant,
+            &request.domain_state,
+            budget_config,
+        );
+        notes.extend(budgeted.notes);
+
+        Ok(CoreContextPackage {
+            schema_version: CORE_CONTEXT_PACKAGE_SCHEMA_VERSION.to_string(),
+            created_at,
+            core_facts: budgeted.core_facts,
+            session_recent: budgeted.session_recent,
+            session_trace: budgeted.session_trace,
+            archive_relevant: budgeted.archive_relevant,
             domain_state: request.domain_state,
+            budget: Some(budgeted.report),
             notes,
         })
     }
@@ -372,8 +386,7 @@ impl<S: Storage> MemoryEngine<S> {
     fn core_context_facts(&self, scope: Option<&str>) -> Result<Vec<CoreContextFact>> {
         let normalized_scope = normalize_optional_string(scope);
         let mut facts = Vec::new();
-        for category_name in &self.options.context.core_categories {
-            let category = self.storage.read_core_store_category(category_name)?;
+        for category in self.storage.read_core_store_categories()? {
             let fact_category = category.category.clone();
             for fact in category.facts {
                 if fact.status != CoreFactStatus::Active {
@@ -524,6 +537,12 @@ impl<S: Storage> MemoryEngine<S> {
                 .read_archive(&archive_filters_from_recall(&query.filters))?
                 .into_iter()
                 .filter(|entry| entry.status == ArchiveStatus::Complete)
+                .filter(|entry| {
+                    query
+                        .session_id
+                        .as_ref()
+                        .is_none_or(|session_id| &entry.source_session_id == session_id)
+                })
                 .collect()
         } else {
             Vec::new()
@@ -639,7 +658,11 @@ pub struct AutoSleepConfig {
 pub struct ContextPackageConfig {
     pub default_session_recent_limit: usize,
     pub default_session_trace_event_limit: usize,
+    /// Legacy seed list kept for compatibility with older host configs.
+    /// Core context now reads every category file in Core Store, because
+    /// v0.1 uses free normalized categories produced by LLM memory passes.
     pub core_categories: Vec<String>,
+    pub token_budget: CoreContextTokenBudget,
 }
 
 impl Default for RecallStage1Config {
@@ -673,6 +696,7 @@ impl Default for ContextPackageConfig {
                 "preferences".to_string(),
                 "relationship".to_string(),
             ],
+            token_budget: CoreContextTokenBudget::default(),
         }
     }
 }
@@ -913,6 +937,168 @@ fn session_context_events(
             theme: event.theme.clone(),
         })
         .collect()
+}
+
+struct BudgetedContextPackage {
+    core_facts: Vec<CoreContextFact>,
+    session_recent: Vec<CoreContextEvent>,
+    session_trace: Vec<CoreContextEvent>,
+    archive_relevant: Vec<RecallItem>,
+    report: CoreContextBudgetReport,
+    notes: Vec<String>,
+}
+
+fn apply_context_token_budget(
+    core_facts: Vec<CoreContextFact>,
+    session_recent: Vec<CoreContextEvent>,
+    session_trace: Vec<CoreContextEvent>,
+    archive_relevant: Vec<RecallItem>,
+    domain_state: &Value,
+    budget: CoreContextTokenBudget,
+) -> BudgetedContextPackage {
+    let estimated_domain_state_tokens = estimate_json_tokens(domain_state);
+
+    let (core_facts, estimated_core_tokens, dropped_core_facts) =
+        keep_front_within_budget(core_facts, budget.core_tokens);
+
+    let current_memory_budget = budget
+        .current_memory_tokens
+        .saturating_sub(estimated_domain_state_tokens);
+    let (session_recent, estimated_session_recent_tokens, dropped_session_recent) =
+        keep_recent_within_budget(session_recent, current_memory_budget);
+    let remaining_current_budget =
+        current_memory_budget.saturating_sub(estimated_session_recent_tokens);
+    let (session_trace, estimated_session_trace_tokens, dropped_session_trace) =
+        keep_recent_within_budget(session_trace, remaining_current_budget);
+
+    let (archive_relevant, estimated_compressed_memory_tokens, dropped_archive_relevant) =
+        keep_front_within_budget(archive_relevant, budget.compressed_memory_tokens);
+
+    let estimated_current_memory_tokens = estimated_domain_state_tokens
+        + estimated_session_recent_tokens
+        + estimated_session_trace_tokens;
+    let estimated_total_tokens = estimated_current_memory_tokens
+        + estimated_compressed_memory_tokens
+        + estimated_core_tokens;
+
+    let budget_exceeded = estimated_total_tokens > budget.total_tokens
+        || estimated_current_memory_tokens > budget.current_memory_tokens
+        || estimated_compressed_memory_tokens > budget.compressed_memory_tokens
+        || estimated_core_tokens > budget.core_tokens;
+
+    let mut notes = Vec::new();
+    if estimated_domain_state_tokens > budget.current_memory_tokens {
+        notes.push(format!(
+            "domain_state alone exceeds current-memory budget: estimated {estimated_domain_state_tokens} tokens > budget {}.",
+            budget.current_memory_tokens
+        ));
+    }
+    if dropped_session_recent > 0 {
+        notes.push(format!(
+            "token budget dropped {dropped_session_recent} session_recent event(s); newest events were kept."
+        ));
+    }
+    if dropped_session_trace > 0 {
+        notes.push(format!(
+            "token budget dropped {dropped_session_trace} session_trace event(s); newest events were kept."
+        ));
+    }
+    if dropped_archive_relevant > 0 {
+        notes.push(format!(
+            "token budget dropped {dropped_archive_relevant} archive_relevant item(s); highest-ranked recall items were kept."
+        ));
+    }
+    if dropped_core_facts > 0 {
+        notes.push(format!(
+            "token budget dropped {dropped_core_facts} core fact(s); highest-confidence facts were kept."
+        ));
+    }
+    if budget_exceeded {
+        notes.push(
+            "token budget is still exceeded after trimming; inspect domain_state/current turn size."
+                .to_string(),
+        );
+    }
+
+    BudgetedContextPackage {
+        core_facts,
+        session_recent,
+        session_trace,
+        archive_relevant,
+        report: CoreContextBudgetReport {
+            estimator: "unicode_chars_div_2_ceil_json_v1".to_string(),
+            total_budget_tokens: budget.total_tokens,
+            current_memory_budget_tokens: budget.current_memory_tokens,
+            compressed_memory_budget_tokens: budget.compressed_memory_tokens,
+            core_budget_tokens: budget.core_tokens,
+            estimated_total_tokens,
+            estimated_current_memory_tokens,
+            estimated_compressed_memory_tokens,
+            estimated_core_tokens,
+            estimated_domain_state_tokens,
+            dropped_session_recent,
+            dropped_session_trace,
+            dropped_archive_relevant,
+            dropped_core_facts,
+            budget_exceeded,
+        },
+        notes,
+    }
+}
+
+fn keep_front_within_budget<T: Clone + Serialize>(
+    items: Vec<T>,
+    budget: usize,
+) -> (Vec<T>, usize, usize) {
+    let original_len = items.len();
+    let mut kept = Vec::new();
+    let mut used = 0usize;
+
+    for item in items {
+        let estimate = estimate_json_tokens(&item);
+        if used + estimate <= budget {
+            used += estimate;
+            kept.push(item);
+        }
+    }
+
+    let dropped = original_len.saturating_sub(kept.len());
+    (kept, used, dropped)
+}
+
+fn keep_recent_within_budget<T: Clone + Serialize>(
+    items: Vec<T>,
+    budget: usize,
+) -> (Vec<T>, usize, usize) {
+    let original_len = items.len();
+    let mut kept_reversed = Vec::new();
+    let mut used = 0usize;
+
+    for item in items.into_iter().rev() {
+        let estimate = estimate_json_tokens(&item);
+        if used + estimate <= budget {
+            used += estimate;
+            kept_reversed.push(item);
+        }
+    }
+    kept_reversed.reverse();
+
+    let dropped = original_len.saturating_sub(kept_reversed.len());
+    (kept_reversed, used, dropped)
+}
+
+fn estimate_json_tokens<T: Serialize>(value: &T) -> usize {
+    serde_json::to_string(value)
+        .map(|text| estimate_text_tokens(&text))
+        .unwrap_or(0)
+}
+
+fn estimate_text_tokens(text: &str) -> usize {
+    if text.is_empty() {
+        0
+    } else {
+        text.chars().count().div_ceil(2)
+    }
 }
 
 fn compactable_sleep_events<'a>(

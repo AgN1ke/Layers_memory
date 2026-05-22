@@ -93,9 +93,15 @@ def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine
                     "session_recent_limit": 50,
                     "session_trace_event_limit": 50,
                     "include_core": False,
+                    "token_budget": {
+                        "total_tokens": 50000,
+                        "current_memory_tokens": 45000,
+                        "compressed_memory_tokens": 4000,
+                        "core_tokens": 1000,
+                    },
                 }
+                )
             )
-        )
     )
     assert len(package["session_trace"]) == 50
     assert package["session_trace"][0]["text"] == "Подія 0"
@@ -132,9 +138,15 @@ def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine
                     "session_recent_limit": 50,
                     "session_trace_event_limit": 50,
                     "include_core": False,
+                    "token_budget": {
+                        "total_tokens": 50000,
+                        "current_memory_tokens": 45000,
+                        "compressed_memory_tokens": 4000,
+                        "core_tokens": 1000,
+                    },
                 }
+                )
             )
-        )
     )
     assert len(completed_package["session_trace"]) == 15
     assert completed_package["session_trace"][0]["text"] == "Подія 35"

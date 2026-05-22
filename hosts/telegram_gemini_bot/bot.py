@@ -39,6 +39,7 @@ MEMORY_DIR = RUNTIME_DIR / "memory"
 ARCHIVE_DIR = MEMORY_DIR / "archive"
 LOG_DIR = RUNTIME_DIR / "logs"
 LOG_PATH = LOG_DIR / "bot.log"
+TOKEN_USAGE_PATH = LOG_DIR / "token_usage.jsonl"
 STATE_DIR = RUNTIME_DIR / "state"
 OFFSET_PATH = STATE_DIR / "telegram_offset.json"
 
@@ -72,23 +73,7 @@ MEMORY_UPDATE_KEYWORD_PARTS = (
 ARCHIVE_LIST_LIMIT = 5
 ARCHIVE_DETAIL_LIMIT = 10
 CORE_SIGNAL_MIN_CONFIDENCE = 0.85
-CORE_SIGNAL_CATEGORY_MAP = {
-    "profile": "profile",
-    "identity": "profile",
-    "self_definition": "profile",
-    "preference": "preferences",
-    "preferences": "preferences",
-    "value": "preferences",
-    "values": "preferences",
-    "interest": "preferences",
-    "relationship": "relationship",
-    "relationships": "relationship",
-    "recurring_entity": "relationship",
-    "assistant_identity": "relationship",
-    "communication_style": "preferences",
-    "pet": "relationship",
-    "pets": "relationship",
-}
+MAX_CORE_CATEGORY_LENGTH = 64
 
 
 @dataclass(frozen=True)
@@ -115,6 +100,34 @@ class HostLlmConfig:
 
     def chat_model(self) -> ModelSelection:
         return self.for_role(self.chat_role)
+
+
+@dataclass(frozen=True)
+class GeminiTextResponse:
+    text: str
+    usage: dict[str, int | None]
+    model: str
+    operation: str
+
+
+class GeminiApiError(RuntimeError):
+    def __init__(self, model: str, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.model = model
+        self.status_code = status_code
+
+
+class GeminiNoCandidatesError(RuntimeError):
+    def __init__(self, model: str, result: dict[str, Any]) -> None:
+        self.model = model
+        self.result = result
+        self.block_reason = (
+            result.get("promptFeedback", {}).get("blockReason")
+            if isinstance(result.get("promptFeedback"), dict)
+            else None
+        )
+        self.usage = gemini_usage_metadata(result)
+        super().__init__(f"Gemini {model} returned no candidates: {result}")
 
 
 class AutoSleepRunner:
@@ -173,11 +186,7 @@ class AutoSleepRunner:
         except Exception as err:
             log_exception(f"{reason} completion failed", err)
             if telegram is not None and chat_id is not None:
-                telegram.send_message(
-                    chat_id,
-                    f"Memory update failed. Check runtime log: {LOG_PATH}\n\n"
-                    f"{type(err).__name__}: {err}",
-                )
+                telegram.send_message(chat_id, "Memory update failed.\n\n" + friendly_error_message(err))
         finally:
             with self._lock:
                 self._running_task_ids.discard(task_id)
@@ -255,7 +264,10 @@ class GeminiClient:
         system_instruction: str,
         prompt: str,
         response_mime_type: str | None = None,
-    ) -> str:
+        operation: str = "generate_text",
+        model_role: str | None = None,
+        telemetry: dict[str, Any] | None = None,
+    ) -> GeminiTextResponse:
         url_model = urllib.parse.quote(model, safe="")
         url = f"{GEMINI_API}/models/{url_model}:generateContent"
         payload = {
@@ -280,18 +292,47 @@ class GeminiClient:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as err:
             body = err.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Gemini {model} failed: HTTP {err.code}: {body}") from err
+            raise GeminiApiError(
+                model=model,
+                status_code=err.code,
+                message=f"Gemini {model} failed: HTTP {err.code}: {body}",
+            ) from err
         except urllib.error.URLError as err:
-            raise RuntimeError(f"Gemini {model} failed: {err}") from err
+            raise GeminiApiError(model=model, message=f"Gemini {model} failed: {err}") from err
 
-        return extract_gemini_text(result)
+        usage = gemini_usage_metadata(result)
+        try:
+            text = extract_gemini_text(result, model)
+        except GeminiNoCandidatesError:
+            log_token_usage(
+                operation=operation,
+                model=model,
+                model_role=model_role,
+                usage=usage,
+                prompt=prompt,
+                output="",
+                response_mime_type=response_mime_type,
+                telemetry={**(telemetry or {}), "error": "no_candidates"},
+            )
+            raise
+        log_token_usage(
+            operation=operation,
+            model=model,
+            model_role=model_role,
+            usage=usage,
+            prompt=prompt,
+            output=text,
+            response_mime_type=response_mime_type,
+            telemetry=telemetry,
+        )
+        return GeminiTextResponse(text=text, usage=usage, model=model, operation=operation)
 
 
 def main() -> None:
     print("Telegram Gemini Memory Bot")
     print(f"Runtime memory: {MEMORY_DIR}")
     print(f"Runtime log: {LOG_PATH}")
-    print("Keys are read from terminal and are not stored.")
+    print(f"Local secrets cache: {STATE_DIR / 'secrets.local.json'} (gitignored)")
     print()
     log_line("starting Telegram Gemini Memory Bot")
 
@@ -494,11 +535,16 @@ def handle_update(
 
     package = context_package(engine, session_id, chat_id, text)
     model = llm_config.chat_model().model
-    answer = gemini.generate_text(
+    prompt = chat_prompt(package, text)
+    answer_response = gemini.generate_text(
         model=model,
         system_instruction=chat_system_instruction(),
-        prompt=chat_prompt(package, text),
+        prompt=prompt,
+        operation="chat_reply",
+        model_role=llm_config.chat_role,
+        telemetry=chat_prompt_telemetry(package, session_id, prompt),
     )
+    answer = answer_response.text
     telegram.send_message(chat_id, answer)
     assistant_ingest = ingest_chat_event(
         engine=engine,
@@ -588,6 +634,7 @@ def complete_sleep_result(
     updated = json.loads(
         engine.resume_sleep_compression(task["task_id"], json.dumps(llm_result, ensure_ascii=False))
     )
+    log_sleep_compression_metrics(task, llm_result)
     core_summary = promote_archive_personal_signals(engine, updated)
     return (
         f"Archive: {archive['archive_id']}\n"
@@ -620,8 +667,8 @@ def promote_archive_personal_signals(
             continue
 
         text = clean_string(signal.get("text"))
-        source_category = clean_string(signal.get("category")).lower()
-        core_category = CORE_SIGNAL_CATEGORY_MAP.get(source_category)
+        source_category = normalize_category(signal.get("category"))
+        core_category = source_category
         confidence = clamp_float(signal.get("confidence"), 0.0)
         source_event_ids = normalize_string_list(signal.get("source_event_ids"))
         has_user_source = bool(user_event_ids) and any(
@@ -629,7 +676,7 @@ def promote_archive_personal_signals(
         )
         if (
             not text
-            or core_category is None
+            or not core_category
             or confidence < CORE_SIGNAL_MIN_CONFIDENCE
             or not has_user_source
             or is_near_duplicate_core_fact(core_category, scope, text)
@@ -808,19 +855,34 @@ def execute_multi_pass_sleep_compression(
         "sleep_relational_pass", pass_input, task["role_hint"], gemini, llm_config
     )
 
-    consolidated = execute_prompt_json(
-        "sleep_consolidator",
-        {
-            "sleep_task": sleep_input,
-            "emotional_pass": emotional,
-            "topic_thread_pass": topic_thread,
-            "personal_signal_pass": personal_signals,
-            "relational_pass": relational,
-        },
-        task["role_hint"],
-        gemini,
-        llm_config,
-    )
+    consolidator_input = {
+        "sleep_task": sleep_input,
+        "emotional_pass": emotional,
+        "topic_thread_pass": topic_thread,
+        "personal_signal_pass": personal_signals,
+        "relational_pass": relational,
+    }
+    try:
+        consolidated = execute_prompt_json(
+            "sleep_consolidator",
+            consolidator_input,
+            task["role_hint"],
+            gemini,
+            llm_config,
+            retry_on_json_error=True,
+        )
+        completion_mode = "consolidated"
+    except Exception as err:
+        log_exception("sleep_consolidator failed; using track fallback", err)
+        consolidated = fallback_sleep_compression_result(
+            task=task,
+            emotional=emotional,
+            topic_thread=topic_thread,
+            personal_signals=personal_signals,
+            relational=relational,
+            error=err,
+        )
+        completion_mode = "fallback_from_tracks"
 
     normalize_sleep_compression_result(consolidated, task)
     if not consolidated["emotional_markers"]:
@@ -831,8 +893,88 @@ def execute_multi_pass_sleep_compression(
         consolidated["personal_signals"] = personal_signals.get("personal_signals", [])
     if consolidated.get("relational_tone") is None:
         consolidated["relational_tone"] = relational.get("relational_tone")
+    consolidated["tags"] = unique_preserve_order(
+        [*consolidated.get("tags", []), f"completion_mode:{completion_mode}"]
+    )
     normalize_sleep_compression_result(consolidated, task)
     return consolidated
+
+
+def fallback_sleep_compression_result(
+    task: dict[str, Any],
+    emotional: dict[str, Any],
+    topic_thread: dict[str, Any],
+    personal_signals: dict[str, Any],
+    relational: dict[str, Any],
+    error: Exception,
+) -> dict[str, Any]:
+    emotional_markers = normalize_emotional_markers(emotional.get("emotional_markers"))
+    topic_items = normalize_topic_thread(topic_thread.get("topic_thread"))
+    signals = normalize_personal_signals(personal_signals.get("personal_signals"))
+    relational_tone = normalize_relational_tone(relational.get("relational_tone"))
+
+    primary_signal = signals[0]["text"] if signals else ""
+    primary_topic = topic_items[0]["topic"] if topic_items else ""
+    primary_emotion = ""
+    if emotional_markers:
+        marker = emotional_markers[0]
+        primary_emotion = f"{marker['target']} ({marker['affect']})"
+
+    gist_parts = [part for part in (primary_signal, primary_topic, primary_emotion) if part]
+    gist = "; ".join(gist_parts[:2]) or "Сесія збережена через fallback без фінального consolidator."
+
+    topic_lines = [
+        f"- {item['topic']}: {item.get('summary', '')}".strip()
+        for item in topic_items[:8]
+    ]
+    signal_lines = [f"- {signal['text']}" for signal in signals[:10]]
+    emotion_lines = [
+        f"- {marker['target']}: {marker['affect']} ({marker['strength']:.2f})"
+        for marker in emotional_markers[:10]
+    ]
+    narrative_sections = [
+        "Consolidator не повернув валідний JSON, тому archive зібрано з успішних спеціалізованих проходів.",
+        f"Причина fallback: {type(error).__name__}: {truncate_chars(str(error), 220)}",
+    ]
+    if topic_lines:
+        narrative_sections.append("Теми:\n" + "\n".join(topic_lines))
+    if signal_lines:
+        narrative_sections.append("Особисті сигнали:\n" + "\n".join(signal_lines))
+    if emotion_lines:
+        narrative_sections.append("Емоційні маркери:\n" + "\n".join(emotion_lines))
+
+    tags = ["multi_pass_sleep", "consolidator_fallback"]
+    for item in topic_items[:5]:
+        tags.append(normalize_category(item["topic"]))
+
+    return {
+        "schema_version": task["expected_output_schema"],
+        "archive_id": task["inputs"]["preliminary_archive_id"],
+        "gist": gist,
+        "narrative": "\n\n".join(narrative_sections),
+        "facts": [],
+        "quotes": [],
+        "tags": unique_preserve_order([tag for tag in tags if tag]),
+        "theme": primary_topic or None,
+        "weight": fallback_weight(emotional_markers, signals),
+        "links": [],
+        "emotional_markers": emotional_markers,
+        "topic_thread": topic_items,
+        "personal_signals": signals,
+        "relational_tone": relational_tone,
+    }
+
+
+def fallback_weight(emotional_markers: list[dict[str, Any]], signals: list[dict[str, Any]]) -> float:
+    strongest_emotion = max(
+        (clamp_float(marker.get("strength"), 0.0) for marker in emotional_markers),
+        default=0.0,
+    )
+    strongest_signal = max(
+        (clamp_float(signal.get("confidence"), 0.0) for signal in signals),
+        default=0.0,
+    )
+    return max(0.55, min(1.0, max(strongest_emotion, strongest_signal)))
 
 
 def execute_prompt_json(
@@ -841,17 +983,43 @@ def execute_prompt_json(
     role_hint: str,
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    retry_on_json_error: bool = False,
 ) -> dict[str, Any]:
     prompt_path = PROMPTS_DIR / f"{prompt_id}.md"
     prompt_text = prompt_path.read_text(encoding="utf-8")
     selection = llm_config.for_role(role_hint)
-    raw = gemini.generate_text(
+    prompt_payload = json.dumps(prompt_input, ensure_ascii=False, indent=2)
+    response = gemini.generate_text(
         model=selection.model,
         system_instruction=prompt_text,
-        prompt=json.dumps(prompt_input, ensure_ascii=False, indent=2),
+        prompt=prompt_payload,
         response_mime_type="application/json",
+        operation=prompt_id,
+        model_role=role_hint,
+        telemetry={"prompt_id": prompt_id},
     )
-    return parse_json_object(raw)
+    try:
+        return parse_json_object(response.text)
+    except (json.JSONDecodeError, ValueError) as err:
+        if not retry_on_json_error:
+            raise
+        retry_prompt = (
+            f"{prompt_payload}\n\n"
+            "The previous response was not valid JSON.\n"
+            f"JSON parser error: {err}\n"
+            "Return ONLY one valid JSON object matching the requested schema. "
+            "No prose. No markdown. No comments."
+        )
+        retry_response = gemini.generate_text(
+            model=selection.model,
+            system_instruction=prompt_text,
+            prompt=retry_prompt,
+            response_mime_type="application/json",
+            operation=f"{prompt_id}_retry",
+            model_role=role_hint,
+            telemetry={"prompt_id": prompt_id, "retry_reason": "json_decode_error"},
+        )
+        return parse_json_object(retry_response.text)
 
 
 def normalize_sleep_compression_result(parsed: dict[str, Any], task: dict[str, Any]) -> None:
@@ -973,7 +1141,7 @@ def normalize_personal_signals(value: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         text = clean_string(item.get("text"))
-        category = clean_string(item.get("category"))
+        category = normalize_category(item.get("category"))
         if not text or not category:
             continue
         signal: dict[str, Any] = {
@@ -1017,10 +1185,23 @@ def normalize_string_list(value: Any) -> list[str]:
     return [cleaned for item in value if (cleaned := clean_string(item))]
 
 
+def safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def clean_string(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
+
+
+def normalize_category(value: Any) -> str:
+    raw = clean_string(value).lower()
+    category = re.sub(r"[^a-z0-9_]+", "_", raw)
+    category = re.sub(r"_+", "_", category).strip("_")
+    if not category:
+        return "other"
+    return category[:MAX_CORE_CATEGORY_LENGTH].strip("_") or "other"
 
 
 def clamp_float(value: Any, default: float) -> float:
@@ -1135,7 +1316,9 @@ def context_package(
         "session_trace_event_limit": SESSION_TRACE_EVENT_LIMIT,
         "include_core": True,
     }
-    return json.loads(engine.core_context_package(json.dumps(request, ensure_ascii=False)))
+    package = json.loads(engine.core_context_package(json.dumps(request, ensure_ascii=False)))
+    log_context_budget(package, session_id)
+    return package
 
 
 def read_saved_offset() -> int | None:
@@ -1172,13 +1355,42 @@ def notify_update_error(update: dict[str, Any], telegram: TelegramClient, err: E
         return
 
     try:
-        telegram.send_message(
-            chat_id,
-            "Bot error while processing this message. "
-            f"Check runtime log: {LOG_PATH}\n\n{type(err).__name__}: {err}",
-        )
+        telegram.send_message(chat_id, friendly_error_message(err))
     except Exception as notify_err:
         log_exception("failed to send error notification to Telegram", notify_err)
+
+
+def friendly_error_message(err: Exception) -> str:
+    if isinstance(err, GeminiNoCandidatesError):
+        if err.block_reason == "PROHIBITED_CONTENT":
+            return (
+                "Модель зараз заблокувала відповідь фільтром безпеки, тому я не змогла "
+                "нормально відповісти на це повідомлення. Перефразуй, будь ласка, або "
+                "давай зайдемо з іншого боку. Деталі я записала в лог."
+            )
+        return (
+            "Модель не повернула текстову відповідь. Я записала деталі в лог, "
+            "а ти можеш повторити або перефразувати повідомлення."
+        )
+
+    if isinstance(err, GeminiApiError):
+        message = str(err).lower()
+        if "invalid" in message and "api key" in message:
+            return (
+                "Gemini відхилив API key. Перезапусти бота і введи актуальний ключ. "
+                "Повні технічні деталі записані в лог."
+            )
+        if err.status_code == 429 or "rate" in message or "quota" in message:
+            return (
+                "Gemini зараз вперся в ліміт або квоту. Зачекай трохи й спробуй ще раз. "
+                "Деталі я записала в лог."
+            )
+        return "Gemini повернув технічну помилку. Я записала деталі в лог, спробуй ще раз."
+
+    if "memory" in type(err).__name__.lower() or "memory_engine" in str(err):
+        return "Є технічна заминка в пам'яті. Я записала деталі в лог, спробуй ще раз."
+
+    return "Щось пішло не так під час обробки повідомлення. Я записала деталі в лог."
 
 
 def ingest_chat_event(
@@ -1301,16 +1513,517 @@ def log_exception(message: str, err: Exception) -> None:
     print(line, file=sys.stderr, flush=True)
 
 
+def estimate_tokens(text: str) -> int:
+    # Same deterministic conservative estimator as Rust v0.1 budget report.
+    return (len(text) + 1) // 2
+
+
+def gemini_usage_metadata(result: dict[str, Any]) -> dict[str, int | None]:
+    metadata = result.get("usageMetadata")
+    if not isinstance(metadata, dict):
+        return {
+            "prompt_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+            "thoughts_tokens": None,
+        }
+    return {
+        "prompt_tokens": int(metadata["promptTokenCount"])
+        if isinstance(metadata.get("promptTokenCount"), int)
+        else None,
+        "output_tokens": int(metadata["candidatesTokenCount"])
+        if isinstance(metadata.get("candidatesTokenCount"), int)
+        else None,
+        "total_tokens": int(metadata["totalTokenCount"])
+        if isinstance(metadata.get("totalTokenCount"), int)
+        else None,
+        "thoughts_tokens": int(metadata["thoughtsTokenCount"])
+        if isinstance(metadata.get("thoughtsTokenCount"), int)
+        else None,
+    }
+
+
+def log_token_usage(
+    operation: str,
+    model: str,
+    model_role: str | None,
+    usage: dict[str, int | None],
+    prompt: str,
+    output: str,
+    response_mime_type: str | None,
+    telemetry: dict[str, Any] | None = None,
+) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    record: dict[str, Any] = {
+        "timestamp": now_rfc3339(),
+        "kind": "gemini_token_usage",
+        "operation": operation,
+        "model_role": model_role,
+        "model": model,
+        "response_mime_type": response_mime_type,
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+        "thoughts_tokens": usage.get("thoughts_tokens"),
+        "estimated_prompt_tokens": estimate_tokens(prompt),
+        "estimated_output_tokens": estimate_tokens(output),
+        "prompt_chars": len(prompt),
+        "output_chars": len(output),
+    }
+    if telemetry:
+        record.update(telemetry)
+
+    with TOKEN_USAGE_PATH.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+    baseline = record.get("baseline_without_compression_estimated_tokens")
+    savings = record.get("estimated_savings_vs_baseline_tokens")
+    extra = ""
+    if isinstance(baseline, int):
+        extra += f" baseline_no_compression_est={baseline}"
+    if isinstance(savings, int):
+        extra += f" savings_est={savings}"
+    log_line(
+        "token_usage "
+        f"operation={operation} role={model_role or '-'} model={model} "
+        f"prompt={usage.get('prompt_tokens')} output={usage.get('output_tokens')} "
+        f"total={usage.get('total_tokens')} est_prompt={record['estimated_prompt_tokens']}"
+        f"{extra}"
+    )
+
+
+def log_context_budget(package: dict[str, Any], session_id: str) -> None:
+    budget = package.get("budget")
+    if not isinstance(budget, dict):
+        return
+    log_line(
+        "context_budget "
+        f"session={session_id} "
+        f"total={budget.get('estimated_total_tokens')}/{budget.get('total_budget_tokens')} "
+        f"current={budget.get('estimated_current_memory_tokens')}/{budget.get('current_memory_budget_tokens')} "
+        f"archive={budget.get('estimated_compressed_memory_tokens')}/{budget.get('compressed_memory_budget_tokens')} "
+        f"core={budget.get('estimated_core_tokens')}/{budget.get('core_budget_tokens')} "
+        f"domain={budget.get('estimated_domain_state_tokens')} "
+        f"dropped_recent={budget.get('dropped_session_recent')} "
+        f"dropped_trace={budget.get('dropped_session_trace')} "
+        f"dropped_archive={budget.get('dropped_archive_relevant')} "
+        f"dropped_core={budget.get('dropped_core_facts')} "
+        f"exceeded={budget.get('budget_exceeded')}"
+    )
+
+
+def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    events = task.get("inputs", {}).get("events", [])
+    transcript = sleep_events_transcript(events if isinstance(events, list) else [])
+    raw_tokens = estimate_tokens(transcript)
+    compressed_payload = {
+        "gist": result.get("gist"),
+        "narrative": result.get("narrative"),
+        "facts": result.get("facts", []),
+        "emotional_markers": result.get("emotional_markers", []),
+        "topic_thread": result.get("topic_thread", []),
+        "personal_signals": result.get("personal_signals", []),
+        "relational_tone": result.get("relational_tone"),
+    }
+    compressed_text = json.dumps(compact_archive_for_prompt(compressed_payload), ensure_ascii=False)
+    compressed_tokens = estimate_tokens(compressed_text)
+    ratio = compressed_tokens / raw_tokens if raw_tokens else 0.0
+    record = {
+        "timestamp": now_rfc3339(),
+        "kind": "sleep_compression_metric",
+        "task_id": task.get("task_id"),
+        "archive_id": task.get("inputs", {}).get("preliminary_archive_id"),
+        "raw_event_count": len(events) if isinstance(events, list) else 0,
+        "raw_chat_estimated_tokens": raw_tokens,
+        "compressed_estimated_tokens": compressed_tokens,
+        "compression_ratio": round(ratio, 4),
+        "emotional_markers": len(result.get("emotional_markers", [])),
+        "personal_signals": len(result.get("personal_signals", [])),
+        "topic_thread": len(result.get("topic_thread", [])),
+        "tags": result.get("tags", []),
+    }
+    with TOKEN_USAGE_PATH.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    log_line(
+        "sleep_compression_tokens "
+        f"task={record['task_id']} archive={record['archive_id']} "
+        f"events={record['raw_event_count']} raw_est={raw_tokens} "
+        f"compressed_est={compressed_tokens} ratio={record['compression_ratio']}"
+    )
+
+
 def chat_system_instruction() -> str:
     return CHAT_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 def chat_prompt(package: dict[str, Any], user_text: str) -> str:
+    return render_chat_prompt(package, user_text)
+
+
+def render_chat_prompt(package: dict[str, Any], user_text: str) -> str:
+    recent_events = normalized_context_events(package.get("session_recent"))
+    trace_events = normalized_context_events(package.get("session_trace"))
+    prior_recent = drop_current_user_message(recent_events, user_text)
+    recent_ids = {event["event_id"] for event in recent_events if event.get("event_id")}
+    older_trace = [
+        event
+        for event in trace_events
+        if event.get("event_id") and event["event_id"] not in recent_ids
+    ][-20:]
+
+    lines = [
+        "Memory context for this Telegram turn.",
+        f"Conversation state: {'ongoing' if prior_recent else 'new_or_no_recent_context'}.",
+    ]
+    if prior_recent:
+        lines.append(
+            "Continue the dialogue from the latest turn. Do not greet unless the current user message is a greeting."
+        )
+    else:
+        lines.append("No prior active dialogue is visible; a short greeting is allowed if natural.")
+
+    core_lines = render_core_facts_for_prompt(package.get("core_facts"))
+    if core_lines:
+        lines.extend(["", "Stable Core facts:"])
+        lines.extend(core_lines)
+
+    archive_lines = render_archive_memories_for_prompt(package.get("archive_relevant"))
+    if archive_lines:
+        lines.extend(["", "Relevant archived memories:"])
+        lines.extend(archive_lines)
+
+    if older_trace:
+        lines.extend(["", "Older active dialogue notes:"])
+        lines.extend(render_dialogue_lines(older_trace, max_text_chars=180))
+
+    if prior_recent:
+        lines.extend(["", "Recent dialogue transcript, oldest to newest:"])
+        lines.extend(render_dialogue_lines(prior_recent, max_text_chars=900))
+
+    lines.extend(["", "Current user message:", user_text])
+    return "\n".join(lines)
+
+
+def normalized_context_events(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    events = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = context_event_text(item)
+        if not text:
+            continue
+        events.append(
+            {
+                "event_id": clean_string(item.get("event_id")),
+                "role": context_event_role(item),
+                "text": text,
+            }
+        )
+    return events
+
+
+def context_event_text(event: dict[str, Any]) -> str:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    return clean_string(event.get("text")) or clean_string(payload.get("text"))
+
+
+def context_event_role(event: dict[str, Any]) -> str:
+    event_type = clean_string(event.get("type")) or clean_string(event.get("event_type"))
+    return "assistant" if event_type == "assistant_message" else "user"
+
+
+def drop_current_user_message(events: list[dict[str, str]], user_text: str) -> list[dict[str, str]]:
+    if not events:
+        return []
+    current_text = clean_string(user_text)
+    last = events[-1]
+    if last.get("role") == "user" and last.get("text") == current_text:
+        return events[:-1]
+    return events
+
+
+def render_core_facts_for_prompt(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    lines = []
+    for fact in value:
+        if not isinstance(fact, dict):
+            continue
+        text = truncate_text(clean_string(fact.get("text")), 260)
+        if not text:
+            continue
+        category = clean_string(fact.get("category")) or "core"
+        confidence = fact.get("confidence")
+        if confidence is None:
+            lines.append(f"- {category}: {text}")
+        else:
+            lines.append(f"- {category} ({round(clamp_float(confidence, 0.0), 2)}): {text}")
+    return lines
+
+
+def render_archive_memories_for_prompt(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    lines = []
+    for archive in value[:5]:
+        if not isinstance(archive, dict):
+            continue
+        compact = compact_archive_for_prompt(archive)
+        gist = clean_string(compact.get("gist"))
+        if not gist:
+            continue
+        relevance = compact.get("relevance_score")
+        prefix = f"- [{relevance}] " if relevance is not None else "- "
+        lines.append(prefix + gist)
+        personal = [
+            clean_string(item.get("text"))
+            for item in compact.get("personal_signals", [])
+            if isinstance(item, dict) and clean_string(item.get("text"))
+        ]
+        if personal:
+            lines.append("  personal: " + "; ".join(personal[:3]))
+        emotional = [
+            f"{clean_string(item.get('target'))}: {clean_string(item.get('affect'))}"
+            for item in compact.get("emotional_markers", [])
+            if isinstance(item, dict)
+            and clean_string(item.get("target"))
+            and clean_string(item.get("affect"))
+        ]
+        if emotional:
+            lines.append("  emotional: " + "; ".join(emotional[:3]))
+    return lines
+
+
+def render_dialogue_lines(events: list[dict[str, str]], max_text_chars: int) -> list[str]:
+    lines = []
+    for event in events:
+        text = truncate_text(event.get("text", ""), max_text_chars)
+        if text:
+            lines.append(f"{event.get('role', 'user')}: {text}")
+    return lines
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    cleaned = clean_string(text)
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 3].rstrip() + "..."
+
+
+def chat_prompt_json_debug(package: dict[str, Any]) -> str:
+    compact = compact_context_package(package)
     return (
-        "Memory Engine context package JSON:\n"
-        f"{json.dumps(package, ensure_ascii=False, indent=2)}\n\n"
-        f"Current user message:\n{user_text}"
+        "Memory Engine compact context JSON:\n"
+        f"{json.dumps(compact, ensure_ascii=False, indent=2)}\n\n"
+        "This view is for debug only."
     )
+
+
+def chat_prompt_telemetry(package: dict[str, Any], session_id: str, prompt: str) -> dict[str, Any]:
+    baseline_text = raw_chat_history_baseline_text(session_id)
+    system_tokens = estimate_tokens(chat_system_instruction())
+    baseline_without_compression = system_tokens + estimate_tokens(baseline_text)
+    prompt_estimate = system_tokens + estimate_tokens(prompt)
+    debug_package_tokens = estimate_tokens(json.dumps(package, ensure_ascii=False))
+    budget = package.get("budget") if isinstance(package.get("budget"), dict) else {}
+    return {
+        "session_id": session_id,
+        "system_instruction_estimated_tokens": system_tokens,
+        "compact_prompt_estimated_tokens": prompt_estimate,
+        "debug_package_estimated_tokens": debug_package_tokens,
+        "baseline_without_compression_estimated_tokens": baseline_without_compression,
+        "estimated_savings_vs_baseline_tokens": baseline_without_compression - prompt_estimate,
+        "context_budget_estimated_total_tokens": budget.get("estimated_total_tokens"),
+        "context_budget_exceeded": budget.get("budget_exceeded"),
+        "context_budget_dropped_session_recent": budget.get("dropped_session_recent"),
+        "context_budget_dropped_session_trace": budget.get("dropped_session_trace"),
+        "context_budget_dropped_archive_relevant": budget.get("dropped_archive_relevant"),
+        "context_budget_dropped_core_facts": budget.get("dropped_core_facts"),
+    }
+
+
+def compact_context_package(package: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "core_facts": [compact_core_fact(fact) for fact in package.get("core_facts", [])],
+        "session_recent": [compact_event(event) for event in package.get("session_recent", [])],
+        "session_trace": [compact_event(event) for event in package.get("session_trace", [])],
+        "archive_relevant": [
+            compact_archive_for_prompt(archive) for archive in package.get("archive_relevant", [])
+        ],
+        "domain_state": compact_domain_state(package.get("domain_state")),
+    }
+
+
+def compact_core_fact(fact: Any) -> dict[str, Any]:
+    if not isinstance(fact, dict):
+        return {}
+    compact = {
+        "category": clean_string(fact.get("category")) or "core",
+        "text": clean_string(fact.get("text")),
+    }
+    if fact.get("confidence") is not None:
+        compact["confidence"] = round(clamp_float(fact.get("confidence"), 0.0), 2)
+    return compact
+
+
+def compact_event(event: Any) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        return {}
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    text = clean_string(event.get("text")) or clean_string(payload.get("text"))
+    event_type = clean_string(event.get("type")) or clean_string(event.get("event_type"))
+    compact: dict[str, Any] = {"type": event_type or "event", "text": text}
+    theme = clean_string(event.get("theme"))
+    if theme:
+        compact["theme"] = theme
+    return compact
+
+
+def compact_archive_for_prompt(archive: Any) -> dict[str, Any]:
+    if not isinstance(archive, dict):
+        return {}
+    compact: dict[str, Any] = {}
+    gist = truncate_text(clean_string(archive.get("gist")), 420)
+    theme = clean_string(archive.get("theme"))
+    if gist:
+        compact["gist"] = gist
+    if theme:
+        compact["theme"] = theme
+    if archive.get("relevance_score") is not None:
+        compact["relevance_score"] = round(clamp_float(archive.get("relevance_score"), 0.0), 2)
+    compact["facts"] = [
+        {"text": truncate_text(clean_string(item.get("text")), 180)}
+        for item in safe_list(archive.get("facts"))[:3]
+        if isinstance(item, dict) and clean_string(item.get("text"))
+    ]
+    compact["emotional_markers"] = [
+        compact_emotional_marker(item)
+        for item in safe_list(archive.get("emotional_markers"))[:4]
+        if isinstance(item, dict)
+    ]
+    compact["topic_thread"] = [
+        compact_topic_thread_item(item)
+        for item in safe_list(archive.get("topic_thread"))[:5]
+        if isinstance(item, dict)
+    ]
+    compact["personal_signals"] = [
+        compact_personal_signal(item)
+        for item in safe_list(archive.get("personal_signals"))[:4]
+        if isinstance(item, dict)
+    ]
+    tone = compact_relational_tone(archive.get("relational_tone"))
+    if tone:
+        compact["relational_tone"] = tone
+    return {key: value for key, value in compact.items() if value not in ("", [], None)}
+
+
+def compact_emotional_marker(marker: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        "target": truncate_text(clean_string(marker.get("target")), 80),
+        "affect": truncate_text(clean_string(marker.get("affect")), 80),
+        "strength": round(clamp_float(marker.get("strength"), 0.0), 2),
+    }
+    evidence = truncate_text(clean_string(marker.get("evidence")), 160)
+    quote = truncate_text(clean_string(marker.get("quote")), 160)
+    if evidence:
+        compact["evidence"] = evidence
+    if quote:
+        compact["quote"] = quote
+    return compact
+
+
+def compact_topic_thread_item(item: dict[str, Any]) -> dict[str, Any]:
+    compact = {"topic": truncate_text(clean_string(item.get("topic")), 100)}
+    subtopics = normalize_string_list(item.get("subtopics"))
+    summary = truncate_text(clean_string(item.get("summary")), 160)
+    energy = clean_string(item.get("energy"))
+    if subtopics:
+        compact["subtopics"] = [truncate_text(item, 60) for item in subtopics[:4]]
+    if summary:
+        compact["summary"] = summary
+    if energy:
+        compact["energy"] = energy
+    return compact
+
+
+def compact_personal_signal(signal: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        "category": normalize_category(signal.get("category")),
+        "text": truncate_text(clean_string(signal.get("text")), 180),
+        "confidence": round(clamp_float(signal.get("confidence"), 0.0), 2),
+    }
+    evidence = truncate_text(clean_string(signal.get("evidence")), 160)
+    if evidence:
+        compact["evidence"] = evidence
+    return compact
+
+
+def compact_relational_tone(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    compact = {}
+    for key in ("warmth", "intellectual_engagement", "intimacy", "trust", "playfulness", "tension"):
+        if value.get(key) is not None:
+            compact[key] = round(clamp_float(value.get(key), 0.0), 2)
+    summary = truncate_text(clean_string(value.get("summary")), 180)
+    if summary:
+        compact["summary"] = summary
+    return compact
+
+
+def compact_domain_state(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    compact = {}
+    current_text = clean_string(value.get("current_text"))
+    active_topic = clean_string(value.get("active_topic"))
+    if current_text:
+        compact["current_text"] = current_text
+    if active_topic:
+        compact["active_topic"] = active_topic
+    return compact
+
+
+def raw_chat_history_baseline_text(session_id: str) -> str:
+    events_path = MEMORY_DIR / "sessions" / session_id / "events.jsonl"
+    if not events_path.exists():
+        return ""
+    lines = ["Raw chronological chat history baseline without Memory Engine compression:"]
+    try:
+        with events_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                text = clean_string(payload.get("text"))
+                if not text:
+                    continue
+                event_type = clean_string(event.get("type"))
+                role = "assistant" if event_type == "assistant_message" else "user"
+                lines.append(f"{role}: {text}")
+    except OSError as err:
+        log_exception(f"failed to build raw chat history baseline {events_path}", err)
+    return "\n".join(lines)
+
+
+def sleep_events_transcript(events: list[Any]) -> str:
+    lines = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        text = clean_string(payload.get("text"))
+        if not text:
+            continue
+        event_type = clean_string(event.get("type"))
+        role = "assistant" if event_type == "assistant_message" else "user"
+        lines.append(f"{role}: {text}")
+    return "\n".join(lines)
 
 
 def format_recall(recall_result: dict[str, Any]) -> str:
@@ -1620,14 +2333,14 @@ def now_rfc3339() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def extract_gemini_text(result: dict[str, Any]) -> str:
+def extract_gemini_text(result: dict[str, Any], model: str) -> str:
     candidates = result.get("candidates") or []
     if not candidates:
-        raise RuntimeError(f"Gemini returned no candidates: {result}")
+        raise GeminiNoCandidatesError(model, result)
     parts = candidates[0].get("content", {}).get("parts") or []
     texts = [part.get("text", "") for part in parts if part.get("text")]
     if not texts:
-        raise RuntimeError(f"Gemini returned no text parts: {result}")
+        raise GeminiNoCandidatesError(model, result)
     return "\n".join(texts).strip()
 
 

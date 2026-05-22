@@ -140,6 +140,8 @@ pub struct CoreContextRequest {
     pub session_trace_event_limit: usize,
     #[serde(default)]
     pub include_core: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<CoreContextTokenBudget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -171,8 +173,48 @@ pub struct CoreContextPackage {
     pub archive_relevant: Vec<RecallItem>,
     #[serde(default)]
     pub domain_state: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<CoreContextBudgetReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreContextTokenBudget {
+    pub total_tokens: usize,
+    pub current_memory_tokens: usize,
+    pub compressed_memory_tokens: usize,
+    pub core_tokens: usize,
+}
+
+impl Default for CoreContextTokenBudget {
+    fn default() -> Self {
+        Self {
+            total_tokens: 11_000,
+            current_memory_tokens: 7_000,
+            compressed_memory_tokens: 3_000,
+            core_tokens: 1_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreContextBudgetReport {
+    pub estimator: String,
+    pub total_budget_tokens: usize,
+    pub current_memory_budget_tokens: usize,
+    pub compressed_memory_budget_tokens: usize,
+    pub core_budget_tokens: usize,
+    pub estimated_total_tokens: usize,
+    pub estimated_current_memory_tokens: usize,
+    pub estimated_compressed_memory_tokens: usize,
+    pub estimated_core_tokens: usize,
+    pub estimated_domain_state_tokens: usize,
+    pub dropped_session_recent: usize,
+    pub dropped_session_trace: usize,
+    pub dropped_archive_relevant: usize,
+    pub dropped_core_facts: usize,
+    pub budget_exceeded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

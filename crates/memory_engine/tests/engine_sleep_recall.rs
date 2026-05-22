@@ -2,7 +2,7 @@ use memory_engine::archive::{
     ArchiveStatus, EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem,
 };
 use memory_engine::core_store::{
-    CoreContextRequest, CoreFactInput, CoreFactPatchInput, CoreFactStatus,
+    CoreContextRequest, CoreContextTokenBudget, CoreFactInput, CoreFactPatchInput, CoreFactStatus,
 };
 use memory_engine::event::IngestEvent;
 use memory_engine::recall::{RecallFilters, RecallQuery};
@@ -92,6 +92,7 @@ fn engine_context_keeps_preliminary_sleep_events_active() {
             session_recent_limit: 5,
             session_trace_event_limit: 5,
             include_core: false,
+            token_budget: None,
         })
         .expect("core context package");
 
@@ -198,6 +199,7 @@ fn engine_sleep_preserves_configured_active_tail() {
             session_recent_limit: 10,
             session_trace_event_limit: 10,
             include_core: false,
+            token_budget: None,
         })
         .expect("core context package");
 
@@ -407,6 +409,76 @@ fn engine_recall_with_zero_limit_uses_engine_default() {
 }
 
 #[test]
+fn engine_recall_with_session_id_does_not_leak_other_sessions() {
+    let root = unique_temp_dir("engine_recall_with_session_id_does_not_leak_other_sessions");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text_in_session(
+        &mut engine,
+        "session_a",
+        "2026-05-17T16:00:00.000Z",
+        "Користувача у цій сесії звати Микита, і це не має протікати в іншу сесію.",
+        vec!["name"],
+    );
+    let sleep_result = engine.sleep("session_a").expect("sleep session_a");
+    resume_test_sleep(
+        &mut engine,
+        &sleep_result,
+        "Користувача у session_a звати Микита.",
+        "Стабільний спогад із першої сесії про ім'я Микита.",
+    );
+
+    ingest_text_in_session(
+        &mut engine,
+        "session_b",
+        "2026-05-17T16:05:00.000Z",
+        "Нова сесія почалась без власних архівних спогадів.",
+        vec!["fresh_session"],
+    );
+
+    let scoped = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "session_b".to_string(),
+            domain_state: json!({ "current_text": "Як мене звати?" }),
+            core_scope: None,
+            query_text: Some("Микита ім'я користувача".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 5,
+            session_trace_event_limit: 5,
+            include_core: false,
+            token_budget: None,
+        })
+        .expect("core context package");
+
+    assert!(scoped.archive_relevant.is_empty());
+
+    let global = engine
+        .recall(RecallQuery {
+            schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+            query_id: None,
+            created_at: Some("2026-05-17T16:10:00.000Z".to_string()),
+            session_id: None,
+            context: json!({ "recent_text": "Микита" }),
+            query_text: Some("Микита ім'я користувача".to_string()),
+            filters: RecallFilters::default(),
+            limit: 5,
+            include_core: false,
+            explain: false,
+        })
+        .expect("global recall");
+
+    assert_eq!(global.items.len(), 1);
+    assert_eq!(
+        global.items[0].source_session_id.as_deref(),
+        Some("session_a")
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_core_context_package_combines_session_and_archive_context() {
     let root = unique_temp_dir("engine_core_context_package_combines_session_and_archive_context");
     let storage = FileStorage::with_host_id(&root, "terminal");
@@ -459,6 +531,7 @@ fn engine_core_context_package_combines_session_and_archive_context() {
             session_recent_limit: 2,
             session_trace_event_limit: 10,
             include_core: false,
+            token_budget: None,
         })
         .expect("core context package");
 
@@ -495,7 +568,7 @@ fn engine_upsert_core_fact_adds_stable_fact_to_context_package() {
     let result = engine
         .upsert_core_fact(CoreFactInput {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
-            category: "profile".to_string(),
+            category: "name".to_string(),
             scope: Some("telegram_chat_a".to_string()),
             text: "Користувача звати Микита.".to_string(),
             confidence: 0.95,
@@ -506,7 +579,7 @@ fn engine_upsert_core_fact_adds_stable_fact_to_context_package() {
         .expect("upsert core fact");
 
     assert!(result.created);
-    assert_eq!(result.category, "profile");
+    assert_eq!(result.category, "name");
     assert!(result.fact.core_fact_id.starts_with("core_fact_"));
 
     let package = engine
@@ -520,9 +593,14 @@ fn engine_upsert_core_fact_adds_stable_fact_to_context_package() {
             session_recent_limit: 2,
             session_trace_event_limit: 10,
             include_core: true,
+            token_budget: None,
         })
         .expect("core context package");
 
+    assert!(package
+        .core_facts
+        .iter()
+        .any(|fact| fact.category == "name"));
     assert!(package
         .core_facts
         .iter()
@@ -581,12 +659,124 @@ fn engine_core_context_package_filters_core_facts_by_scope() {
             session_recent_limit: 2,
             session_trace_event_limit: 10,
             include_core: true,
+            token_budget: None,
         })
         .expect("core context package");
 
     assert_eq!(package.core_facts.len(), 1);
     assert_eq!(package.core_facts[0].text, "Користувача звати Аліса.");
     assert_eq!(package.core_facts[0].scope.as_deref(), Some("telegram_2"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_core_context_package_enforces_token_budget_by_layer() {
+    let root = unique_temp_dir("engine_core_context_package_enforces_token_budget_by_layer");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Користувач тепло розповів про кішечку Іржу.",
+        vec!["personal_pet"],
+    );
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    engine
+        .resume_sleep_compression(
+            &sleep_result.pending_task.task_id,
+            SleepCompressionResult {
+                schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                gist: "Користувач тепло згадав кішечку Іржу.".to_string(),
+                narrative: "Емоційний центр спогаду — тепла особиста згадка про кішечку Іржу."
+                    .to_string(),
+                facts: vec![],
+                quotes: vec![],
+                tags: vec!["personal_pet".to_string(), "emotional_memory".to_string()],
+                theme: Some("personal_pet".to_string()),
+                weight: 0.95,
+                links: vec![],
+                emotional_markers: vec![EmotionalMarker {
+                    target: "cat_named_irzha".to_string(),
+                    affect: "warmth".to_string(),
+                    strength: 0.95,
+                    source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
+                    quote: None,
+                    evidence: Some("Тепла особиста згадка.".to_string()),
+                }],
+                topic_thread: vec![],
+                personal_signals: vec![PersonalSignal {
+                    text: "Користувач має кішечку на ім'я Іржа.".to_string(),
+                    category: "relationships_with_pets".to_string(),
+                    confidence: 0.95,
+                    source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
+                    evidence: Some("Пряма заява користувача.".to_string()),
+                }],
+                relational_tone: None,
+            },
+        )
+        .expect("resume sleep compression");
+
+    for index in 0..12 {
+        ingest_text(
+            &mut engine,
+            &format!("2026-05-17T16:{:02}:00.000Z", index + 1),
+            &format!(
+                "Активна свіжа тема {index}: користувач обговорює Європу Юпітера, океан під льодом, приливний розігрів і можливість життя."
+            ),
+            vec!["space_topic"],
+        );
+    }
+
+    for index in 0..4 {
+        engine
+            .upsert_core_fact(CoreFactInput {
+                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                category: "profile".to_string(),
+                scope: Some("telegram_1".to_string()),
+                text: format!(
+                    "Стабільний профільний факт {index}: користувач тестує довготривалу памʼять і уважно перевіряє, чи не губляться сенси."
+                ),
+                confidence: 0.95 - (index as f64 * 0.05),
+                tags: vec!["profile".to_string()],
+                source_archive_ids: vec![],
+                source_candidate_id: None,
+            })
+            .expect("upsert core fact");
+    }
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "Що ти памʼятаєш про Іржу і Європу?" }),
+            core_scope: Some("telegram_1".to_string()),
+            query_text: Some("Іржа Європа Юпітера".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 12,
+            session_trace_event_limit: 12,
+            include_core: true,
+            token_budget: Some(CoreContextTokenBudget {
+                total_tokens: 1_600,
+                current_memory_tokens: 700,
+                compressed_memory_tokens: 500,
+                core_tokens: 250,
+            }),
+        })
+        .expect("core context package");
+
+    let report = package.budget.as_ref().expect("budget report");
+    assert!(!report.budget_exceeded);
+    assert!(report.estimated_total_tokens <= report.total_budget_tokens);
+    assert!(report.estimated_current_memory_tokens <= report.current_memory_budget_tokens);
+    assert!(report.estimated_compressed_memory_tokens <= report.compressed_memory_budget_tokens);
+    assert!(report.estimated_core_tokens <= report.core_budget_tokens);
+    assert!(report.dropped_session_recent > 0 || report.dropped_session_trace > 0);
+    assert!(report.dropped_core_facts > 0);
+    assert!(!package.archive_relevant.is_empty());
+    assert!(package.archive_relevant[0].gist.contains("Іржу"));
 
     fs::remove_dir_all(root).ok();
 }
@@ -607,7 +797,7 @@ fn engine_patch_core_fact_updates_text_and_deprecates_fact() {
     let upsert = engine
         .upsert_core_fact(CoreFactInput {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
-            category: "profile".to_string(),
+            category: "pet".to_string(),
             scope: Some("telegram_1".to_string()),
             text: "Користувача звати Микита.".to_string(),
             confidence: 0.95,
@@ -630,6 +820,7 @@ fn engine_patch_core_fact_updates_text_and_deprecates_fact() {
         .expect("patch core fact text");
 
     assert_eq!(updated.fact.text, "Користувача звати Микита Загамула.");
+    assert_eq!(updated.category, "pet");
     assert_eq!(updated.fact.status, CoreFactStatus::Active);
 
     let deprecated = engine
@@ -657,6 +848,7 @@ fn engine_patch_core_fact_updates_text_and_deprecates_fact() {
             session_recent_limit: 2,
             session_trace_event_limit: 10,
             include_core: true,
+            token_budget: None,
         })
         .expect("core context package");
 
@@ -842,13 +1034,23 @@ fn ingest_text(
     text: &str,
     tags: Vec<&str>,
 ) {
+    ingest_text_in_session(engine, "live_session", timestamp, text, tags);
+}
+
+fn ingest_text_in_session(
+    engine: &mut MemoryEngine<FileStorage>,
+    session_id: &str,
+    timestamp: &str,
+    text: &str,
+    tags: Vec<&str>,
+) {
     engine
         .ingest(IngestEvent {
             schema_version: EVENT_SCHEMA_VERSION.to_string(),
             event_type: "user_message".to_string(),
             source: "terminal_user".to_string(),
             timestamp: timestamp.to_string(),
-            session_id: "live_session".to_string(),
+            session_id: session_id.to_string(),
             payload: json!({ "text": text }),
             tags: tags.into_iter().map(str::to_string).collect(),
             theme: Some("personal_background".to_string()),

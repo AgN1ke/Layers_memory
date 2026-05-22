@@ -21,6 +21,7 @@ pub trait Storage {
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>>;
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory>;
+    fn read_core_store_categories(&self) -> Result<Vec<CoreStoreCategory>>;
     fn write_core_store_category(&mut self, category: &CoreStoreCategory) -> Result<()>;
     fn write_candidate_belief(&mut self, candidate: &CandidateBelief) -> Result<()>;
 
