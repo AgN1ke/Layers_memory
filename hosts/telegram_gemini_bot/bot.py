@@ -42,12 +42,15 @@ LOG_PATH = LOG_DIR / "bot.log"
 TOKEN_USAGE_PATH = LOG_DIR / "token_usage.jsonl"
 STATE_DIR = RUNTIME_DIR / "state"
 OFFSET_PATH = STATE_DIR / "telegram_offset.json"
+SLEEP_SCHEDULER_STATE_PATH = STATE_DIR / "sleep_scheduler_state.json"
 
 DEFAULT_REASONING_MODEL = "gemini-2.5-pro"
 DEFAULT_BALANCED_MODEL = "gemini-2.5-flash"
 DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CHAT_ROLE = "balanced"
-DEFAULT_AUTO_SLEEP_AFTER_EVENTS = 50
+DEFAULT_TOKEN_PRESSURE_RATIO = 0.80
+DEFAULT_IDLE_SLEEP_HOUR = 4
+DEFAULT_IDLE_SLEEP_MIN_SECONDS = 1800
 RECENT_CONTEXT_LIMIT = 40
 SESSION_TRACE_EVENT_LIMIT = 120
 
@@ -59,15 +62,6 @@ MEMORY_KEYWORD_PARTS = (
     "пам'ят",
     "памʼят",
     "важлив",
-)
-MEMORY_UPDATE_KEYWORD_PARTS = (
-    "запам",
-    "збережи в пам",
-    "запиши в пам",
-    "це важлив",
-    "це дуже важлив",
-    "важлива інформація",
-    "онови пам",
 )
 
 ARCHIVE_LIST_LIMIT = 5
@@ -130,7 +124,7 @@ class GeminiNoCandidatesError(RuntimeError):
         super().__init__(f"Gemini {model} returned no candidates: {result}")
 
 
-class AutoSleepRunner:
+class SleepRunner:
     def __init__(self, gemini: "GeminiClient", llm_config: HostLlmConfig) -> None:
         self._gemini = gemini
         self._llm_config = llm_config
@@ -142,7 +136,7 @@ class AutoSleepRunner:
         sleep_result: dict[str, Any],
         telegram: "TelegramClient | None" = None,
         chat_id: int | None = None,
-        reason: str = "auto-sleep",
+        reason: str = "background sleep",
     ) -> bool:
         task_id = sleep_result.get("pending_task", {}).get("task_id")
         if not task_id:
@@ -177,7 +171,6 @@ class AutoSleepRunner:
             engine = memory_engine.MemoryEngine(
                 str(MEMORY_DIR),
                 host_id="telegram_gemini_bot",
-                auto_sleep_after_events=0,
             )
             summary = complete_sleep_result(engine, self._gemini, self._llm_config, sleep_result)
             log_line(f"{reason} completed: {summary.replace(chr(10), ' | ')}")
@@ -339,17 +332,15 @@ def main() -> None:
     telegram_token = read_secret("Telegram bot token", "TELEGRAM_BOT_TOKEN")
     gemini_key = read_secret("Gemini API key", "GEMINI_API_KEY")
     llm_config = read_model_config()
-    auto_sleep_after_events = read_auto_sleep_after_events()
 
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     engine = memory_engine.MemoryEngine(
         str(MEMORY_DIR),
         host_id="telegram_gemini_bot",
-        auto_sleep_after_events=auto_sleep_after_events,
     )
     telegram = TelegramClient(telegram_token)
     gemini = GeminiClient(gemini_key)
-    auto_sleep_runner = AutoSleepRunner(gemini, llm_config)
+    sleep_runner = SleepRunner(gemini, llm_config)
 
     log_line(f"telegram token fingerprint: {secret_fingerprint(telegram_token)}")
     log_line(f"gemini key fingerprint: {secret_fingerprint(gemini_key)}")
@@ -365,7 +356,13 @@ def main() -> None:
         "/core_forget id, /tasks, /models"
     )
     offset = read_saved_offset()
-    log_line(f"bot polling started offset={offset} auto_sleep_after_events={auto_sleep_after_events}")
+    log_line(
+        "bot polling started "
+        f"offset={offset} "
+        f"token_pressure_ratio={read_token_pressure_ratio()} "
+        f"idle_sleep_hour={read_idle_sleep_hour()} "
+        f"idle_sleep_min_seconds={read_idle_sleep_min_seconds()}"
+    )
 
     while True:
         try:
@@ -375,7 +372,7 @@ def main() -> None:
             for update in updates:
                 update_id = update.get("update_id")
                 try:
-                    handle_update(update, telegram, gemini, engine, llm_config, auto_sleep_runner)
+                    handle_update(update, telegram, gemini, engine, llm_config, sleep_runner)
                 except Exception as err:
                     log_exception(f"update {update_id} failed", err)
                     notify_update_error(update, telegram, err)
@@ -383,6 +380,7 @@ def main() -> None:
                     if update_id is not None:
                         offset = update_id + 1
                         save_offset(offset)
+            maybe_queue_scheduled_idle_sleep(engine, sleep_runner)
         except KeyboardInterrupt:
             log_line("bot stopped by keyboard interrupt")
             print("\nStopped.")
@@ -399,7 +397,7 @@ def handle_update(
     gemini: GeminiClient,
     engine: memory_engine.MemoryEngine,
     llm_config: HostLlmConfig,
-    auto_sleep_runner: AutoSleepRunner,
+    sleep_runner: SleepRunner,
 ) -> None:
     message = update.get("message") or {}
     text = (message.get("text") or "").strip()
@@ -502,7 +500,7 @@ def handle_update(
     if text == "/sleep":
         queue_sleep_update(
             engine=engine,
-            auto_sleep_runner=auto_sleep_runner,
+            sleep_runner=sleep_runner,
             telegram=telegram,
             chat_id=chat_id,
             session_id=session_id,
@@ -563,53 +561,281 @@ def handle_update(
     log_line(f"answered chat={chat_id} event={stored['event_id']} model={model}")
     print(f"chat={chat_id} event={stored['event_id']} model={model}")
 
-    if should_auto_sleep(text):
-        auto_sleep_results = [
-            result["auto_sleep"]
-            for result in (user_ingest, assistant_ingest)
-            if result.get("auto_sleep")
-        ]
-        if auto_sleep_results:
-            queued = False
-            for sleep_result in auto_sleep_results:
-                queued = auto_sleep_runner.submit(
-                    sleep_result,
-                    telegram=telegram,
-                    chat_id=chat_id,
-                    reason="memory keyword sleep",
-                ) or queued
-            if queued:
-                telegram.send_message(chat_id, "Memory update queued.")
-        else:
-            queue_sleep_update(
-                engine=engine,
-                auto_sleep_runner=auto_sleep_runner,
-                telegram=telegram,
-                chat_id=chat_id,
-                session_id=session_id,
-                reason="memory keyword sleep",
-            )
-    else:
-        run_auto_sleep_results(auto_sleep_runner, user_ingest, assistant_ingest)
+    maybe_queue_token_pressure_sleep(
+        engine=engine,
+        sleep_runner=sleep_runner,
+        session_id=session_id,
+        package=package,
+    )
 
 
 def queue_sleep_update(
     engine: memory_engine.MemoryEngine,
-    auto_sleep_runner: AutoSleepRunner,
-    telegram: TelegramClient,
-    chat_id: int,
+    sleep_runner: SleepRunner,
+    telegram: TelegramClient | None,
+    chat_id: int | None,
     session_id: str,
     reason: str,
+    notify: bool = True,
 ) -> None:
+    if has_pending_sleep_task(engine, session_id):
+        log_line(f"{reason} skipped: pending sleep task already exists for session={session_id}")
+        return
     sleep_result = json.loads(engine.sleep(session_id))
-    queued = auto_sleep_runner.submit(
+    queued = sleep_runner.submit(
         sleep_result,
         telegram=telegram,
         chat_id=chat_id,
         reason=reason,
     )
-    if queued:
+    if queued and notify and telegram is not None and chat_id is not None:
         telegram.send_message(chat_id, "Memory update queued.")
+
+
+def maybe_queue_token_pressure_sleep(
+    engine: memory_engine.MemoryEngine,
+    sleep_runner: SleepRunner,
+    session_id: str,
+    package: dict[str, Any],
+) -> None:
+    if has_pending_sleep_task(engine, session_id):
+        return
+
+    stats = session_unarchived_token_stats(session_id)
+    if stats["event_count"] <= 0:
+        return
+
+    budget = package.get("budget") if isinstance(package.get("budget"), dict) else {}
+    ratio = read_token_pressure_ratio()
+    reasons = token_pressure_reasons(budget, stats, ratio)
+    if not reasons:
+        return
+
+    log_line(
+        "token_pressure_sleep_trigger "
+        f"session={session_id} reasons={','.join(reasons)} "
+        f"unarchived_events={stats['event_count']} "
+        f"unarchived_est_tokens={stats['estimated_tokens']} "
+        f"ratio={ratio:.2f}"
+    )
+    queue_sleep_update(
+        engine=engine,
+        sleep_runner=sleep_runner,
+        telegram=None,
+        chat_id=None,
+        session_id=session_id,
+        reason="token pressure sleep",
+        notify=False,
+    )
+
+
+def token_pressure_reasons(
+    budget: dict[str, Any],
+    stats: dict[str, Any],
+    ratio: float,
+) -> list[str]:
+    reasons: list[str] = []
+    if budget.get("budget_exceeded"):
+        reasons.append("budget_exceeded")
+
+    if int_or_zero(budget.get("dropped_session_recent")) > 0:
+        reasons.append("dropped_session_recent")
+    if int_or_zero(budget.get("dropped_session_trace")) > 0:
+        reasons.append("dropped_session_trace")
+
+    total_budget = int_or_zero(budget.get("total_budget_tokens"))
+    total_estimated = int_or_zero(budget.get("estimated_total_tokens"))
+    if total_budget and total_estimated >= int(total_budget * ratio):
+        reasons.append("total_budget_pressure")
+
+    current_budget = int_or_zero(budget.get("current_memory_budget_tokens"))
+    current_estimated = int_or_zero(budget.get("estimated_current_memory_tokens"))
+    if current_budget and current_estimated >= int(current_budget * ratio):
+        reasons.append("current_memory_pressure")
+    if current_budget and int(stats["estimated_tokens"]) >= int(current_budget * ratio):
+        reasons.append("unarchived_session_pressure")
+
+    return unique_preserve_order(reasons)
+
+
+def maybe_queue_scheduled_idle_sleep(
+    engine: memory_engine.MemoryEngine,
+    sleep_runner: SleepRunner,
+) -> None:
+    now_local = datetime.now().astimezone()
+    if now_local.hour != read_idle_sleep_hour():
+        return
+
+    state = read_sleep_scheduler_state()
+    today = now_local.date().isoformat()
+    if state.get("last_idle_sleep_date") == today:
+        return
+
+    queued_any = False
+    for session_id in session_ids():
+        if has_pending_sleep_task(engine, session_id):
+            continue
+        stats = session_unarchived_token_stats(session_id)
+        if stats["event_count"] <= 0:
+            continue
+        last_event_at = stats.get("last_event_at")
+        if not isinstance(last_event_at, datetime):
+            continue
+        idle_seconds = (now_local - last_event_at.astimezone()).total_seconds()
+        if idle_seconds < read_idle_sleep_min_seconds():
+            continue
+
+        log_line(
+            "scheduled_idle_sleep_trigger "
+            f"session={session_id} idle_seconds={int(idle_seconds)} "
+            f"unarchived_events={stats['event_count']} "
+            f"unarchived_est_tokens={stats['estimated_tokens']}"
+        )
+        queue_sleep_update(
+            engine=engine,
+            sleep_runner=sleep_runner,
+            telegram=None,
+            chat_id=None,
+            session_id=session_id,
+            reason="scheduled idle sleep",
+            notify=False,
+        )
+        queued_any = True
+
+    if queued_any:
+        write_sleep_scheduler_state({"last_idle_sleep_date": today, "updated_at": now_rfc3339()})
+
+
+def session_unarchived_token_stats(session_id: str) -> dict[str, Any]:
+    events = unarchived_session_events(session_id)
+    transcript = sleep_events_transcript(events)
+    last_event_at = None
+    for event in reversed(events):
+        last_event_at = event_datetime(event)
+        if last_event_at is not None:
+            break
+    return {
+        "event_count": len(events),
+        "estimated_tokens": estimate_tokens(transcript),
+        "last_event_at": last_event_at,
+    }
+
+
+def unarchived_session_events(session_id: str) -> list[dict[str, Any]]:
+    archived_ids = archived_event_ids_for_session(session_id)
+    return [
+        event
+        for event in read_session_events(session_id)
+        if clean_string(event.get("event_id")) not in archived_ids
+    ]
+
+
+def archived_event_ids_for_session(session_id: str) -> set[str]:
+    event_ids: set[str] = set()
+    for archive in complete_archives():
+        if clean_string(archive.get("source_session_id")) != session_id:
+            continue
+        for event_id in normalize_string_list(archive.get("source_event_ids")):
+            event_ids.add(event_id)
+    return event_ids
+
+
+def read_session_events(session_id: str) -> list[dict[str, Any]]:
+    if not session_id or "/" in session_id or "\\" in session_id:
+        return []
+    events_path = MEMORY_DIR / "sessions" / session_id / "events.jsonl"
+    if not events_path.exists():
+        return []
+
+    events: list[dict[str, Any]] = []
+    try:
+        with events_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+    except OSError as err:
+        log_exception(f"failed to read session events {events_path}", err)
+    return events
+
+
+def session_ids() -> list[str]:
+    sessions_dir = MEMORY_DIR / "sessions"
+    if not sessions_dir.exists():
+        return []
+    return sorted(path.name for path in sessions_dir.iterdir() if path.is_dir())
+
+
+def event_datetime(event: dict[str, Any]) -> datetime | None:
+    for key in ("received_at", "timestamp"):
+        parsed = parse_rfc3339_datetime(clean_string(event.get(key)))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def parse_rfc3339_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def has_pending_sleep_task(engine: memory_engine.MemoryEngine, session_id: str) -> bool:
+    try:
+        tasks = json.loads(engine.pending_tasks())
+    except Exception as err:
+        log_exception("failed to inspect pending sleep tasks", err)
+        return True
+
+    for task in tasks if isinstance(tasks, list) else []:
+        if not isinstance(task, dict):
+            continue
+        if clean_string(task.get("task_type")) != "sleep_compression":
+            continue
+        inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
+        if clean_string(inputs.get("session_id")) == session_id:
+            return True
+    return False
+
+
+def read_sleep_scheduler_state() -> dict[str, Any]:
+    if not SLEEP_SCHEDULER_STATE_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(SLEEP_SCHEDULER_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as err:
+        log_exception("failed to read sleep scheduler state", err)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_sleep_scheduler_state(payload: dict[str, Any]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    SLEEP_SCHEDULER_STATE_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def int_or_zero(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def run_sleep(
@@ -801,17 +1027,6 @@ def meaningful_tokens(text: str) -> set[str]:
             "цікавиться",
         }
     }
-
-
-def run_auto_sleep_results(
-    auto_sleep_runner: AutoSleepRunner,
-    *ingest_results: dict[str, Any],
-) -> None:
-    for ingest_result in ingest_results:
-        sleep_result = ingest_result.get("auto_sleep")
-        if not sleep_result:
-            continue
-        auto_sleep_runner.submit(sleep_result)
 
 
 def execute_sleep_compression(
@@ -1528,19 +1743,50 @@ def read_model_config() -> HostLlmConfig:
     )
 
 
-def read_auto_sleep_after_events() -> int:
-    raw = os.environ.get("MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS")
+def read_token_pressure_ratio() -> float:
+    raw = os.environ.get("MEMORY_BOT_TOKEN_PRESSURE_RATIO")
     if not raw:
-        return DEFAULT_AUTO_SLEEP_AFTER_EVENTS
+        return DEFAULT_TOKEN_PRESSURE_RATIO
+    try:
+        value = float(raw)
+    except ValueError:
+        print(
+            f"Invalid MEMORY_BOT_TOKEN_PRESSURE_RATIO={raw!r}; "
+            f"using {DEFAULT_TOKEN_PRESSURE_RATIO}."
+        )
+        return DEFAULT_TOKEN_PRESSURE_RATIO
+    return min(1.0, max(0.10, value))
+
+
+def read_idle_sleep_hour() -> int:
+    raw = os.environ.get("MEMORY_BOT_IDLE_SLEEP_HOUR")
+    if not raw:
+        return DEFAULT_IDLE_SLEEP_HOUR
     try:
         value = int(raw)
     except ValueError:
         print(
-            f"Invalid MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS={raw!r}; "
-            f"using {DEFAULT_AUTO_SLEEP_AFTER_EVENTS}."
+            f"Invalid MEMORY_BOT_IDLE_SLEEP_HOUR={raw!r}; "
+            f"using {DEFAULT_IDLE_SLEEP_HOUR}."
         )
-        return DEFAULT_AUTO_SLEEP_AFTER_EVENTS
+        return DEFAULT_IDLE_SLEEP_HOUR
+    return min(23, max(0, value))
+
+
+def read_idle_sleep_min_seconds() -> int:
+    raw = os.environ.get("MEMORY_BOT_IDLE_SLEEP_MIN_SECONDS")
+    if not raw:
+        return DEFAULT_IDLE_SLEEP_MIN_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"Invalid MEMORY_BOT_IDLE_SLEEP_MIN_SECONDS={raw!r}; "
+            f"using {DEFAULT_IDLE_SLEEP_MIN_SECONDS}."
+        )
+        return DEFAULT_IDLE_SLEEP_MIN_SECONDS
     return max(0, value)
+
 
 
 def input_default(label: str, default: str) -> str:
@@ -2296,13 +2542,13 @@ def help_text() -> str:
         "/models - show model role mapping\n"
         "\n"
         "Plain text is stored as an event and answered by Gemini with memory context.\n"
-        "Messages with explicit memory update wording like 'запам...' or 'це важливо' queue sleep."
+        "Sleep is queued by token pressure, by the nightly idle schedule, or manually with /sleep."
     )
 
 
 def importance_hint(text: str) -> str:
     lowered = text.lower()
-    if should_auto_sleep(lowered):
+    if has_memory_request(lowered):
         return "high"
     if has_core_signal(lowered):
         return "medium"
@@ -2313,10 +2559,8 @@ def event_tags(text: str) -> list[str]:
     lowered = text.lower()
     tags = ["telegram_message"]
 
-    if should_auto_sleep(lowered):
+    if has_memory_request(lowered):
         tags.append("explicit_memory_request")
-    elif has_memory_request(lowered):
-        tags.append("memory_reference")
     if has_name_reference(lowered):
         tags.extend(["personal_fact_signal", "name_reference"])
     if has_age_reference(lowered):
@@ -2339,11 +2583,6 @@ def has_core_signal(lowered: str) -> bool:
             has_communication_style_reference(lowered),
         )
     )
-
-
-def should_auto_sleep(text: str) -> bool:
-    lowered = text.lower()
-    return any(keyword in lowered for keyword in MEMORY_UPDATE_KEYWORD_PARTS)
 
 
 def has_memory_request(lowered: str) -> bool:

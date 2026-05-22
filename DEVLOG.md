@@ -3557,3 +3557,55 @@ Compact memory має бути не квотою, а результатом аг
 
 **Перевірки:**
 Документальна корекція; код не змінювався.
+
+## Запис 60 — 2026-05-22 22:15 +03:00 — Подієвий sleep-trigger прибрано з поточного коду
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Попередній запис залишав подієвий sleep-trigger як dev/test accelerator. Користувач прямо відкинув це: поріг за кількістю повідомлень віджив своє і не має лишатися ані в GUI, ані в harness, ані в поточній архітектурі. Продуктові режими sleep мають бути тільки від token/context budget pressure або нічного idle schedule.
+
+**Задум:**
+Зробити sleep-рішення схожим на реальну памʼять і на нашу token-economy мету:
+
+- `ingest()` тільки записує подію;
+- коли active/current memory наближається до 11k budget, host ставить sleep у фон;
+- о 04:00 локального часу host запускає sleep для неактивних сесій із незаархівованими подіями;
+- ручний `/sleep` лишається debug/manual шляхом;
+- жодних лічильників повідомлень як тригера.
+
+**Що робили:**
+- прибрано `AutoSleepConfig` і поле `EngineOptions.auto_sleep`;
+- `IngestResult` більше не має `auto_sleep`;
+- Python adapter constructor більше не приймає `auto_sleep_after_events`;
+- Telegram GUI більше не показує поле `auto-sleep events` і не кешує його;
+- local harness більше не має аргументу `--auto-sleep-after-events`;
+- Telegram host отримав `maybe_queue_token_pressure_sleep(...)` і `maybe_queue_scheduled_idle_sleep(...)`;
+- scheduled sleep state зберігається в `runtime/state/sleep_scheduler_state.json`;
+- оновлено поточні docs, README, roadmap, contracts і HISTORY.
+
+**Що зробили детально:**
+1. Token-pressure sleep дивиться на `CoreContextBudgetReport`, dropped session context і оцінку незаархівованого transcript. За замовчуванням спрацьовує при `MEMORY_BOT_TOKEN_PRESSURE_RATIO=0.80`.
+2. Scheduled idle sleep за замовчуванням перевіряється о `MEMORY_BOT_IDLE_SLEEP_HOUR=4` і вимагає неактивності мінімум `MEMORY_BOT_IDLE_SLEEP_MIN_SECONDS=1800`.
+3. Перед постановкою sleep у фон host перевіряє pending `sleep_compression`, щоб не створювати дубль.
+4. `/sleep` і product triggers використовують один background `SleepRunner`, тому Telegram polling не блокується multi-pass compression.
+5. Поточні документи більше не описують подієвий trigger як доступний режим. Старі історичні DEVLOG-записи не переписувались; цей запис їх supersede-ить.
+
+**Проблеми чи виклики:**
+Спочатку `cargo test` упав через тест, який після видалення `auto_sleep` посилався на неіснуючу змінну `session_id`. Виправлено тест: тепер він доводить, що багато `ingest()` не створюють pending sleep tasks, а `IngestResult` має тільки `schema_version` і `stored_event`.
+
+**Фідбек користувача:**
+Користувач наполіг: "50 прибираємо", бо це був тестовий режим. Реальний sleep має бути за лімітами або вночі, коли бот неактивний.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py hosts\telegram_gemini_bot\local_harness.py hosts\telegram_gemini_bot\launch_gui.py` — пройшло.
+- `cargo fmt --check` — пройшло після `cargo fmt`.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `.\\.venv\\Scripts\\maturin.exe develop` у `crates/python_adapter` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest crates\python_adapter\tests` — 11 passed.
+- `git diff --check` — пройшло.
+
+**Наступні кроки:**
+Зробити commit, стерти runtime-памʼять Telegram host-а без видалення кешу ключів, підняти bot і провести новий довгий live-тест. Очікування тесту: sleep має спрацювати через token pressure або ручний `/sleep`/нічний schedule, а не через кількість повідомлень.

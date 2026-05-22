@@ -21,8 +21,8 @@ pub mod tasks;
 pub mod types;
 
 pub use engine::{
-    AutoSleepConfig, ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult,
-    MemoryEngine, RecallStage1Config, SleepStage1Config, SleepStage1Result,
+    ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult, MemoryEngine,
+    RecallStage1Config, SleepStage1Config, SleepStage1Result,
 };
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;

@@ -125,12 +125,6 @@ fn main() -> Result<()> {
             "Stored event: {} weight={:.2}",
             stored.event_id, stored.initial_weight
         );
-        if let Some(auto_sleep) = ingest_result.auto_sleep {
-            println!(
-                "Auto-sleep created archive {} and pending task {}.",
-                auto_sleep.archive_entry.archive_id, auto_sleep.pending_task.task_id
-            );
-        }
         run_recall(&mut engine, &session_id, input, false)?;
     }
 

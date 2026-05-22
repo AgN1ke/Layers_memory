@@ -181,7 +181,7 @@ hosts/telegram_gemini_bot/
 .\hosts\telegram_gemini_bot\run_gui.ps1
 ```
 
-Він відкриває маленьке вікно з полями для Telegram token, Gemini API key, model mapping і порога auto-sleep. Для локальної зручності GUI може кешувати ці значення у `hosts/telegram_gemini_bot/runtime/state/secrets.local.json`; файл gitignored і має кнопку очищення.
+Він відкриває маленьке вікно з полями для Telegram token, Gemini API key і model mapping. Для локальної зручності GUI може кешувати ці значення у `hosts/telegram_gemini_bot/runtime/state/secrets.local.json`; файл gitignored і має кнопку очищення.
 
 Скрипт:
 
@@ -196,7 +196,6 @@ hosts/telegram_gemini_bot/
 - Telegram bot token;
 - Gemini API key;
 - model mapping для ролей `reasoning`, `balanced`, `fast`.
-- `auto-sleep events` або env `MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS` для dev/test-прискорення sleep.
 
 Defaults:
 
@@ -204,9 +203,8 @@ Defaults:
 - `balanced` -> `gemini-2.5-flash`;
 - `fast` -> `gemini-2.5-flash-lite`;
 - chatbot replies -> `balanced`.
-- dev/test auto-sleep threshold -> `50` незаархівованих подій (`0` вимикає event-count trigger).
 
-Event-count trigger потрібен для локальної перевірки й emergency guard. Продуктова логіка sleep має йти від token/context budget pressure або від scheduled idle sleep, наприклад нічного запуску о 04:00.
+Sleep у bot host запускається вручну через `/sleep`, при token/context budget pressure або від scheduled idle sleep, наприклад нічного запуску о 04:00.
 
 Runtime memory host-бота:
 
@@ -240,8 +238,8 @@ hosts/telegram_gemini_bot/runtime/logs/token_usage.jsonl
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --list-scenarios
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --dry-run
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --turn-limit 4 --no-force-sleep-at-end
-.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario one_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0
-.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario multi_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario one_topic_compact --no-force-sleep-at-end
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario multi_topic_compact --no-force-sleep-at-end
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario all
 ```
 
@@ -266,17 +264,16 @@ Offset зберігається після кожного обробленого
 Поточна логіка діалогу:
 
 - plain text користувача зберігається як `user_message`;
-- `engine.ingest()` повертає `IngestResult` з `stored_event` і можливим `auto_sleep`;
+- `engine.ingest()` повертає `IngestResult` з `stored_event`;
 - bot просить `engine.core_context_package(...)`, а не збирає recent/trace/archive сам;
 - Gemini отримує compact prompt view із `session_recent`, `session_trace`, `archive_relevant` як `compact_memory` тези, `core_facts`, `domain_state`; повний debug/API package лишається в engine response і log/report, але не тягнеться в ordinary chat prompt із довгими IDs;
 - `session_recent` і `session_trace` містять тільки unarchived active tail; події, які вже пройшли sleep, мають приходити через `archive_relevant`;
-- rolling sleep за замовчуванням лишає приблизно 30% найсвіжіших unarchived events active, тому після auto-sleep бот не має різко втрачати щойно обговорений хвіст;
 - відповідь bot-а зберігається як `assistant_message`;
 - plain text не записується напряму в Core Store через regex extraction;
 - Telegram host додає мʼякі event-теги (`personal_fact_signal`, `name_reference`, `age_reference`, `preference_signal`) і піднімає `importance_hint`, щоб sleep/reflection потім уважніше переглянули ці події;
 - Telegram host записує і читає Core-факти зі scope `telegram_<chat_id>`, щоб факти різних чатів не змішувались;
 - Core можна перевірити командою `/core`, явно додати факт командою `/remember text`, оновити через `/core_update id text`, або прибрати з активного контексту через `/core_forget id`;
-- archive memory створюється через `/sleep`, auto-sleep keywords або engine-level auto-sleep після порога незаархівованих подій;
+- archive memory створюється через `/sleep`, token-pressure sleep або scheduled idle sleep;
 - Telegram host за замовчуванням виконує multi-pass sleep: compact memory pass, emotional pass, topic thread pass, personal signal pass, relational pass і consolidator. `compact_memory_pass` створює короткі тези для prompt, а решта проходів створює повний audit/archive. Для debug старий single-pass режим можна увімкнути env `MEMORY_BOT_SLEEP_MODE=single`.
 - активний чат-промпт Telegram host-а лежить у `prompts/telegram_chat_system.md`, а не захардкоджений у Python.
 
@@ -331,7 +328,7 @@ $venv = "C:\Python_projects\Layers_memory\crates\python_adapter\.venv"
 
 - `test_ingest_creates_stored_event`;
 - `test_read_session_returns_stored_events`;
-- `test_ingest_returns_auto_sleep_after_default_threshold`;
+- `test_explicit_sleep_preserves_active_tail`;
 - `test_full_cycle_ingest_sleep_resume_recall`;
 - `test_core_context_package_combines_session_and_archive`;
 - `test_upsert_core_fact_is_returned_in_context_package`;

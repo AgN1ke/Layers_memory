@@ -2,7 +2,7 @@ use memory_engine::event::IngestEvent;
 use memory_engine::types::{
     EVENT_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
 };
-use memory_engine::{AutoSleepConfig, EngineOptions, FileStorage, MemoryEngine};
+use memory_engine::{FileStorage, MemoryEngine};
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -89,48 +89,21 @@ fn engine_ingest_rejects_wrong_schema_version() {
 }
 
 #[test]
-fn engine_ingest_returns_auto_sleep_when_unarchived_threshold_is_reached() {
-    let root = unique_temp_dir("engine_ingest_returns_auto_sleep_when_threshold_is_reached");
+fn engine_ingest_does_not_trigger_sleep_from_event_count() {
+    let root = unique_temp_dir("engine_ingest_does_not_trigger_sleep_from_event_count");
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
-    let mut engine = MemoryEngine::with_options(
-        storage,
-        EngineOptions {
-            auto_sleep: AutoSleepConfig {
-                enabled: true,
-                after_events: 3,
-            },
-            ..EngineOptions::default()
-        },
-    );
+    let mut engine = MemoryEngine::new(storage);
 
-    let first = ingest_numbered_event(&mut engine, 0);
-    let second = ingest_numbered_event(&mut engine, 1);
-    let third = ingest_numbered_event(&mut engine, 2);
-    let fourth = ingest_numbered_event(&mut engine, 3);
+    let mut last = None;
+    for index in 0..60 {
+        last = Some(ingest_numbered_event(&mut engine, index));
+    }
 
-    assert!(first.auto_sleep.is_none());
-    assert!(second.auto_sleep.is_none());
-
-    let auto_sleep = third.auto_sleep.expect("third event triggers auto sleep");
     assert_eq!(
-        auto_sleep.archive_entry.source_session_id,
-        "auto_sleep_session"
+        last.expect("last ingest").stored_event.session_id,
+        "event_count_session"
     );
-    assert_eq!(auto_sleep.archive_entry.source_event_ids.len(), 3);
-    assert_eq!(auto_sleep.pending_task.prompt_id, "sleep_compression");
-    assert_eq!(
-        auto_sleep
-            .compact_memory_task
-            .as_ref()
-            .expect("compact memory task")
-            .prompt_id,
-        "compact_memory_pass"
-    );
-
-    assert!(
-        fourth.auto_sleep.is_none(),
-        "new preliminary archive should prevent duplicate auto-sleep on the next event"
-    );
+    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
 
     fs::remove_dir_all(root).ok();
 }
@@ -145,7 +118,7 @@ fn ingest_numbered_event(
             event_type: "user_message".to_string(),
             source: "telegram_user_42".to_string(),
             timestamp: format!("2026-05-17T16:32:1{index}.420Z"),
-            session_id: "auto_sleep_session".to_string(),
+            session_id: "event_count_session".to_string(),
             payload: json!({ "text": format!("Подія {index}") }),
             tags: vec!["telegram_message".to_string()],
             theme: Some("telegram_conversation".to_string()),

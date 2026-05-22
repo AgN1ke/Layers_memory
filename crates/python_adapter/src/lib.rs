@@ -36,22 +36,13 @@ pub struct PyMemoryEngine {
 #[pymethods]
 impl PyMemoryEngine {
     #[new]
-    #[pyo3(signature = (memory_dir, host_id="unknown", auto_sleep_after_events=None))]
-    fn new(
-        memory_dir: &str,
-        host_id: &str,
-        auto_sleep_after_events: Option<usize>,
-    ) -> PyResult<Self> {
+    #[pyo3(signature = (memory_dir, host_id="unknown"))]
+    fn new(memory_dir: &str, host_id: &str) -> PyResult<Self> {
         let path = PathBuf::from(memory_dir);
         let storage = FileStorage::with_host_id(&path, host_id);
         storage.ensure_layout().map_err(map_err)?;
-        let mut options = EngineOptions::default();
-        if let Some(after_events) = auto_sleep_after_events {
-            options.auto_sleep.enabled = after_events > 0;
-            options.auto_sleep.after_events = after_events;
-        }
         Ok(Self {
-            inner: CoreEngine::with_options(storage, options),
+            inner: CoreEngine::with_options(storage, EngineOptions::default()),
         })
     }
 

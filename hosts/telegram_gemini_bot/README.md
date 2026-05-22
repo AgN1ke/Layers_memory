@@ -10,8 +10,7 @@
 - пише повідомлення користувача і відповіді bot-а в памʼять через `ingest`;
 - просить у engine готовий `core_context_package` для prompt-а;
 - відповідає через Gemini;
-- створює archive memory через `/sleep`;
-- виконує engine-level `auto_sleep`, якщо `ingest` повернув sleep task;
+- створює archive memory через `/sleep`, token-pressure sleep або scheduled idle sleep;
 - зберігає explicit Core-факти через `/remember` у scope поточного `telegram_<chat_id>`;
 - після успішного sleep переносить достатньо впевнені `personal_signals` з archive у Core без regex-хардкоду;
 - додає мʼякі event-теги для можливих профільних фактів, щоб майбутній reflection міг їх переглянути;
@@ -32,7 +31,7 @@
 .\hosts\telegram_gemini_bot\run_gui.ps1
 ```
 
-Він відкриє маленьке вікно з полями для token/key, model mapping, порога auto-sleep і запустить bot з env-змінними.
+Він відкриє маленьке вікно з полями для token/key і model mapping та запустить bot з env-змінними.
 
 GUI launcher може кешувати token/key і model mapping у локальному файлі:
 
@@ -50,8 +49,8 @@ hosts/telegram_gemini_bot/runtime/state/secrets.local.json
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --list-scenarios
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --dry-run
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario mixed_short --turn-limit 4 --no-force-sleep-at-end
-.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario one_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0
-.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario multi_topic_compact --no-force-sleep-at-end --auto-sleep-after-events 0
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario one_topic_compact --no-force-sleep-at-end
+.\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario multi_topic_compact --no-force-sleep-at-end
 .\hosts\telegram_gemini_bot\run_local_harness.ps1 --scenario all
 ```
 
@@ -75,7 +74,6 @@ Harness читає Gemini key із `runtime/state/secrets.local.json` або `GE
 - `balanced` -> `gemini-2.5-flash`
 - `fast` -> `gemini-2.5-flash-lite`
 - chatbot replies -> `balanced`
-- dev/test auto-sleep threshold -> `50`
 
 Під час запуску можна натиснути Enter і лишити defaults, або ввести іншу модель.
 
@@ -98,18 +96,18 @@ Harness читає Gemini key із `runtime/state/secrets.local.json` або `GE
 Plain text без `/`:
 
 1. Зберігається як event.
-2. Якщо engine повертає `auto_sleep`, bot запамʼятовує цей sleep task для виконання після відповіді. Поточний `auto_sleep_after_events` — dev/test-прискорювач, а не продуктовий sleep trigger.
-3. Просить `core_context_package` у engine.
-4. Дає Gemini відповідь з готовим context package.
-5. Зберігає відповідь bot-а як `assistant_message`.
-6. Додає до user event мʼякі теги на кшталт `name_reference`, `age_reference`, `preference_signal`, якщо текст схожий на потенційно важливу інформацію.
-7. Якщо user-message або assistant-message перетнули auto-sleep поріг, bot виконує повернені `compact_memory_pass` і `sleep_compression` tasks через Gemini flow і завершує `resume_compact_memory_pass` / `resume_sleep_compression`.
+2. Просить `core_context_package` у engine.
+3. Дає Gemini відповідь з готовим context package.
+4. Зберігає відповідь bot-а як `assistant_message`.
+5. Додає до user event мʼякі теги на кшталт `name_reference`, `age_reference`, `preference_signal`, якщо текст схожий на потенційно важливу інформацію.
+6. Якщо context budget наближається до межі, bot ставить `engine.sleep(session_id)` у background queue і виконує `compact_memory_pass` / `sleep_compression` через Gemini.
+7. Окремо bot має scheduled idle sleep: у нічне вікно, якщо сесія має незаархівовані події й не активна, він запускає той самий sleep flow без ручної команди.
 
-Після sleep context package не дублює archived raw events у `session_recent` / `session_trace`. Старша частина unarchived window переходить в `archive_relevant` як `compact_memory` тези "подія -> висновок", а приблизно 30% найсвіжіших events лишаються active tail для плавного продовження розмови.
+Після sleep context package не дублює archived raw events у `session_recent` / `session_trace`. Старша частина розмови повертається в `archive_relevant` як `compact_memory` тези "подія -> висновок".
 
 Core-факти ізольовані по Telegram chat id. Якщо bot-у пишуть два різні користувачі з різних чатів, `/core` і prompt-контекст кожного чату бачать тільки свій scope.
 
-Якщо повідомлення містить явне прохання оновити памʼять (`запам...`, `запиши в пам...`, `це важливо`, `онови пам...`), bot автоматично ставить sleep у фон після відповіді, щоб ця подія швидше стала archive memory.
+Якщо повідомлення містить явне прохання оновити памʼять (`запам...`, `запиши в пам...`, `це важливо`, `онови пам...`), bot позначає event тегами й піднімає `importance_hint`, але не запускає sleep тільки через ключове слово. Перехід у archive відбувається через token-pressure, scheduled idle або ручний `/sleep`.
 
 Після успішного sleep host бере `personal_signals`, які виділив LLM-прохід, і переносить у Core тільки сигнали з confidence `>= 0.85`, підтримкою хоча б одного `user_message` source event і без near-duplicate у поточному Core scope. Категорія є вільним normalized `snake_case` полем (`name`, `pet`, `physical_trait`, `food_preference`, тощо), а не whitelist. Це не regex-витяг фактів із raw text: код не шукає "кішку", "імʼя" чи інші конкретні сутності. Він лише застосовує загальні gate-правила до структурованого результату sleep. `/core_seed` повторює цей крок для вже завершених archive-записів.
 
@@ -151,6 +149,6 @@ hosts/telegram_gemini_bot/runtime/state/telegram_offset.json
 
 Це простий long-polling bot через Telegram Bot API `getUpdates`/`sendMessage`.
 
-Він не зберігає API keys у файлах. Token і key вводяться в терміналі на кожному запуску.
+Він може кешувати API keys тільки у локальному gitignored `runtime/state/secrets.local.json`, якщо це явно увімкнено у GUI.
 
 LLM-сегрегація зроблена на host-рівні: Memory Engine повертає `PendingTask.role_hint`, а bot вибирає конкретну Gemini model за role mapping.

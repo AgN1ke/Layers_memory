@@ -86,12 +86,10 @@ impl<S: Storage> MemoryEngine<S> {
         );
 
         self.storage.append_event(&stored.session_id, &stored)?;
-        let auto_sleep = self.maybe_auto_sleep(&stored.session_id)?;
 
         Ok(IngestResult {
             schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
             stored_event: stored,
-            auto_sleep,
         })
     }
 
@@ -115,43 +113,6 @@ impl<S: Storage> MemoryEngine<S> {
             .into_iter()
             .filter(|task| matches!(task.state, TaskState::Pending | TaskState::Submitted))
             .collect())
-    }
-
-    fn maybe_auto_sleep(&mut self, session_id: &str) -> Result<Option<SleepStage1Result>> {
-        if !self.options.auto_sleep.enabled || self.options.auto_sleep.after_events == 0 {
-            return Ok(None);
-        }
-
-        if self.has_pending_sleep_task_for_session(session_id)? {
-            return Ok(None);
-        }
-
-        let session = self.storage.read_session(session_id)?;
-        let unarchived_event_count = self.unarchived_event_count(&session)?;
-        if unarchived_event_count < self.options.auto_sleep.after_events {
-            return Ok(None);
-        }
-
-        self.sleep(session_id).map(Some)
-    }
-
-    fn has_pending_sleep_task_for_session(&self, session_id: &str) -> Result<bool> {
-        Ok(self.storage.load_tasks()?.into_iter().any(|task| {
-            task.task_type == TaskType::SleepCompression
-                && matches!(task.state, TaskState::Pending | TaskState::Submitted)
-                && task.inputs.get("session_id").and_then(Value::as_str) == Some(session_id)
-        }))
-    }
-
-    fn unarchived_event_count(&self, session: &SessionRecord) -> Result<usize> {
-        let archived_event_ids =
-            self.archived_event_ids_for_session(&session.metadata.session_id)?;
-
-        Ok(session
-            .events
-            .iter()
-            .filter(|event| !archived_event_ids.contains(&event.event_id))
-            .count())
     }
 
     fn archived_event_ids_for_session(&self, session_id: &str) -> Result<HashSet<String>> {
@@ -652,7 +613,6 @@ pub struct EngineOptions {
     pub event_scoring: EventScoringConfig,
     pub sleep: SleepStage1Config,
     pub recall: RecallStage1Config,
-    pub auto_sleep: AutoSleepConfig,
     pub context: ContextPackageConfig,
 }
 
@@ -700,12 +660,6 @@ pub struct RecallStage1Config {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AutoSleepConfig {
-    pub enabled: bool,
-    pub after_events: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct ContextPackageConfig {
     pub default_session_recent_limit: usize,
     pub default_session_trace_event_limit: usize,
@@ -724,15 +678,6 @@ impl Default for RecallStage1Config {
             tag_overlap_bonus: 0.1,
             text_match_bonus: 0.5,
             no_text_match_factor: 0.7,
-        }
-    }
-}
-
-impl Default for AutoSleepConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            after_events: 50,
         }
     }
 }
@@ -756,8 +701,6 @@ impl Default for ContextPackageConfig {
 pub struct IngestResult {
     pub schema_version: String,
     pub stored_event: StoredEvent,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_sleep: Option<SleepStage1Result>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -32,7 +32,6 @@ engine = memory_engine.MemoryEngine("memory", host_id="telegram_bot")
 
 ingest_result = json.loads(engine.ingest(json.dumps(event_dict)))
 stored = ingest_result["stored_event"]
-auto_sleep = ingest_result.get("auto_sleep")
 session = json.loads(engine.read_session(session_id))
 context = json.loads(engine.core_context_package(json.dumps(context_request_dict)))
 sleep_result = json.loads(engine.sleep(session_id))
@@ -41,9 +40,9 @@ recall_result = json.loads(engine.recall(json.dumps(query_dict)))
 pending = json.loads(engine.pending_tasks())
 ```
 
-`auto_sleep` has the same shape as `sleep_result` when the engine decides
-the session has enough unarchived events to create a `sleep_compression`
-task. The host still executes that task through its own LLM provider.
+Sleep is an explicit host decision in v0.1. A host calls `engine.sleep(session_id)`
+manually, from token-budget pressure, or from an idle schedule, then executes the
+returned tasks through its own LLM provider.
 
 All payloads follow the JSON contracts in `docs/contracts.md` at the
 repository root.

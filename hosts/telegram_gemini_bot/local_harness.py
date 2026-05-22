@@ -151,7 +151,6 @@ def main() -> None:
             session_id=session_id,
             llm_config=llm_config,
             gemini=gemini,
-            auto_sleep_after_events=args.auto_sleep_after_events,
             turn_limit=args.turn_limit,
             force_sleep_at_end=args.force_sleep_at_end,
         )
@@ -163,12 +162,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--list-scenarios", action="store_true", help="List available scenarios.")
     parser.add_argument("--session-id", help="Explicit session id. Only valid for a single scenario.")
     parser.add_argument("--turn-limit", type=int, default=0, help="Run only the first N user turns.")
-    parser.add_argument(
-        "--auto-sleep-after-events",
-        type=int,
-        default=24,
-        help="Engine auto-sleep threshold for harness sessions.",
-    )
     parser.add_argument(
         "--force-sleep-at-end",
         action=argparse.BooleanOptionalAction,
@@ -270,7 +263,6 @@ def run_scenario(
     session_id: str,
     llm_config: bot.HostLlmConfig,
     gemini: bot.GeminiClient,
-    auto_sleep_after_events: int,
     turn_limit: int,
     force_sleep_at_end: bool,
 ) -> None:
@@ -278,7 +270,6 @@ def run_scenario(
     engine = memory_engine.MemoryEngine(
         str(bot.MEMORY_DIR),
         host_id="local_conversation_harness",
-        auto_sleep_after_events=auto_sleep_after_events,
     )
     transcript: list[HarnessTurn] = []
     sleep_summaries: list[str] = []
@@ -389,30 +380,7 @@ def process_local_text(
         payload_extra={"model": model, "local_turn_index": turn_index},
     )
 
-    sleep_summaries = complete_auto_sleeps(engine, gemini, llm_config, user_ingest, assistant_ingest)
-    if bot.should_auto_sleep(text) and not sleep_summaries:
-        sleep_summaries.append(bot.run_sleep(engine, gemini, llm_config, session_id))
-    return answer, sleep_summaries
-
-
-def complete_auto_sleeps(
-    engine: memory_engine.MemoryEngine,
-    gemini: bot.GeminiClient,
-    llm_config: bot.HostLlmConfig,
-    *ingest_results: dict[str, Any],
-) -> list[str]:
-    summaries = []
-    seen_tasks: set[str] = set()
-    for ingest_result in ingest_results:
-        sleep_result = ingest_result.get("auto_sleep")
-        if not sleep_result:
-            continue
-        task_id = sleep_result.get("pending_task", {}).get("task_id")
-        if task_id in seen_tasks:
-            continue
-        seen_tasks.add(task_id)
-        summaries.append(bot.complete_sleep_result(engine, gemini, llm_config, sleep_result))
-    return summaries
+    return answer, []
 
 
 def try_final_sleep(

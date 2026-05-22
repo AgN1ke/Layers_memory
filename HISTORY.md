@@ -46,6 +46,31 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-22 — Removed message-count sleep trigger
+
+The owner rejected the message-count sleep path as a test-era shortcut that kept leaking into product planning. The product model has two sleep triggers: token/context budget pressure and scheduled idle sleep during a quiet time window.
+
+**What changed:**
+- Removed the message-count trigger configuration from `EngineOptions` and the Python adapter constructor.
+- `engine.ingest()` now only stores the event and returns `IngestResult { schema_version, stored_event }`.
+- Removed the GUI field and local harness argument for the old trigger.
+- Telegram host now queues sleep from token pressure (`MEMORY_BOT_TOKEN_PRESSURE_RATIO`, default 0.80) or scheduled idle sleep (`MEMORY_BOT_IDLE_SLEEP_HOUR`, default 04:00; `MEMORY_BOT_IDLE_SLEEP_MIN_SECONDS`, default 1800).
+- Current docs and README describe only `/sleep`, token-pressure sleep, and scheduled idle sleep.
+
+**What is retracted (if applicable):**
+- The prior claim that the message-count trigger should remain as a dev/test accelerator or emergency guard. It is removed from current behavior.
+
+**What is still true:**
+- `engine.sleep(session_id)` remains the only path that creates sleep tasks.
+- Full archive storage, compact memory, token budget, and Archive -> Core bridge behavior are unchanged.
+- Historical DEVLOG entries are not rewritten; they remain records of earlier decisions and are superseded by this entry.
+
+**What we are doing:**
+- Retest the Telegram host with wiped runtime memory and long human conversations so sleep is driven by token pressure or the idle schedule.
+
+**Thanks:**
+- Mykyta Zagamula for forcing the product sleep policy back to context limits and quiet-time consolidation instead of a convenient test counter.
+
 ## 2026-05-22 — Removed fixed compact-memory thesis quota
 
 The first `compact_memory_pass` prompt incorrectly told the model to return 5-7 theses. That was a narrow quota, not a memory principle. It could force over-splitting a one-topic conversation or under-represent a session with many distinct memory units.

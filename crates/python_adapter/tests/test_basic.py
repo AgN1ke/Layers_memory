@@ -65,29 +65,25 @@ def test_read_session_returns_stored_events(engine: memory_engine.MemoryEngine):
     ]
 
 
-def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine.MemoryEngine):
+def test_explicit_sleep_preserves_active_tail(engine: memory_engine.MemoryEngine):
     last_result = None
     for index in range(50):
         last_result = _ingest(
             engine,
-            "auto_sleep_session",
+            "sleep_pressure_session",
             f"Подія {index}",
             timestamp=f"2026-05-18T10:{index:02}:00.000Z",
         )
 
     assert last_result is not None
-    auto_sleep = last_result["auto_sleep"]
-    assert auto_sleep["archive_entry"]["source_session_id"] == "auto_sleep_session"
-    assert len(auto_sleep["archive_entry"]["source_event_ids"]) == 35
-    assert auto_sleep["pending_task"]["task_type"] == "sleep_compression"
-    assert auto_sleep["compact_memory_task"]["task_type"] == "compact_memory_pass"
+    assert set(last_result) == {"schema_version", "stored_event"}
 
     package = json.loads(
         engine.core_context_package(
             json.dumps(
                 {
                     "schema_version": "core_context_request.v1",
-                    "session_id": "auto_sleep_session",
+                    "session_id": "sleep_pressure_session",
                     "domain_state": {"current_text": "Що зараз активне?"},
                     "query_text": "Подія",
                     "recall_limit": 5,
@@ -109,17 +105,23 @@ def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine
     assert package["session_trace"][-1]["text"] == "Подія 49"
     assert package.get("archive_relevant", []) == []
 
+    sleep_result = json.loads(engine.sleep("sleep_pressure_session"))
+    assert sleep_result["archive_entry"]["source_session_id"] == "sleep_pressure_session"
+    assert len(sleep_result["archive_entry"]["source_event_ids"]) == 35
+    assert sleep_result["pending_task"]["task_type"] == "sleep_compression"
+    assert sleep_result["compact_memory_task"]["task_type"] == "compact_memory_pass"
+
     engine.resume_sleep_compression(
-        auto_sleep["pending_task"]["task_id"],
+        sleep_result["pending_task"]["task_id"],
         json.dumps(
             {
                 "schema_version": "sleep_compression_result.v1",
-                "archive_id": auto_sleep["archive_entry"]["archive_id"],
+                "archive_id": sleep_result["archive_entry"]["archive_id"],
                 "gist": "Стиснені події 0-34.",
-                "narrative": "Старша частина auto-sleep сесії була перенесена в архів.",
+                "narrative": "Старша частина сесії була перенесена в архів.",
                 "facts": [],
                 "quotes": [],
-                "tags": ["auto_sleep"],
+                "tags": ["sleep"],
                 "theme": "test_memory",
                 "weight": 0.85,
                 "links": [],
@@ -127,7 +129,7 @@ def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine
         ),
     )
     engine.resume_compact_memory_pass(
-        auto_sleep["compact_memory_task"]["task_id"],
+        sleep_result["compact_memory_task"]["task_id"],
         "Події 0-34 -> старша частина сесії стиснулась у коротку пам'ять.",
     )
 
@@ -136,7 +138,7 @@ def test_ingest_returns_auto_sleep_after_default_threshold(engine: memory_engine
             json.dumps(
                 {
                     "schema_version": "core_context_request.v1",
-                    "session_id": "auto_sleep_session",
+                    "session_id": "sleep_pressure_session",
                     "domain_state": {"current_text": "Що зараз активне?"},
                     "query_text": "Подія",
                     "recall_limit": 5,

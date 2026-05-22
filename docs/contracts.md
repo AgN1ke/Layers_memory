@@ -294,21 +294,11 @@ Markdown-файли існують для людини. Вони не замін
     "processing_mode": "defer_to_sleep",
     "initial_weight": 0.75,
     "weight_reason": "High importance hint and personal_fact tag."
-  },
-  "auto_sleep": null
+  }
 }
 ```
 
-`auto_sleep` або `null`/відсутній, або має форму `SleepStage1Result`:
-
-```json
-{
-  "archive_entry": {},
-  "pending_task": {}
-}
-```
-
-Auto-sleep створюється ядром, коли кількість незаархівованих подій у сесії досягає налаштованого порога. Хост не вирішує, коли стискати сесію; хост тільки виконує повернений `PendingTask` через свій LLM-провайдер.
+Sleep запускається окремим викликом `engine.sleep(session_id)`: вручну, при token-budget pressure або за scheduled idle trigger у хості. Хост не має стискати raw chat сам; він тільки запускає sleep і виконує повернені `PendingTask` через свій LLM-провайдер.
 
 ---
 
@@ -1313,7 +1303,7 @@ memory/
 Для MVP Memory Engine має вміти:
 
 1. Прийняти `IngestEvent`.
-2. Повернути `IngestResult` зі `StoredEvent` і, за потреби, `auto_sleep`.
+2. Повернути `IngestResult` зі `StoredEvent`.
 3. Записати `StoredEvent` у `memory/sessions/<session_id>/events.jsonl`.
 4. Підтримувати людський `session.md`.
 5. Створити preliminary `ArchiveEntry` під час sleep-stage-1.

@@ -28,7 +28,6 @@ DEFAULT_REASONING_MODEL = "gemini-2.5-pro"
 DEFAULT_BALANCED_MODEL = "gemini-2.5-flash"
 DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CHAT_ROLE = "balanced"
-DEFAULT_AUTO_SLEEP_AFTER_EVENTS = "50"
 
 
 def load_cache() -> dict[str, str]:
@@ -63,7 +62,7 @@ def main() -> None:
 
     app = tk.Tk()
     app.title("Memory Bot Launcher")
-    app.geometry("640x470")
+    app.geometry("640x430")
     app.resizable(False, False)
 
     token_var = tk.StringVar(value=cache.get("telegram_token", ""))
@@ -72,7 +71,6 @@ def main() -> None:
     balanced_var = tk.StringVar(value=cache.get("balanced_model", DEFAULT_BALANCED_MODEL))
     fast_var = tk.StringVar(value=cache.get("fast_model", DEFAULT_FAST_MODEL))
     chat_role_var = tk.StringVar(value=cache.get("chat_role", DEFAULT_CHAT_ROLE))
-    auto_sleep_var = tk.StringVar(value=cache.get("auto_sleep_events", DEFAULT_AUTO_SLEEP_AFTER_EVENTS))
     remember_var = tk.BooleanVar(value=True)
 
     def add_row(row: int, label: str, variable: tk.StringVar, show: str | None = None) -> None:
@@ -97,14 +95,13 @@ def main() -> None:
     add_row(4, "balanced model", balanced_var)
     add_row(5, "fast model", fast_var)
     add_row(6, "chat reply role", chat_role_var)
-    add_row(7, "auto-sleep events", auto_sleep_var)
 
     tk.Checkbutton(
         app,
         text="Remember locally (ignored by git, stored as local plaintext)",
         variable=remember_var,
         anchor="w",
-    ).grid(row=8, column=1, padx=12, pady=(4, 6), sticky="w")
+    ).grid(row=7, column=1, padx=12, pady=(4, 6), sticky="w")
 
     def clear_saved_values() -> None:
         clear_cache()
@@ -139,9 +136,6 @@ def main() -> None:
         env["GEMINI_BALANCED_MODEL"] = balanced_var.get().strip() or DEFAULT_BALANCED_MODEL
         env["GEMINI_FAST_MODEL"] = fast_var.get().strip() or DEFAULT_FAST_MODEL
         env["MEMORY_BOT_CHAT_ROLE"] = chat_role_var.get().strip() or DEFAULT_CHAT_ROLE
-        env["MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS"] = (
-            auto_sleep_var.get().strip() or DEFAULT_AUTO_SLEEP_AFTER_EVENTS
-        )
         env["MEMORY_BOT_NONINTERACTIVE"] = "1"
         env["MEMORY_BOT_KEEP_CONSOLE_OPEN"] = "1"
 
@@ -154,7 +148,6 @@ def main() -> None:
                     "balanced_model": env["GEMINI_BALANCED_MODEL"],
                     "fast_model": env["GEMINI_FAST_MODEL"],
                     "chat_role": env["MEMORY_BOT_CHAT_ROLE"],
-                    "auto_sleep_events": env["MEMORY_BOT_AUTO_SLEEP_AFTER_EVENTS"],
                 }
             )
 
@@ -176,10 +169,10 @@ def main() -> None:
         app.destroy()
 
     tk.Button(app, text="Start bot", command=start_bot, width=18).grid(
-        row=9, column=1, padx=12, pady=18, sticky="e"
+        row=8, column=1, padx=12, pady=18, sticky="e"
     )
     tk.Button(app, text="Clear saved keys", command=clear_saved_values, width=18).grid(
-        row=9, column=0, padx=12, pady=18, sticky="w"
+        row=8, column=0, padx=12, pady=18, sticky="w"
     )
 
     app.grid_columnconfigure(1, weight=1)
