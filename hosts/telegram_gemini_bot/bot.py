@@ -68,6 +68,8 @@ ARCHIVE_LIST_LIMIT = 5
 ARCHIVE_DETAIL_LIMIT = 10
 CORE_SIGNAL_MIN_CONFIDENCE = 0.85
 MAX_CORE_CATEGORY_LENGTH = 64
+SLEEP_PASS_MAX_ATTEMPTS = 3
+SLEEP_PASS_RETRY_DELAY_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -1161,13 +1163,36 @@ def safe_execute_compact_memory_pass(
     llm_config: HostLlmConfig,
     failed_passes: list[str],
 ) -> str:
-    try:
-        return execute_compact_memory_pass(task, gemini, llm_config)
-    except Exception as err:
-        prompt_id = clean_string(task.get("prompt_id")) or "compact_memory_pass"
-        failed_passes.append(prompt_id)
-        log_exception(f"{prompt_id} failed; continuing without compact memory", err)
-        return ""
+    prompt_id = clean_string(task.get("prompt_id")) or "compact_memory_pass"
+    last_error: Exception | None = None
+    for attempt in range(1, SLEEP_PASS_MAX_ATTEMPTS + 1):
+        try:
+            return execute_compact_memory_pass(task, gemini, llm_config)
+        except Exception as err:
+            last_error = err
+            if attempt < SLEEP_PASS_MAX_ATTEMPTS:
+                log_line(
+                    f"{prompt_id} attempt={attempt}/{SLEEP_PASS_MAX_ATTEMPTS} failed; "
+                    f"retrying: {type(err).__name__}: {err}"
+                )
+                time.sleep(SLEEP_PASS_RETRY_DELAY_SECONDS)
+                continue
+            failed_passes.append(prompt_id)
+            log_exception(
+                f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
+                "continuing without compact memory",
+                err,
+            )
+            return ""
+
+    failed_passes.append(prompt_id)
+    if last_error is not None:
+        log_exception(
+            f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
+            "continuing without compact memory",
+            last_error,
+        )
+    return ""
 
 
 def safe_execute_sleep_pass_json(
@@ -1179,19 +1204,42 @@ def safe_execute_sleep_pass_json(
     fallback: dict[str, Any],
     failed_passes: list[str],
 ) -> dict[str, Any]:
-    try:
-        return execute_prompt_json(
-            prompt_id,
-            prompt_input,
-            role_hint,
-            gemini,
-            llm_config,
-            retry_on_json_error=True,
+    last_error: Exception | None = None
+    for attempt in range(1, SLEEP_PASS_MAX_ATTEMPTS + 1):
+        try:
+            return execute_prompt_json(
+                prompt_id,
+                prompt_input,
+                role_hint,
+                gemini,
+                llm_config,
+                retry_on_json_error=True,
+            )
+        except Exception as err:
+            last_error = err
+            if attempt < SLEEP_PASS_MAX_ATTEMPTS:
+                log_line(
+                    f"{prompt_id} attempt={attempt}/{SLEEP_PASS_MAX_ATTEMPTS} failed; "
+                    f"retrying: {type(err).__name__}: {err}"
+                )
+                time.sleep(SLEEP_PASS_RETRY_DELAY_SECONDS)
+                continue
+            failed_passes.append(prompt_id)
+            log_exception(
+                f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
+                "using empty track fallback",
+                err,
+            )
+            return fallback.copy()
+
+    failed_passes.append(prompt_id)
+    if last_error is not None:
+        log_exception(
+            f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
+            "using empty track fallback",
+            last_error,
         )
-    except Exception as err:
-        failed_passes.append(prompt_id)
-        log_exception(f"{prompt_id} failed; using empty track fallback", err)
-        return fallback.copy()
+    return fallback.copy()
 
 
 def execute_compact_memory_pass(

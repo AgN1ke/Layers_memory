@@ -3656,3 +3656,36 @@ Personal signal pass у live-архіві двічі отримав `PROHIBITED_
 
 **Наступні кроки:**
 Прогнати `git diff --check`, зробити commit, підняти рівно один bot-процес і продовжити live-тест. Особливо дивитись на `pass_failed:*` у future archives і на те, чи token-pressure sleep більше не блокується pending task-ом.
+
+## Запис 62 — 2026-05-23 00:41 +03:00 — Три спроби для sleep-pass перед fail-soft fallback
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+У live-тесті один із спеціалізованих sleep-passʼів (`sleep_personal_signal_pass`) отримав від Gemini `PROHIBITED_CONTENT`. Після попереднього виправлення sleep уже не зависав у `pending`, але один випадковий provider block одразу переводив відповідний трек у порожній fallback. Це занадто крихко для живої памʼяті: якщо block випадковий або нестабільний, треба дати passʼу кілька шансів, але не відкривати безкінечний retry-loop.
+
+**Задум:**
+Додати обмежений retry: максимум 3 спроби для `compact_memory_pass` і для кожного JSON sleep-passʼа. Якщо всі 3 спроби падають, тоді лишається існуючий fail-soft fallback із тегом `pass_failed:<prompt_id>`.
+
+**Що робили:**
+- додано `SLEEP_PASS_MAX_ATTEMPTS = 3`;
+- додано `SLEEP_PASS_RETRY_DELAY_SECONDS = 1.0`;
+- `safe_execute_compact_memory_pass(...)` тепер пробує виконати compact pass до 3 разів;
+- `safe_execute_sleep_pass_json(...)` тепер пробує виконати emotional/topic/personal/relational pass до 3 разів;
+- проміжні падіння пишуться в `bot.log` як `attempt=N/3 failed; retrying`;
+- повний traceback лишається тільки на фінальному падінні після третьої спроби;
+- після третьої невдачі поведінка не змінилась: sleep не зависає, а проходить із порожнім треком і `pass_failed:*`.
+
+**Що зробили детально:**
+Retry додано тільки на host-side LLM orchestration у `hosts/telegram_gemini_bot/bot.py`. Rust core, storage-схеми, prompt-контракти і trigger-логіка не змінювались. Це не нова memory-фіча, а стабілізація існуючого sleep pipeline.
+
+**Проблеми чи виклики:**
+Одна high-level спроба JSON-passʼа все ще може включати внутрішній one-shot JSON retry, якщо модель повернула невалідний JSON. Це прийнятно для sleep, бо sleep виконується фоном і дешевшою/балансною моделлю; для foreground chat таку політику не додавали, щоб не роздувати затримку й вартість відповіді.
+
+**Фідбек користувача:**
+Користувач запропонував: "Так зроби по 3 спроби чи шо".
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `git diff --check` — пройшло.
