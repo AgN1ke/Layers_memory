@@ -1,14 +1,16 @@
-[package]
-name = "memory_engine"
+[workspace]
+members = [
+    "crates/memory_engine",
+    "crates/python_adapter",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Reusable three-layer memory engine core"
+license-file = "LICENSE.md"
 
-[lib]
-name = "memory_engine"
-path = "src/lib.rs"
-
-[dependencies]
+[workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"

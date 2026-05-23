@@ -12,7 +12,7 @@ use crate::journal::{JournalOperation, JournalState};
 use crate::manifest::Manifest;
 use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
 use crate::storage::Storage;
-use crate::types::SESSION_SCHEMA_VERSION;
+use crate::types::{CORE_STORE_SCHEMA_VERSION, SESSION_SCHEMA_VERSION};
 use crate::{MemoryEngineError, Result};
 
 #[derive(Debug, Clone)]
@@ -181,6 +181,10 @@ impl FileStorage {
 }
 
 impl Storage for FileStorage {
+    fn manifest_exists(&self) -> Result<bool> {
+        Ok(self.manifest_path().exists())
+    }
+
     fn read_manifest(&self) -> Result<Manifest> {
         read_json(&self.manifest_path())
     }
@@ -226,6 +230,11 @@ impl Storage for FileStorage {
         atomic_write_json(&path, entry)
     }
 
+    fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry> {
+        let path = self.archive_entry_path_by_id(archive_id)?;
+        read_json(&path)
+    }
+
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>> {
         let mut files = Vec::new();
         collect_json_files(&self.root.join("archive"), &mut files)?;
@@ -242,7 +251,31 @@ impl Storage for FileStorage {
     }
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory> {
-        read_json(&self.core_store_path(category))
+        let path = self.core_store_path(category);
+        if !path.exists() {
+            return Ok(CoreStoreCategory {
+                schema_version: CORE_STORE_SCHEMA_VERSION.to_string(),
+                category: category.to_string(),
+                updated_at: "unknown".to_string(),
+                facts: Vec::new(),
+            });
+        }
+        read_json(&path)
+    }
+
+    fn read_core_store_categories(&self) -> Result<Vec<CoreStoreCategory>> {
+        let mut files = Vec::new();
+        collect_json_files(&self.root.join("core").join("store"), &mut files)?;
+
+        let mut categories = Vec::new();
+        for path in files {
+            categories.push(read_json(&path)?);
+        }
+        categories.sort_by(|left: &CoreStoreCategory, right: &CoreStoreCategory| {
+            left.category.cmp(&right.category)
+        });
+
+        Ok(categories)
     }
 
     fn write_core_store_category(&mut self, category: &CoreStoreCategory) -> Result<()> {
@@ -258,6 +291,14 @@ impl Storage for FileStorage {
     fn save_task(&mut self, task: &crate::tasks::PendingTask) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.task_path(&task.task_id), task)
+    }
+
+    fn load_task(&self, task_id: &str) -> Result<crate::tasks::PendingTask> {
+        let path = self.task_path(task_id);
+        if !path.exists() {
+            return Err(MemoryEngineError::TaskNotFound(task_id.to_string()));
+        }
+        read_json(&path)
     }
 
     fn load_tasks(&self) -> Result<Vec<crate::tasks::PendingTask>> {

@@ -27,6 +27,17 @@ __pycache__/
 *.pyc
 *.log
 
+# Python adapter local builds
+crates/python_adapter/.venv/
+crates/python_adapter/*.egg-info/
+crates/python_adapter/dist/
+crates/python_adapter/wheels/
+*.whl
+
+# Host app local runtime
+hosts/*/runtime/
+hosts/*/*.local.toml
+
 # OS/editor noise
 .DS_Store
 Thumbs.db

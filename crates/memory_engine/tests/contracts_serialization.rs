@@ -1,4 +1,6 @@
-use memory_engine::archive::{ArchiveEntry, ArchiveStatus};
+use memory_engine::archive::{
+    ArchiveEntry, ArchiveStatus, EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem,
+};
 use memory_engine::event::{IngestEvent, StoredEvent};
 use memory_engine::file_storage::FileStorage;
 use memory_engine::sleep::SleepCompressionResult;
@@ -85,6 +87,9 @@ fn archive_entry_serializes_reserved_embedding_fields() {
         tags: vec!["personal_fact".to_string()],
         gist: "Користувач переїхав у Берлін.".to_string(),
         narrative: "Користувач повідомив важливий особистий факт.".to_string(),
+        compact_memory: Some(
+            "Переїзд у Берлін — користувач повідомив стабільний особистий контекст.".to_string(),
+        ),
         facts: vec![WeightedFact {
             text: "Користувач живе в Берліні.".to_string(),
             confidence: 0.8,
@@ -99,6 +104,38 @@ fn archive_entry_serializes_reserved_embedding_fields() {
         recall_count: 0,
         last_recalled_at: None,
         links: vec![],
+        emotional_markers: vec![EmotionalMarker {
+            target: "cat_named_irzha".to_string(),
+            affect: "fondness".to_string(),
+            strength: 0.95,
+            source_event_ids: vec!["event_01J00000000000000000000001".to_string()],
+            quote: Some("У мене є кішечка".to_string()),
+            evidence: Some("Користувач тепло представив домашню тварину.".to_string()),
+        }],
+        topic_thread: vec![TopicThreadItem {
+            topic: "personal_pet".to_string(),
+            subtopics: vec!["cat_name".to_string()],
+            energy: Some("warm".to_string()),
+            source_event_ids: vec!["event_01J00000000000000000000001".to_string()],
+            summary: Some("Користувач розповів про свою кішку.".to_string()),
+        }],
+        personal_signals: vec![PersonalSignal {
+            text: "Користувач має кішку.".to_string(),
+            category: "relationships_with_pets".to_string(),
+            confidence: 0.9,
+            source_event_ids: vec!["event_01J00000000000000000000001".to_string()],
+            evidence: Some("Пряма заява користувача.".to_string()),
+        }],
+        relational_tone: Some(RelationalTone {
+            warmth: Some(0.8),
+            intellectual_engagement: None,
+            intimacy: Some(0.4),
+            trust: None,
+            playfulness: Some(0.5),
+            tension: None,
+            summary: Some("Розмова стала теплішою після особистої згадки.".to_string()),
+            source_event_ids: vec!["event_01J00000000000000000000001".to_string()],
+        }),
         status: ArchiveStatus::Preliminary,
         llm_enhanced: false,
         prompt_id: None,
@@ -110,6 +147,11 @@ fn archive_entry_serializes_reserved_embedding_fields() {
     let value = serde_json::to_value(entry).unwrap();
     assert_eq!(value["status"], "preliminary");
     assert!(value["embedding_model_id"].is_null());
+    assert_eq!(value["emotional_markers"][0]["target"], "cat_named_irzha");
+    assert_eq!(
+        value["personal_signals"][0]["category"],
+        "relationships_with_pets"
+    );
 }
 
 #[test]
@@ -144,12 +186,17 @@ fn sleep_compression_result_validates_basic_shape() {
         archive_id: "archive_01".to_string(),
         gist: "Короткий зміст.".to_string(),
         narrative: "Людський наратив спогаду.".to_string(),
+        compact_memory: Some("Подія → короткий людський висновок.".to_string()),
         facts: vec![],
         quotes: vec![],
         tags: vec!["test".to_string()],
         theme: None,
         weight: 0.7,
         links: vec![],
+        emotional_markers: vec![],
+        topic_thread: vec![],
+        personal_signals: vec![],
+        relational_tone: None,
     };
 
     result.validate_basic().unwrap();

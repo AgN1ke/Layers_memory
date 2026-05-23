@@ -105,7 +105,7 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let stored = engine.ingest(IngestEvent {
+        let ingest_result = engine.ingest(IngestEvent {
             schema_version: EVENT_SCHEMA_VERSION.to_string(),
             event_type: "user_message".to_string(),
             source: "terminal_user".to_string(),
@@ -119,6 +119,7 @@ fn main() -> Result<()> {
             importance_hint: Default::default(),
             processing_mode: Default::default(),
         })?;
+        let stored = ingest_result.stored_event;
 
         println!(
             "Stored event: {} weight={:.2}",

@@ -1,5 +1,7 @@
 use memory_engine::event::IngestEvent;
-use memory_engine::types::{EVENT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION};
+use memory_engine::types::{
+    EVENT_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
+};
 use memory_engine::{FileStorage, MemoryEngine};
 use serde_json::json;
 use std::fs;
@@ -11,7 +13,7 @@ fn engine_ingest_stores_event_and_updates_session_files() {
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
     let mut engine = MemoryEngine::new(storage);
 
-    let stored = engine
+    let ingest_result = engine
         .ingest(IngestEvent {
             schema_version: EVENT_SCHEMA_VERSION.to_string(),
             event_type: "user_message".to_string(),
@@ -27,6 +29,8 @@ fn engine_ingest_stores_event_and_updates_session_files() {
             processing_mode: Default::default(),
         })
         .expect("ingest event");
+    assert_eq!(ingest_result.schema_version, INGEST_RESULT_SCHEMA_VERSION);
+    let stored = ingest_result.stored_event;
 
     assert!(stored.event_id.starts_with("event_"));
     assert_eq!(stored.schema_version, EVENT_SCHEMA_VERSION);
@@ -82,6 +86,48 @@ fn engine_ingest_rejects_wrong_schema_version() {
         .contains("incompatible schema version: expected event.v1, got event.v0"));
 
     fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_ingest_does_not_trigger_sleep_from_event_count() {
+    let root = unique_temp_dir("engine_ingest_does_not_trigger_sleep_from_event_count");
+    let storage = FileStorage::with_host_id(&root, "telegram_bot");
+    let mut engine = MemoryEngine::new(storage);
+
+    let mut last = None;
+    for index in 0..60 {
+        last = Some(ingest_numbered_event(&mut engine, index));
+    }
+
+    assert_eq!(
+        last.expect("last ingest").stored_event.session_id,
+        "event_count_session"
+    );
+    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+fn ingest_numbered_event(
+    engine: &mut MemoryEngine<FileStorage>,
+    index: usize,
+) -> memory_engine::IngestResult {
+    engine
+        .ingest(IngestEvent {
+            schema_version: EVENT_SCHEMA_VERSION.to_string(),
+            event_type: "user_message".to_string(),
+            source: "telegram_user_42".to_string(),
+            timestamp: format!("2026-05-17T16:32:1{index}.420Z"),
+            session_id: "event_count_session".to_string(),
+            payload: json!({ "text": format!("Подія {index}") }),
+            tags: vec!["telegram_message".to_string()],
+            theme: Some("telegram_conversation".to_string()),
+            emotional_tone: None,
+            links: vec![],
+            importance_hint: Default::default(),
+            processing_mode: Default::default(),
+        })
+        .expect("ingest numbered event")
 }
 
 fn unique_temp_dir(name: &str) -> std::path::PathBuf {
