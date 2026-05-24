@@ -3689,3 +3689,129 @@ Retry додано тільки на host-side LLM orchestration у `hosts/teleg
 **Перевірки:**
 - `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
 - `git diff --check` — пройшло.
+
+## Запис 63 — 2026-05-23 11:41 +03:00 — Зафіксовано напрям v0.2: memory units, fidelity validation, reflection і opt-in vector storage
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після стабілізації v0.1 стало зрозуміло, що наступний крок не має бути embeddings або нова інженерна обв'язка. Потрібно зафіксувати, що робить пам'ять живою: атомарні спогади, перевірка чесності стиснення, reflection-кандидати, контрольований Core і майбутнє забування рутини. Також користувач прямо вказав, що vector storage потрібен тільки після готовності ядра і має бути опційним, бо частина користувачів не хоче зберігати настільки багато семантичної інформації про себе.
+
+**Задум:**
+Оновити стратегічні документи так, щоб v0.2 мав конкретний напрям:
+- agents do not write truth directly;
+- memory unit як окрема атомарна одиниця спогаду;
+- fidelity validator як перевірка, що стиснення не викривило джерела;
+- reflection створює candidate beliefs, але не промоутить їх у Core напряму;
+- Core змінюється тільки через lifecycle і підтвердження;
+- forgetting виводить рутину з default recall без фізичного видалення;
+- vector storage відкладається і має бути opt-in.
+
+**Що робили:**
+- `docs/strategy.md`: додано update від 2026-05-23 із принципами v0.2.
+- `docs/architecture.md`: додано терміни `memory unit` і `fidelity validator`, уточнено Stage 2 embeddings як пізній opt-in, переписано правила candidate promotion зі старих числових порогів на структурний lifecycle, додано storage-напрям для `archive/units/` і `archive/forgotten/`.
+- `docs/roadmap.md`: переформатовано v0.2 у конкретний план: `feature/reflection`, memory units, fidelity pass, reflection candidates, review commands, agent review pipeline, forgetting, і окремий відкладений блок для vector storage.
+
+**Що зробили детально:**
+Старі формулювання типу "≥3 джерела" не видалені як ідея доказовості, але більше не є головним правилом для моделі. Нова межа така: модель вільно виділяє зміст, але має повернути структурований unit/candidate з джерелами, вагою, fidelity status і review status. Core не приймає прямий запис від агента.
+
+**Проблеми чи виклики:**
+Це docs-only зміна. Схеми `MemoryUnit`, `CandidateBelief`, `FidelityReview` і команди `/reflect`, `/candidates`, `/confirm`, `/reject` ще не реалізовані. Їх треба робити на окремій гілці, не в `main`.
+
+**Фідбек користувача:**
+Користувач погодився з принципом, що Core має будуватись за чіткими правилами структури, але модель не треба обмежувати кількістю тез чи fixed thresholds. Також користувач наполіг, що vector storage має бути вимкненим режимом за замовчуванням або принаймні мати явну галочку.
+
+**Перевірки:**
+Поки що документальна зміна; `git diff --check` — пройшло.
+
+## Запис 64 — 2026-05-24 13:46 +03:00 — Явно зафіксовано принцип Adaptive Stable Core
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після попереднього оновлення v0.2 напрям був описаний через окремі частини: memory units, fidelity validation, reflection candidates, forgetting і opt-in vector storage. Користувач уточнив, чи прямо зафіксовано головне прагнення: зробити живе Ядро, яке валідує знання й адаптується під час розмови, але при цьому залишається стабільним.
+
+**Задум:**
+Додати явний north star `Adaptive Stable Core`, щоб наступні моделі не читали roadmap як набір окремих задач. Суть: Core має вчитись із розмов і накопиченого досвіду, але тільки через структурний шлях, validation і review. Агенти можуть пропонувати, стискати, критикувати і маршрутизувати, але не переписувати стабільну основу напряму.
+
+**Що робили:**
+- `docs/strategy.md`: додано розділ `Adaptive Stable Core` у update v0.2.
+- `docs/architecture.md`: у розділі `5.3 Шар Ядро` додано поведінковий контракт адаптивного, але стабільного Core.
+- `docs/roadmap.md`: додано `v0.2 North Star: Adaptive Stable Core` із конкретними checklist-пунктами.
+
+**Що зробили детально:**
+Зафіксовано, що Ядро адаптується через validated memory units, reflection candidates, recall feedback, contested/deprecated lifecycle і forgetting/review. Одночасно зафіксовано стабілізатори: fidelity validation, заборона прямого запису агентів у Core, candidate lifecycle, підтвердження перед активним Core і audit trail.
+
+**Проблеми чи виклики:**
+Це docs-only зміна. Код `MemoryUnit`, `FidelityReview`, `CandidateBelief`, reflection-команди і contested lifecycle ще не реалізовані. Їх треба робити на окремій гілці, не в `main`.
+
+**Фідбек користувача:**
+Користувач прямо сформулював бажання: живе Ядро має валідувати знання, адаптуватися під час розмови, але залишатися стабільним.
+
+**Перевірки:**
+`git diff --check` — пройшло.
+
+## Запис 65 — 2026-05-24 14:01 +03:00 — Уточнено prompt geometry і evidence pack для Core-тез
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Користувач уточнив дві важливі речі. Перше: бот має чітко розуміти, де шар Ядро, де довга пам'ять, де коротка пам'ять, де системний стан, де кінець діалогу і де починається його відповідь. Друге: дорога модель для Core-формулювань прийнятна, але тільки якщо їй дається маленький релевантний evidence pack, а не вся довга розмова.
+
+**Задум:**
+Зафіксувати, що `compact_memory` у v0.2 стає prompt-проекцією memory units, а не дубльованим LLM-підсумком. Також зафіксувати evidence pack builder: система має вичленяти конкретні source events і потрібний локальний контекст для важливого unit/candidate. Дорога модель використовується на малому обсязі, щоб сформулювати коротку, щільну і перевірену Core-тезу.
+
+**Що робили:**
+- `docs/architecture.md`: додано `Prompt geometry` у розділ Core Context Package.
+- `docs/architecture.md`: додано правило evidence pack для fidelity validator і Core candidate reviewer.
+- `docs/strategy.md`: уточнено, що дорога модель працює тільки з малим evidence pack і формулює щільну Core-тезу.
+- `docs/roadmap.md`: додано пункти про `compact_memory` як projection із memory units, `evidence_pack` builder і Core reviewer на малому доказовому контексті.
+
+**Що зробили детально:**
+Prompt має явно розділяти `system_prompt`, `domain_state`, `core_memory`, `long_memory`, `short_memory`, `current_user_message` і `assistant_response_slot`. Це має прибрати змішування шарів і втрату геометрії діалогу. Для Core-кандидатів дорога модель не отримує великий raw transcript: вона отримує source events, пов'язані репліки і локальний контекст, достатній для перевірки.
+
+**Проблеми чи виклики:**
+Це docs-only зміна. Реальний `prompt_view`, `evidence_pack` builder і Core candidate reviewer ще не реалізовані.
+
+**Фідбек користувача:**
+Користувач підтвердив, що пам'ять має збиратись із шарів `ядро + довга пам'ять + коротка пам'ять + системні стани + prompt`, а модель має розуміти межі цих шарів. Також користувач наполіг, що валідація і формулювання Core-тез можуть виконуватись дорогою моделлю, бо працюють із малими фрагментами.
+
+**Перевірки:**
+`git diff --check` — пройшло.
+
+## Запис 66 — 2026-05-24 14:07 +03:00 — Уточнено Phase A/B/C, XML prompt geometry, evidence pack rules і role routing
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після прийняття загального плану reflection Claude запропонував три точні реалізаційні уточнення: prompt geometry має бути структурно видимою, evidence pack має мати програмні правила збірки, а критичний шлях до Core має маршрутизуватись на reasoning-модель. Без цих уточнень Phase A могла початися з правильними словами, але нечітким контрактом.
+
+**Задум:**
+Перед першим рядком коду Phase A зафіксувати реалізаційний контракт:
+- prompt рендериться тегами або рівноцінними чіткими секціями;
+- evidence pack збирається програмно з source ids, сусідніх подій і прямого evidence, з token budget і пріоритетами;
+- `memory_fidelity_pass` і `core_candidate_reviewer` отримують `role_hint: reasoning`;
+- `feature/reflection` розбивається на Phase A/B/C з окремими live-тестами.
+
+**Що робили:**
+- `docs/architecture.md`: уточнено LLM-facing render prompt geometry через XML-подібні теги або чіткі секції.
+- `docs/architecture.md`: додано правила evidence pack: source events, конфігуровані сусіди, direct evidence/quotes, budget target до 1.5k tokens, пріоритети.
+- `docs/architecture.md`: додано model role routing: balanced для масових passes, reasoning для fidelity/Core critical path.
+- `docs/strategy.md`: додано принцип, що prompt geometry і role routing є частиною якості памʼяті, а не деталлю UI.
+- `docs/roadmap.md`: Phase A/B/C розписані як окремі checkpoint-и `feature/reflection`.
+
+**Що зробили детально:**
+Phase A тепер чітко обмежена MemoryUnit foundation: schema/storage, `memory_unit_pass`, projection із units і prompt geometry. Phase B — evidence pack + validation. Phase C — candidates + review UX. Це не три різні концепції, а контрольовані етапи однієї гілки.
+
+**Проблеми чи виклики:**
+Це docs-only зміна. Код ще не починався. Після commit docs треба створити `feature/reflection` і не змішувати Phase A з Phase B/C.
+
+**Фідбек користувача:**
+Користувач передав рекомендацію Claude: план прийнятий, але перед кодом треба уточнити теги/секції prompt geometry, правила evidence pack і рольові моделі для критичного шляху.
+
+**Перевірки:**
+`git diff --check` — пройшло.
