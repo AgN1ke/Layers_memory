@@ -11,6 +11,29 @@ pub enum ArchiveStatus {
     NeedsReview,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryUnitStatus {
+    ActiveArchive,
+    CoreCandidate,
+    Forgotten,
+    Rejected,
+    NeedsRevision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FidelityStatus {
+    Unchecked,
+    SelfChecked,
+    Valid,
+    TooBroad,
+    Unsupported,
+    Distorted,
+    MissingKeyDetail,
+    NeedsRevision,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArchiveEntry {
     pub schema_version: String,
@@ -29,6 +52,8 @@ pub struct ArchiveEntry {
     pub narrative: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_memory: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory_units: Vec<MemoryUnit>,
     #[serde(default)]
     pub facts: Vec<WeightedFact>,
     #[serde(default)]
@@ -58,6 +83,26 @@ pub struct ArchiveEntry {
     pub embedding_model_id: Option<String>,
     #[serde(default)]
     pub embedding: Option<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryUnit {
+    pub schema_version: String,
+    pub memory_unit_id: Id,
+    pub archive_id: Id,
+    pub source_session_id: Id,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub thesis: String,
+    #[serde(default)]
+    pub source_event_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    pub weight: f64,
+    pub status: MemoryUnitStatus,
+    pub fidelity_status: FidelityStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

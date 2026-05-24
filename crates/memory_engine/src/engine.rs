@@ -6,7 +6,9 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::archive::{ArchiveEntry, ArchiveFilters, ArchiveStatus};
+use crate::archive::{
+    ArchiveEntry, ArchiveFilters, ArchiveStatus, FidelityStatus, MemoryUnit, MemoryUnitStatus,
+};
 use crate::core_store::{
     CoreContextBudgetReport, CoreContextEvent, CoreContextFact, CoreContextPackage,
     CoreContextRequest, CoreContextTokenBudget, CoreFact, CoreFactInput, CoreFactPatchInput,
@@ -18,7 +20,7 @@ use crate::recall::{
     RecallDebug, RecallFilters, RecallItem, RecallQuery, RecallResult, RecallSourceLayer,
 };
 use crate::session::SessionRecord;
-use crate::sleep::SleepCompressionResult;
+use crate::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use crate::storage::Storage;
 use crate::tasks::{PendingTask, TaskState, TaskType};
 use crate::types::{
@@ -29,8 +31,9 @@ use crate::types::{
     CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_RESULT_SCHEMA_VERSION,
     CORE_FACT_SCHEMA_VERSION, CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION,
     EVENT_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION,
-    MANIFEST_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
-    RECALL_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION,
+    PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION,
+    SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use crate::{MemoryEngineError, Result};
 
@@ -420,15 +423,16 @@ impl<S: Storage> MemoryEngine<S> {
             &self.options.sleep,
             &now,
         )?;
-        let compact_memory_task =
-            build_compact_memory_task(&session, &selected_events, &archive_entry, &now)?;
+        let memory_unit_task =
+            build_memory_unit_task(&session, &selected_events, &archive_entry, &now)?;
         self.storage.save_task(&pending_task)?;
-        self.storage.save_task(&compact_memory_task)?;
+        self.storage.save_task(&memory_unit_task)?;
 
         Ok(SleepStage1Result {
             archive_entry,
             pending_task,
-            compact_memory_task: Some(compact_memory_task),
+            memory_unit_task: Some(memory_unit_task),
+            compact_memory_task: None,
         })
     }
 
@@ -522,6 +526,89 @@ impl<S: Storage> MemoryEngine<S> {
         let now = now_rfc3339()?;
         archive_entry.updated_at = now.clone();
         archive_entry.compact_memory = Some(compact_memory);
+        self.storage
+            .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
+
+        task.state = TaskState::Completed;
+        task.updated_at = now;
+        task.last_error = None;
+        self.storage.save_task(&task)?;
+
+        Ok(archive_entry)
+    }
+
+    pub fn resume_memory_unit_pass(
+        &mut self,
+        task_id: &str,
+        result: MemoryUnitPassResult,
+    ) -> Result<ArchiveEntry> {
+        if result.schema_version != MEMORY_UNITS_RESULT_SCHEMA_VERSION {
+            return Err(MemoryEngineError::IncompatibleSchema {
+                expected: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+                actual: result.schema_version.clone(),
+            });
+        }
+        result.validate_basic()?;
+        self.ensure_manifest()?;
+
+        let mut task = self.storage.load_task(task_id)?;
+        if task.task_type != TaskType::MemoryUnitPass {
+            return Err(MemoryEngineError::Validation(format!(
+                "task is not memory_unit_pass: {task_id}"
+            )));
+        }
+
+        let archive_id = task
+            .inputs
+            .get("preliminary_archive_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                MemoryEngineError::Validation(format!(
+                    "memory_unit_pass task has no preliminary_archive_id: {task_id}"
+                ))
+            })?;
+        if archive_id != result.archive_id {
+            return Err(MemoryEngineError::Validation(format!(
+                "memory_unit_pass archive_id mismatch: task={archive_id} result={}",
+                result.archive_id
+            )));
+        }
+
+        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
+        let now = now_rfc3339()?;
+        let mut units = Vec::new();
+        for draft in result.memory_units {
+            let thesis = normalize_whitespace(&draft.thesis);
+            if thesis.is_empty() {
+                continue;
+            }
+            units.push(MemoryUnit {
+                schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
+                memory_unit_id: new_id("mu")?,
+                archive_id: archive_entry.archive_id.clone(),
+                source_session_id: archive_entry.source_session_id.clone(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+                thesis,
+                source_event_ids: draft.source_event_ids,
+                evidence: normalize_optional_string(draft.evidence.as_deref()),
+                tags: draft.tags,
+                weight: draft.weight,
+                status: MemoryUnitStatus::ActiveArchive,
+                fidelity_status: FidelityStatus::Unchecked,
+            });
+        }
+
+        for unit in &units {
+            self.storage.write_memory_unit(unit)?;
+        }
+
+        archive_entry.updated_at = now.clone();
+        archive_entry.memory_units = units;
+        if let Some(compact_memory) = render_compact_memory_from_units(&archive_entry.memory_units)
+        {
+            archive_entry.compact_memory = Some(compact_memory);
+        }
         self.storage
             .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
 
@@ -707,6 +794,8 @@ pub struct IngestResult {
 pub struct SleepStage1Result {
     pub archive_entry: ArchiveEntry,
     pub pending_task: PendingTask,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_unit_task: Option<PendingTask>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_memory_task: Option<PendingTask>,
 }
@@ -1187,6 +1276,7 @@ fn build_preliminary_archive(
         gist: preliminary_gist(events),
         narrative: preliminary_narrative(&session.metadata.session_id, events),
         compact_memory: None,
+        memory_units: Vec::new(),
         facts: preliminary_facts(events),
         quotes,
         weight: archive_weight(events),
@@ -1252,6 +1342,7 @@ fn build_sleep_compression_task(
     })
 }
 
+#[allow(dead_code)]
 fn build_compact_memory_task(
     session: &SessionRecord,
     events: &[&StoredEvent],
@@ -1291,6 +1382,63 @@ fn build_compact_memory_task(
         attempts: Vec::new(),
         last_error: None,
     })
+}
+
+fn build_memory_unit_task(
+    session: &SessionRecord,
+    events: &[&StoredEvent],
+    archive_entry: &ArchiveEntry,
+    now: &str,
+) -> Result<PendingTask> {
+    Ok(PendingTask {
+        schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
+        task_id: new_id("task")?,
+        task_type: TaskType::MemoryUnitPass,
+        state: TaskState::Pending,
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+        prompt_id: "memory_unit_pass".to_string(),
+        prompt_version: 1,
+        role_hint: ModelRole::Balanced,
+        expected_output_schema: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+        inputs: json!({
+            "session_id": &session.metadata.session_id,
+            "preliminary_archive_id": &archive_entry.archive_id,
+            "events": events.iter().map(|event| json!({
+                "event_id": &event.event_id,
+                "type": &event.event_type,
+                "timestamp": &event.timestamp,
+                "payload": &event.payload,
+                "tags": &event.tags,
+                "theme": &event.theme,
+                "initial_weight": event.initial_weight,
+                "weight_reason": &event.weight_reason,
+            })).collect::<Vec<Value>>(),
+            "hints": {
+                "target_style": "atomic_human_memory_units",
+                "return_json": true,
+                "do_not_invent_facts": true,
+                "use_source_event_ids": true
+            }
+        }),
+        attempts: Vec::new(),
+        last_error: None,
+    })
+}
+
+fn render_compact_memory_from_units(units: &[MemoryUnit]) -> Option<String> {
+    let lines = units
+        .iter()
+        .filter(|unit| unit.status == MemoryUnitStatus::ActiveArchive)
+        .map(|unit| unit.thesis.trim())
+        .filter(|thesis| !thesis.is_empty())
+        .collect::<Vec<_>>();
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
 fn archive_filters_from_recall(filters: &RecallFilters) -> ArchiveFilters {

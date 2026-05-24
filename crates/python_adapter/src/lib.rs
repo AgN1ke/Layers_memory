@@ -6,8 +6,8 @@
 //! No LLM, no provider, no model selection lives here. The Python caller
 //! receives `PendingTask` objects in the returned JSON and is fully
 //! responsible for executing them with whatever provider it chooses, then
-//! submitting results back through `resume_sleep_compression` or
-//! `resume_compact_memory_pass`.
+//! submitting results back through `resume_sleep_compression`,
+//! `resume_memory_unit_pass`, or legacy `resume_compact_memory_pass`.
 
 // PyO3 0.22 `#[pymethods]` expansion produces an `Into<PyErr>` step that
 // clippy 1.95 flags as `useless_conversion`. Silencing this lint locally
@@ -24,7 +24,7 @@ use serde::Serialize;
 use ::memory_engine::core_store::{CoreContextRequest, CoreFactInput, CoreFactPatchInput};
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::recall::RecallQuery;
-use ::memory_engine::sleep::SleepCompressionResult;
+use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::storage::Storage;
 use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
 
@@ -83,6 +83,15 @@ impl PyMemoryEngine {
         let updated = self
             .inner
             .resume_compact_memory_pass(task_id, compact_memory)
+            .map_err(map_err)?;
+        dump_json(&updated, "archive entry")
+    }
+
+    fn resume_memory_unit_pass(&mut self, task_id: &str, result_json: &str) -> PyResult<String> {
+        let result: MemoryUnitPassResult = parse_json(result_json, "memory unit pass result")?;
+        let updated = self
+            .inner
+            .resume_memory_unit_pass(task_id, result)
             .map_err(map_err)?;
         dump_json(&updated, "archive entry")
     }

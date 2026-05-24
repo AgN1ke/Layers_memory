@@ -6,11 +6,11 @@ use memory_engine::core_store::{
 };
 use memory_engine::event::IngestEvent;
 use memory_engine::recall::{RecallFilters, RecallQuery};
-use memory_engine::sleep::SleepCompressionResult;
+use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::tasks::TaskType;
 use memory_engine::types::{
-    COMPACT_MEMORY_RESULT_SCHEMA_VERSION, CORE_CONTEXT_REQUEST_SCHEMA_VERSION,
-    CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
+    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
+    CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION,
     RECALL_QUERY_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{EngineOptions, FileStorage, MemoryEngine, SleepStage1Result};
@@ -55,15 +55,15 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
         sleep_result.pending_task.expected_output_schema,
         SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION
     );
-    let compact_task = sleep_result
-        .compact_memory_task
+    let memory_unit_task = sleep_result
+        .memory_unit_task
         .as_ref()
-        .expect("compact memory task");
-    assert_eq!(compact_task.task_type, TaskType::CompactMemoryPass);
-    assert_eq!(compact_task.prompt_id, "compact_memory_pass");
+        .expect("memory unit task");
+    assert_eq!(memory_unit_task.task_type, TaskType::MemoryUnitPass);
+    assert_eq!(memory_unit_task.prompt_id, "memory_unit_pass");
     assert_eq!(
-        compact_task.expected_output_schema,
-        COMPACT_MEMORY_RESULT_SCHEMA_VERSION
+        memory_unit_task.expected_output_schema,
+        MEMORY_UNITS_RESULT_SCHEMA_VERSION
     );
 
     let tasks = engine.pending_tasks().expect("pending tasks");
@@ -73,7 +73,7 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
         .any(|task| task.task_id == sleep_result.pending_task.task_id));
     assert!(tasks
         .iter()
-        .any(|task| task.task_id == compact_task.task_id));
+        .any(|task| task.task_id == memory_unit_task.task_id));
 
     assert!(root
         .join("tasks")
@@ -81,7 +81,7 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
         .exists());
     assert!(root
         .join("tasks")
-        .join(format!("{}.json", compact_task.task_id))
+        .join(format!("{}.json", memory_unit_task.task_id))
         .exists());
 
     fs::remove_dir_all(root).ok();
@@ -975,16 +975,32 @@ fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
     assert_eq!(updated.status, ArchiveStatus::Complete);
     assert!(updated.llm_enhanced);
     assert_eq!(updated.prompt_id.as_deref(), Some("sleep_compression"));
-    engine
-        .resume_compact_memory_pass(
+    let unit_updated = engine
+        .resume_memory_unit_pass(
             &sleep_result
-                .compact_memory_task
+                .memory_unit_task
                 .as_ref()
-                .expect("compact memory task")
+                .expect("memory unit task")
                 .task_id,
-            "Берлін -> користувач повідомив стабільний особистий контекст.",
+            MemoryUnitPassResult {
+                schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                memory_units: vec![MemoryUnitDraft {
+                    thesis: "Берлін -> користувач повідомив стабільний особистий контекст."
+                        .to_string(),
+                    source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
+                    evidence: Some("Користувач прямо сказав, що живе в Берліні.".to_string()),
+                    tags: vec!["location".to_string()],
+                    weight: 0.9,
+                }],
+            },
         )
-        .expect("resume compact memory");
+        .expect("resume memory unit pass");
+    assert_eq!(
+        unit_updated.compact_memory.as_deref(),
+        Some("Берлін -> користувач повідомив стабільний особистий контекст.")
+    );
+    assert_eq!(unit_updated.memory_units.len(), 1);
     assert!(engine.pending_tasks().expect("pending tasks").is_empty());
 
     fs::remove_dir_all(root).ok();

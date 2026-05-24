@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html import escape as xml_escape
 from pathlib import Path
 from typing import Any
 
@@ -858,14 +859,35 @@ def complete_sleep_result(
 ) -> str:
     task = sleep_result["pending_task"]
     archive = sleep_result["archive_entry"]
+    memory_unit_task = sleep_result.get("memory_unit_task")
     compact_task = sleep_result.get("compact_memory_task")
-    llm_result = execute_sleep_compression(task, gemini, llm_config, compact_task=compact_task)
-    compact_memory = clean_string(llm_result.get("compact_memory"))
-    if isinstance(compact_task, dict) and compact_memory:
-        engine.resume_compact_memory_pass(compact_task["task_id"], compact_memory)
+    llm_result = execute_sleep_compression(
+        task,
+        gemini,
+        llm_config,
+        memory_unit_task=memory_unit_task,
+        compact_task=compact_task,
+    )
     updated = json.loads(
         engine.resume_sleep_compression(task["task_id"], json.dumps(llm_result, ensure_ascii=False))
     )
+    memory_units = normalize_memory_units(llm_result.get("memory_units"))
+    compact_memory = clean_string(llm_result.get("compact_memory"))
+    if isinstance(memory_unit_task, dict) and memory_units:
+        memory_unit_result = {
+            "schema_version": memory_unit_task.get("expected_output_schema")
+            or "memory_units_result.v1",
+            "archive_id": archive["archive_id"],
+            "memory_units": memory_units,
+        }
+        updated = json.loads(
+            engine.resume_memory_unit_pass(
+                memory_unit_task["task_id"],
+                json.dumps(memory_unit_result, ensure_ascii=False),
+            )
+        )
+    elif isinstance(compact_task, dict) and compact_memory:
+        updated = json.loads(engine.resume_compact_memory_pass(compact_task["task_id"], compact_memory))
     log_sleep_compression_metrics(task, llm_result)
     core_summary = promote_archive_personal_signals(engine, updated)
     compact_tokens = estimate_tokens(clean_string(updated.get("compact_memory")))
@@ -1035,21 +1057,42 @@ def execute_sleep_compression(
     task: dict[str, Any],
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    memory_unit_task: dict[str, Any] | None = None,
     compact_task: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sleep_mode = os.environ.get("MEMORY_BOT_SLEEP_MODE", "multi_pass").strip().lower()
     if sleep_mode == "single":
-        return execute_single_pass_sleep_compression(task, gemini, llm_config, compact_task)
-    return execute_multi_pass_sleep_compression(task, gemini, llm_config, compact_task)
+        return execute_single_pass_sleep_compression(
+            task,
+            gemini,
+            llm_config,
+            memory_unit_task=memory_unit_task,
+            compact_task=compact_task,
+        )
+    return execute_multi_pass_sleep_compression(
+        task,
+        gemini,
+        llm_config,
+        memory_unit_task=memory_unit_task,
+        compact_task=compact_task,
+    )
 
 
 def execute_single_pass_sleep_compression(
     task: dict[str, Any],
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    memory_unit_task: dict[str, Any] | None = None,
     compact_task: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    compact_memory = execute_compact_memory_pass(compact_task or task, gemini, llm_config)
+    if isinstance(memory_unit_task, dict):
+        memory_units_result = execute_memory_unit_pass(memory_unit_task, gemini, llm_config)
+    else:
+        memory_units_result = empty_memory_unit_result(task)
+    memory_units = normalize_memory_units(memory_units_result.get("memory_units"))
+    compact_memory = memory_units_to_compact_memory(memory_units)
+    if not compact_memory and compact_task:
+        compact_memory = execute_compact_memory_pass(compact_task, gemini, llm_config)
     parsed = execute_prompt_json(
         prompt_id=task["prompt_id"],
         prompt_input=task["inputs"],
@@ -1059,6 +1102,7 @@ def execute_single_pass_sleep_compression(
     )
     normalize_sleep_compression_result(parsed, task)
     parsed["compact_memory"] = compact_memory
+    parsed["memory_units"] = memory_units
     return parsed
 
 
@@ -1066,14 +1110,24 @@ def execute_multi_pass_sleep_compression(
     task: dict[str, Any],
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    memory_unit_task: dict[str, Any] | None = None,
     compact_task: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sleep_input = task["inputs"]
     pass_input = {"sleep_task": sleep_input}
     failed_passes: list[str] = []
-    compact_memory = safe_execute_compact_memory_pass(
-        compact_task or task, gemini, llm_config, failed_passes
-    )
+    if isinstance(memory_unit_task, dict):
+        memory_units_result = safe_execute_memory_unit_pass(
+            memory_unit_task, gemini, llm_config, failed_passes
+        )
+    else:
+        memory_units_result = empty_memory_unit_result(task)
+    memory_units = normalize_memory_units(memory_units_result.get("memory_units"))
+    compact_memory = memory_units_to_compact_memory(memory_units)
+    if not compact_memory and compact_task:
+        compact_memory = safe_execute_compact_memory_pass(
+            compact_task, gemini, llm_config, failed_passes
+        )
     emotional = safe_execute_sleep_pass_json(
         prompt_id="sleep_emotional_pass",
         prompt_input=pass_input,
@@ -1142,6 +1196,7 @@ def execute_multi_pass_sleep_compression(
 
     normalize_sleep_compression_result(consolidated, task)
     consolidated["compact_memory"] = compact_memory
+    consolidated["memory_units"] = memory_units
     if not consolidated["emotional_markers"]:
         consolidated["emotional_markers"] = emotional.get("emotional_markers", [])
     if not consolidated["topic_thread"]:
@@ -1155,6 +1210,57 @@ def execute_multi_pass_sleep_compression(
     consolidated["tags"] = unique_preserve_order(tags)
     normalize_sleep_compression_result(consolidated, task)
     return consolidated
+
+
+def safe_execute_memory_unit_pass(
+    task: dict[str, Any],
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    failed_passes: list[str],
+) -> dict[str, Any]:
+    prompt_id = clean_string(task.get("prompt_id")) or "memory_unit_pass"
+    fallback = {
+        "schema_version": task.get("expected_output_schema") or "memory_units_result.v1",
+        "archive_id": task["inputs"]["preliminary_archive_id"],
+        "memory_units": [],
+    }
+    last_error: Exception | None = None
+    for attempt in range(1, SLEEP_PASS_MAX_ATTEMPTS + 1):
+        try:
+            return execute_memory_unit_pass(task, gemini, llm_config)
+        except Exception as err:
+            last_error = err
+            if attempt < SLEEP_PASS_MAX_ATTEMPTS:
+                log_line(
+                    f"{prompt_id} attempt={attempt}/{SLEEP_PASS_MAX_ATTEMPTS} failed; "
+                    f"retrying: {type(err).__name__}: {err}"
+                )
+                time.sleep(SLEEP_PASS_RETRY_DELAY_SECONDS)
+                continue
+            failed_passes.append(prompt_id)
+            log_exception(
+                f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
+                "continuing without memory units",
+                err,
+            )
+            return fallback
+
+    failed_passes.append(prompt_id)
+    if last_error is not None:
+        log_exception(
+            f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
+            "continuing without memory units",
+            last_error,
+        )
+    return fallback
+
+
+def empty_memory_unit_result(task: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "memory_units_result.v1",
+        "archive_id": task["inputs"]["preliminary_archive_id"],
+        "memory_units": [],
+    }
 
 
 def safe_execute_compact_memory_pass(
@@ -1240,6 +1346,24 @@ def safe_execute_sleep_pass_json(
             last_error,
         )
     return fallback.copy()
+
+
+def execute_memory_unit_pass(
+    task: dict[str, Any],
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+) -> dict[str, Any]:
+    prompt_id = clean_string(task.get("prompt_id")) or "memory_unit_pass"
+    parsed = execute_prompt_json(
+        prompt_id=prompt_id,
+        prompt_input={"sleep_task": task["inputs"]},
+        role_hint=task["role_hint"],
+        gemini=gemini,
+        llm_config=llm_config,
+        retry_on_json_error=True,
+    )
+    normalize_memory_unit_pass_result(parsed, task)
+    return parsed
 
 
 def execute_compact_memory_pass(
@@ -1400,6 +1524,45 @@ def normalize_sleep_compression_result(parsed: dict[str, Any], task: dict[str, A
     parsed["topic_thread"] = normalize_topic_thread(parsed.get("topic_thread"))
     parsed["personal_signals"] = normalize_personal_signals(parsed.get("personal_signals"))
     parsed["relational_tone"] = normalize_relational_tone(parsed.get("relational_tone"))
+
+
+def normalize_memory_unit_pass_result(parsed: dict[str, Any], task: dict[str, Any]) -> None:
+    if parsed.get("archive_id") != task["inputs"]["preliminary_archive_id"]:
+        parsed["archive_id"] = task["inputs"]["preliminary_archive_id"]
+    parsed.setdefault("schema_version", task.get("expected_output_schema") or "memory_units_result.v1")
+    parsed["memory_units"] = normalize_memory_units(parsed.get("memory_units"))
+
+
+def normalize_memory_units(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    units: list[dict[str, Any]] = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        thesis = clean_string(raw.get("thesis"))
+        if not thesis:
+            continue
+        unit = {
+            "thesis": thesis,
+            "source_event_ids": normalize_string_list(raw.get("source_event_ids")),
+            "tags": normalize_string_list(raw.get("tags")),
+            "weight": clamp_float(raw.get("weight"), 0.55),
+        }
+        evidence = clean_string(raw.get("evidence"))
+        if evidence:
+            unit["evidence"] = truncate_text(evidence, 320)
+        units.append(unit)
+    return units
+
+
+def memory_units_to_compact_memory(units: list[dict[str, Any]]) -> str:
+    theses = []
+    for unit in units:
+        thesis = clean_string(unit.get("thesis"))
+        if thesis:
+            theses.append(thesis)
+    return "\n".join(theses).strip()
 
 
 def normalize_compact_memory_text(value: Any) -> str:
@@ -2065,6 +2228,7 @@ def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) 
         "compact_memory_ratio": round(compact_ratio, 4),
         "compressed_estimated_tokens": compact_memory_tokens,
         "compression_ratio": round(compact_ratio, 4),
+        "memory_units": len(result.get("memory_units", [])),
         "emotional_markers": len(result.get("emotional_markers", [])),
         "personal_signals": len(result.get("personal_signals", [])),
         "topic_thread": len(result.get("topic_thread", [])),
@@ -2078,7 +2242,8 @@ def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) 
         f"events={record['raw_event_count']} raw_est={raw_tokens} "
         f"stored_est={stored_archive_tokens} stored_ratio={record['stored_archive_ratio']} "
         f"prompt_est={prompt_archive_tokens} prompt_ratio={record['prompt_archive_ratio']} "
-        f"compact_est={compact_memory_tokens} compact_ratio={record['compact_memory_ratio']}"
+        f"compact_est={compact_memory_tokens} compact_ratio={record['compact_memory_ratio']} "
+        f"memory_units={record['memory_units']}"
     )
 
 
@@ -2101,36 +2266,67 @@ def render_chat_prompt(package: dict[str, Any], user_text: str) -> str:
         if event.get("event_id") and event["event_id"] not in recent_ids
     ][-20:]
 
-    lines = [
-        "Memory context for this Telegram turn.",
-        f"Conversation state: {'ongoing' if prior_recent else 'new_or_no_recent_context'}.",
-    ]
+    lines = ["<memory_context>"]
+    lines.extend(
+        [
+            "<state>",
+            f"conversation_state: {'ongoing' if prior_recent else 'new_or_no_recent_context'}",
+        ]
+    )
     if prior_recent:
         lines.append(
-            "Continue the dialogue from the latest turn. Do not greet unless the current user message is a greeting."
+            "instruction: Continue the dialogue from the latest turn. Do not greet unless the current user message is a greeting."
         )
     else:
-        lines.append("No prior active dialogue is visible; a short greeting is allowed if natural.")
+        lines.append("instruction: No prior active dialogue is visible; a short greeting is allowed if natural.")
+    lines.append("</state>")
 
     core_lines = render_core_facts_for_prompt(package.get("core_facts"))
+    lines.append("")
+    lines.append("<core_memory>")
     if core_lines:
-        lines.extend(["", "Stable Core facts:"])
         lines.extend(core_lines)
+    else:
+        lines.append("(empty)")
+    lines.append("</core_memory>")
 
     archive_lines = render_archive_memories_for_prompt(package.get("archive_relevant"))
+    lines.append("")
+    lines.append("<long_memory>")
     if archive_lines:
-        lines.extend(["", "Relevant archived memories:"])
         lines.extend(archive_lines)
+    else:
+        lines.append("(empty)")
+    lines.append("</long_memory>")
 
+    lines.append("")
+    lines.append("<short_memory>")
     if older_trace:
-        lines.extend(["", "Older active dialogue notes:"])
+        lines.append("<older_active_dialogue>")
         lines.extend(render_dialogue_lines(older_trace, max_text_chars=180))
+        lines.append("</older_active_dialogue>")
 
     if prior_recent:
-        lines.extend(["", "Recent dialogue transcript, oldest to newest:"])
+        lines.append("<recent_dialogue>")
         lines.extend(render_dialogue_lines(prior_recent, max_text_chars=900))
+        lines.append("</recent_dialogue>")
+    else:
+        lines.append("(empty)")
+    lines.append("</short_memory>")
 
-    lines.extend(["", "Current user message:", user_text])
+    lines.extend(
+        [
+            "",
+            "<current_user_message>",
+            xml_escape(clean_string(user_text), quote=False),
+            "</current_user_message>",
+            "",
+            "<assistant_response_slot>",
+            "Write only the assistant reply for the current user message.",
+            "</assistant_response_slot>",
+            "</memory_context>",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -2184,6 +2380,7 @@ def render_core_facts_for_prompt(value: Any) -> list[str]:
         text = truncate_text(clean_string(fact.get("text")), 260)
         if not text:
             continue
+        text = xml_escape(text, quote=False)
         category = clean_string(fact.get("category")) or "core"
         confidence = fact.get("confidence")
         if confidence is None:
@@ -2210,6 +2407,7 @@ def render_archive_memories_for_prompt(value: Any) -> list[str]:
             memory_line = memory_line.strip()
             if not memory_line:
                 continue
+            memory_line = xml_escape(memory_line, quote=False)
             lines.append((prefix if index == 0 else "  ") + memory_line)
     return lines
 
@@ -2219,7 +2417,7 @@ def render_dialogue_lines(events: list[dict[str, str]], max_text_chars: int) -> 
     for event in events:
         text = truncate_text(event.get("text", ""), max_text_chars)
         if text:
-            lines.append(f"{event.get('role', 'user')}: {text}")
+            lines.append(f"{event.get('role', 'user')}: {xml_escape(text, quote=False)}")
     return lines
 
 

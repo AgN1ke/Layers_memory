@@ -32,6 +32,46 @@ pub struct SleepCompressionResult {
     pub relational_tone: Option<RelationalTone>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryUnitPassResult {
+    pub schema_version: String,
+    pub archive_id: Id,
+    #[serde(default)]
+    pub memory_units: Vec<MemoryUnitDraft>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryUnitDraft {
+    pub thesis: String,
+    #[serde(default)]
+    pub source_event_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    pub weight: f64,
+}
+
+impl MemoryUnitPassResult {
+    pub fn validate_basic(&self) -> crate::Result<()> {
+        for unit in &self.memory_units {
+            if unit.thesis.trim().is_empty() {
+                return Err(crate::MemoryEngineError::Validation(
+                    "memory unit thesis must not be empty".to_string(),
+                ));
+            }
+
+            if !(0.0..=1.0).contains(&unit.weight) {
+                return Err(crate::MemoryEngineError::Validation(
+                    "memory unit weight must be between 0.0 and 1.0".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl SleepCompressionResult {
     pub fn validate_basic(&self) -> crate::Result<()> {
         if self.gist.trim().is_empty() {

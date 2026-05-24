@@ -109,7 +109,7 @@ def test_explicit_sleep_preserves_active_tail(engine: memory_engine.MemoryEngine
     assert sleep_result["archive_entry"]["source_session_id"] == "sleep_pressure_session"
     assert len(sleep_result["archive_entry"]["source_event_ids"]) == 35
     assert sleep_result["pending_task"]["task_type"] == "sleep_compression"
-    assert sleep_result["compact_memory_task"]["task_type"] == "compact_memory_pass"
+    assert sleep_result["memory_unit_task"]["task_type"] == "memory_unit_pass"
 
     engine.resume_sleep_compression(
         sleep_result["pending_task"]["task_id"],
@@ -128,9 +128,22 @@ def test_explicit_sleep_preserves_active_tail(engine: memory_engine.MemoryEngine
             }
         ),
     )
-    engine.resume_compact_memory_pass(
-        sleep_result["compact_memory_task"]["task_id"],
-        "Події 0-34 -> старша частина сесії стиснулась у коротку пам'ять.",
+    engine.resume_memory_unit_pass(
+        sleep_result["memory_unit_task"]["task_id"],
+        json.dumps(
+            {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": sleep_result["archive_entry"]["archive_id"],
+                "memory_units": [
+                    {
+                        "thesis": "Події 0-34 -> старша частина сесії стиснулась у коротку пам'ять.",
+                        "source_event_ids": sleep_result["archive_entry"]["source_event_ids"][:3],
+                        "tags": ["sleep"],
+                        "weight": 0.85,
+                    }
+                ],
+            }
+        ),
     )
 
     completed_package = json.loads(
@@ -166,21 +179,21 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
     sleep_result = json.loads(engine.sleep("session_b"))
     archive = sleep_result["archive_entry"]
     task = sleep_result["pending_task"]
-    compact_task = sleep_result["compact_memory_task"]
+    memory_unit_task = sleep_result["memory_unit_task"]
 
     assert archive["status"] == "preliminary"
     assert archive["archive_id"].startswith("archive_")
     assert task["task_type"] == "sleep_compression"
     assert task["prompt_id"] == "sleep_compression"
     assert task["role_hint"] == "balanced"
-    assert compact_task["task_type"] == "compact_memory_pass"
-    assert compact_task["prompt_id"] == "compact_memory_pass"
+    assert memory_unit_task["task_type"] == "memory_unit_pass"
+    assert memory_unit_task["prompt_id"] == "memory_unit_pass"
 
     pending = json.loads(engine.pending_tasks())
     assert len(pending) == 2
     assert {item["task_id"] for item in pending} == {
         task["task_id"],
-        compact_task["task_id"],
+        memory_unit_task["task_id"],
     }
 
     llm_result = {
@@ -204,9 +217,29 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
     assert updated["gist"] == llm_result["gist"]
     assert updated["prompt_id"] == "sleep_compression"
 
-    engine.resume_compact_memory_pass(
-        compact_task["task_id"],
-        "Берлін -> користувач повідомив стабільний контекст проживання.",
+    unit_updated = json.loads(
+        engine.resume_memory_unit_pass(
+            memory_unit_task["task_id"],
+            json.dumps(
+                {
+                    "schema_version": "memory_units_result.v1",
+                    "archive_id": archive["archive_id"],
+                    "memory_units": [
+                        {
+                            "thesis": "Берлін -> користувач повідомив стабільний контекст проживання.",
+                            "source_event_ids": archive["source_event_ids"],
+                            "evidence": "Користувач прямо повідомив, що живе в Берліні.",
+                            "tags": ["location"],
+                            "weight": 0.95,
+                        }
+                    ],
+                }
+            ),
+        )
+    )
+    assert unit_updated["memory_units"][0]["memory_unit_id"].startswith("mu_")
+    assert unit_updated["compact_memory"] == (
+        "Берлін -> користувач повідомив стабільний контекст проживання."
     )
     assert json.loads(engine.pending_tasks()) == []
 
@@ -314,7 +347,6 @@ def test_core_context_package_combines_session_and_archive(engine: memory_engine
         "archive_id": sleep_result["archive_entry"]["archive_id"],
         "gist": "Розмова про МіГ-15.",
         "narrative": "Користувач питав про радянський винищувач МіГ-15.",
-        "compact_memory": "Обговорили МіГ-15 -> користувач цікавиться військовою авіацією.",
         "facts": [],
         "quotes": [],
         "tags": ["aircraft"],
@@ -325,6 +357,23 @@ def test_core_context_package_combines_session_and_archive(engine: memory_engine
     engine.resume_sleep_compression(
         sleep_result["pending_task"]["task_id"],
         json.dumps(llm_result),
+    )
+    engine.resume_memory_unit_pass(
+        sleep_result["memory_unit_task"]["task_id"],
+        json.dumps(
+            {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": sleep_result["archive_entry"]["archive_id"],
+                "memory_units": [
+                    {
+                        "thesis": "Обговорили МіГ-15 -> користувач цікавиться військовою авіацією.",
+                        "source_event_ids": sleep_result["archive_entry"]["source_event_ids"],
+                        "tags": ["aviation"],
+                        "weight": 0.9,
+                    }
+                ],
+            }
+        ),
     )
     _ingest(
         engine,

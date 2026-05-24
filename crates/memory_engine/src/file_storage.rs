@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::archive::{ArchiveEntry, ArchiveFilters};
+use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
 use crate::event::StoredEvent;
 use crate::journal::{JournalOperation, JournalState};
@@ -43,6 +43,8 @@ impl FileStorage {
     pub fn ensure_layout(&self) -> Result<()> {
         fs::create_dir_all(self.root.join("sessions"))?;
         fs::create_dir_all(self.root.join("archive"))?;
+        fs::create_dir_all(self.root.join("archive").join("units"))?;
+        fs::create_dir_all(self.root.join("archive").join("forgotten"))?;
         fs::create_dir_all(self.root.join("core").join("store"))?;
         fs::create_dir_all(self.root.join("core").join("candidates"))?;
         fs::create_dir_all(self.root.join("tasks"))?;
@@ -81,7 +83,7 @@ impl FileStorage {
 
     fn archive_entry_path_by_id(&self, archive_id: &str) -> Result<PathBuf> {
         let mut files = Vec::new();
-        collect_json_files(&self.root.join("archive"), &mut files)?;
+        collect_archive_entry_files(&self.root.join("archive"), &mut files)?;
 
         files
             .into_iter()
@@ -96,6 +98,13 @@ impl FileStorage {
             .join("core")
             .join("store")
             .join(format!("{category}.json"))
+    }
+
+    fn memory_unit_path(&self, unit_id: &str) -> PathBuf {
+        self.root
+            .join("archive")
+            .join("units")
+            .join(format!("{unit_id}.json"))
     }
 
     fn candidate_path(&self, candidate_id: &str) -> PathBuf {
@@ -237,7 +246,7 @@ impl Storage for FileStorage {
 
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>> {
         let mut files = Vec::new();
-        collect_json_files(&self.root.join("archive"), &mut files)?;
+        collect_archive_entry_files(&self.root.join("archive"), &mut files)?;
 
         let mut entries = Vec::new();
         for path in files {
@@ -248,6 +257,27 @@ impl Storage for FileStorage {
         }
 
         Ok(entries)
+    }
+
+    fn write_memory_unit(&mut self, unit: &MemoryUnit) -> Result<()> {
+        self.ensure_layout()?;
+        atomic_write_json(&self.memory_unit_path(&unit.memory_unit_id), unit)
+    }
+
+    fn read_memory_units_for_archive(&self, archive_id: &str) -> Result<Vec<MemoryUnit>> {
+        let mut files = Vec::new();
+        collect_json_files(&self.root.join("archive").join("units"), &mut files)?;
+
+        let mut units = Vec::new();
+        for path in files {
+            let unit: MemoryUnit = read_json(&path)?;
+            if unit.archive_id == archive_id {
+                units.push(unit);
+            }
+        }
+        units.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+
+        Ok(units)
     }
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory> {
@@ -383,6 +413,30 @@ fn collect_json_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         let path = entry.path();
         if path.is_dir() {
             collect_json_files(&path, files)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_archive_entry_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if matches!(name, "units" | "forgotten") {
+                continue;
+            }
+            collect_archive_entry_files(&path, files)?;
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
             files.push(path);
         }

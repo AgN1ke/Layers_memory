@@ -3753,6 +3753,7 @@ DEVLOG ведеться українською. Для кожного зміст
 **Перевірки:**
 `git diff --check` — пройшло.
 
+
 ## Запис 65 — 2026-05-24 14:01 +03:00 — Уточнено prompt geometry і evidence pack для Core-тез
 
 **Правила:**
@@ -3815,3 +3816,42 @@ Phase A тепер чітко обмежена MemoryUnit foundation: schema/sto
 
 **Перевірки:**
 `git diff --check` — пройшло.
+
+## Запис 67 — 2026-05-24 14:23 +03:00 — Реалізовано Phase A: MemoryUnit foundation і prompt geometry
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після docs-плану треба було перейти від plain-text `compact_memory_pass` до атомарних спогадів. Старий compact text був корисний для prompt, але він не давав окремо валідувати, забувати або просувати один конкретний спогад у Core. Також chat prompt досі не мав структурно видимих меж шарів у вигляді тегів.
+
+**Задум:**
+Зробити `MemoryUnit` базовою одиницею довгої памʼяті: LLM створює стільки units, скільки реально є змістових епізодів, engine присвоює короткий глобальний `mu_...` id, зберігає source ids, вагу, status і fidelity status. `compact_memory` має стати проекцією з `MemoryUnit.thesis`, а не окремим LLM-підсумком. Chat prompt має явно розділяти `state`, `core_memory`, `long_memory`, `short_memory`, `current_user_message` і `assistant_response_slot`.
+
+**Що робили:**
+- `crates/memory_engine/src/archive.rs`: додано `MemoryUnit`, `MemoryUnitStatus`, `FidelityStatus`, поле `ArchiveEntry.memory_units`.
+- `crates/memory_engine/src/sleep.rs`: додано `MemoryUnitPassResult` і `MemoryUnitDraft`.
+- `crates/memory_engine/src/engine.rs`: `sleep()` тепер створює `memory_unit_task`; додано `resume_memory_unit_pass`, projection `compact_memory` із units і legacy-сумісність зі старим `resume_compact_memory_pass`.
+- `crates/memory_engine/src/file_storage.rs`: додано `archive/units`, `archive/forgotten`, запис units і захист archive scanner від читання unit-файлів як `ArchiveEntry`.
+- `crates/python_adapter/src/lib.rs`: додано PyO3-метод `resume_memory_unit_pass`.
+- `prompts/memory_unit_pass.md`: додано новий промпт без fixed quotas.
+- `hosts/telegram_gemini_bot/bot.py`: підключено `memory_unit_pass`, projection із units, збереження units через engine і XML-подібну prompt geometry.
+- `prompts/telegram_chat_system.md`: оновлено інструкції під `<core_memory>`, `<long_memory>`, `<short_memory>`, `<current_user_message>`.
+- `docs/roadmap.md`: Phase A checklist позначено виконаним, live-test лишився відкритим.
+
+**Що зробили детально:**
+Новий sleep flow створює два завдання: повний enrichment (`sleep_compression`) і `memory_unit_pass`. Host виконує `memory_unit_pass`, нормалізує units, а engine зберігає їх як окремі записи в `memory/archive/units/` і одночасно збирає короткий `compact_memory` із тез. У prompt більше не тягнуться технічні ids memory units; `compact_memory` лишається людським текстом. Prompt для чату тепер має чіткі теги шарів, щоб модель не плутала довгу памʼять із поточною розмовою.
+
+**Проблеми чи виклики:**
+PyO3 rebuild спершу не зміг замінити старий `.pyd`, бо два локальні Python-процеси тримали модуль. Процеси зупинено, leftover `~emory_engine` у venv видалено, `maturin develop` повторено успішно. Evidence pack, fidelity validator, reflection candidates і live-test Phase A ще не зроблені.
+
+**Фідбек користувача:**
+Користувач погодив план із уточненнями Claude: prompt geometry має бути структурною; evidence pack має бути малим і програмно зібраним; дорога модель потрібна тільки на Core-критичному малому контексті. Також користувач наполіг не дублювати compact text і memory units.
+
+**Перевірки:**
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `.\.venv\Scripts\maturin.exe develop` у `crates/python_adapter` — пройшло після зупинки Python-процесів.
+- `.\.venv\Scripts\python.exe -m pytest tests` у `crates/python_adapter` — 11 passed.
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `git diff --check` — пройшло.

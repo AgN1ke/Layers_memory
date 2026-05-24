@@ -1,4 +1,4 @@
-use crate::archive::{ArchiveEntry, ArchiveFilters};
+use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
 use crate::event::StoredEvent;
 use crate::journal::JournalOperation;
@@ -19,6 +19,8 @@ pub trait Storage {
     fn update_archive_entry(&mut self, archive_id: &str, entry: &ArchiveEntry) -> Result<()>;
     fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry>;
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>>;
+    fn write_memory_unit(&mut self, unit: &MemoryUnit) -> Result<()>;
+    fn read_memory_units_for_archive(&self, archive_id: &str) -> Result<Vec<MemoryUnit>>;
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory>;
     fn read_core_store_categories(&self) -> Result<Vec<CoreStoreCategory>>;
