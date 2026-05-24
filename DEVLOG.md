@@ -3855,3 +3855,33 @@ PyO3 rebuild спершу не зміг замінити старий `.pyd`, б
 - `.\.venv\Scripts\python.exe -m pytest tests` у `crates/python_adapter` — 11 passed.
 - `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
 - `git diff --check` — пройшло.
+
+## Запис 68 — 2026-05-24 16:30 +03:00 — Додано dev-only Telegram notices для sleep
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Під час live-test користувач не бачить, коли sleep поставлено в чергу, коли він почався і коли завершився. Логи це показують, але під час довгої Telegram-розмови треба тимчасовий видимий сигнал прямо в чаті. Водночас ці службові повідомлення не мають потрапляти в памʼять або prod-поведінку.
+
+**Задум:**
+Додати dev-only прапорець `MEMORY_BOT_DEV_SLEEP_NOTICES=1`. Коли він увімкнений, бот надсилає службові Telegram-повідомлення `[dev sleep] queued/started/completed/failed`. Коли прапорець вимкнений, prod-поведінка не змінюється.
+
+**Що робили:**
+- `hosts/telegram_gemini_bot/bot.py`: додано `sleep_notices_enabled`, `send_sleep_notice`, `chat_id_from_session_id`.
+- `SleepRunner`: додано dev-повідомлення про старт, завершення і failure sleep.
+- `queue_sleep_update`: додано dev-повідомлення про queued archive/task/events.
+- `maybe_queue_token_pressure_sleep` і scheduled idle sleep тепер можуть передавати Telegram/chat_id тільки коли dev notices увімкнені.
+
+**Що зробили детально:**
+Службові sleep notices відправляються напряму через `telegram.send_message` і не проходять через `ingest_chat_event`, тому не записуються в `events.jsonl`, не потрапляють у Core/Archive і не входять у prompt context. Для prod це вимкнено за замовчуванням.
+
+**Проблеми чи виклики:**
+Це тимчасовий live-test інструмент. Перед merge/release треба або лишити вимкненим за env-прапорцем, або прибрати, якщо перестане бути корисним.
+
+**Фідбек користувача:**
+Користувач попросив тимчасові системні повідомлення про sleep прямо в Telegram, але без введення цих повідомлень у контекст і без prod-поведінки.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `git diff --check` — пройшло.

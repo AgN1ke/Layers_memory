@@ -52,6 +52,7 @@ DEFAULT_CHAT_ROLE = "balanced"
 DEFAULT_TOKEN_PRESSURE_RATIO = 0.80
 DEFAULT_IDLE_SLEEP_HOUR = 4
 DEFAULT_IDLE_SLEEP_MIN_SECONDS = 1800
+DEV_SLEEP_NOTICES_ENV = "MEMORY_BOT_DEV_SLEEP_NOTICES"
 RECENT_CONTEXT_LIMIT = 40
 SESSION_TRACE_EVENT_LIMIT = 120
 
@@ -171,6 +172,11 @@ class SleepRunner:
         reason: str,
     ) -> None:
         try:
+            send_sleep_notice(
+                telegram,
+                chat_id,
+                f"[dev sleep] started: {reason}, task={task_id}",
+            )
             engine = memory_engine.MemoryEngine(
                 str(MEMORY_DIR),
                 host_id="telegram_gemini_bot",
@@ -178,11 +184,20 @@ class SleepRunner:
             summary = complete_sleep_result(engine, self._gemini, self._llm_config, sleep_result)
             log_line(f"{reason} completed: {summary.replace(chr(10), ' | ')}")
             if telegram is not None and chat_id is not None:
-                telegram.send_message(chat_id, f"Memory updated.\n\n{summary}")
+                if sleep_notices_enabled():
+                    telegram.send_message(chat_id, f"[dev sleep] completed\n\n{summary}")
+                else:
+                    telegram.send_message(chat_id, f"Memory updated.\n\n{summary}")
         except Exception as err:
             log_exception(f"{reason} completion failed", err)
             if telegram is not None and chat_id is not None:
-                telegram.send_message(chat_id, "Memory update failed.\n\n" + friendly_error_message(err))
+                if sleep_notices_enabled():
+                    telegram.send_message(
+                        chat_id,
+                        "[dev sleep] failed\n\n" + friendly_error_message(err),
+                    )
+                else:
+                    telegram.send_message(chat_id, "Memory update failed.\n\n" + friendly_error_message(err))
         finally:
             with self._lock:
                 self._running_task_ids.discard(task_id)
@@ -364,7 +379,8 @@ def main() -> None:
         f"offset={offset} "
         f"token_pressure_ratio={read_token_pressure_ratio()} "
         f"idle_sleep_hour={read_idle_sleep_hour()} "
-        f"idle_sleep_min_seconds={read_idle_sleep_min_seconds()}"
+        f"idle_sleep_min_seconds={read_idle_sleep_min_seconds()} "
+        f"dev_sleep_notices={sleep_notices_enabled()}"
     )
 
     while True:
@@ -383,7 +399,7 @@ def main() -> None:
                     if update_id is not None:
                         offset = update_id + 1
                         save_offset(offset)
-            maybe_queue_scheduled_idle_sleep(engine, sleep_runner)
+            maybe_queue_scheduled_idle_sleep(engine, sleep_runner, telegram)
         except KeyboardInterrupt:
             log_line("bot stopped by keyboard interrupt")
             print("\nStopped.")
@@ -567,6 +583,8 @@ def handle_update(
     maybe_queue_token_pressure_sleep(
         engine=engine,
         sleep_runner=sleep_runner,
+        telegram=telegram,
+        chat_id=chat_id,
         session_id=session_id,
         package=package,
     )
@@ -591,13 +609,26 @@ def queue_sleep_update(
         chat_id=chat_id,
         reason=reason,
     )
-    if queued and notify and telegram is not None and chat_id is not None:
-        telegram.send_message(chat_id, "Memory update queued.")
+    if queued and (notify or sleep_notices_enabled()) and telegram is not None and chat_id is not None:
+        if sleep_notices_enabled():
+            archive = sleep_result.get("archive_entry", {})
+            task = sleep_result.get("pending_task", {})
+            event_count = len(archive.get("source_event_ids", []))
+            telegram.send_message(
+                chat_id,
+                "[dev sleep] queued: "
+                f"{reason}, archive={archive.get('archive_id')}, "
+                f"task={task.get('task_id')}, events={event_count}",
+            )
+        else:
+            telegram.send_message(chat_id, "Memory update queued.")
 
 
 def maybe_queue_token_pressure_sleep(
     engine: memory_engine.MemoryEngine,
     sleep_runner: SleepRunner,
+    telegram: TelegramClient | None,
+    chat_id: int | None,
     session_id: str,
     package: dict[str, Any],
 ) -> None:
@@ -624,8 +655,8 @@ def maybe_queue_token_pressure_sleep(
     queue_sleep_update(
         engine=engine,
         sleep_runner=sleep_runner,
-        telegram=None,
-        chat_id=None,
+        telegram=telegram if sleep_notices_enabled() else None,
+        chat_id=chat_id if sleep_notices_enabled() else None,
         session_id=session_id,
         reason="token pressure sleep",
         notify=False,
@@ -664,6 +695,7 @@ def token_pressure_reasons(
 def maybe_queue_scheduled_idle_sleep(
     engine: memory_engine.MemoryEngine,
     sleep_runner: SleepRunner,
+    telegram: TelegramClient | None = None,
 ) -> None:
     now_local = datetime.now().astimezone()
     if now_local.hour != read_idle_sleep_hour():
@@ -697,8 +729,8 @@ def maybe_queue_scheduled_idle_sleep(
         queue_sleep_update(
             engine=engine,
             sleep_runner=sleep_runner,
-            telegram=None,
-            chat_id=None,
+            telegram=telegram if sleep_notices_enabled() else None,
+            chat_id=chat_id_from_session_id(session_id) if sleep_notices_enabled() else None,
             session_id=session_id,
             reason="scheduled idle sleep",
             notify=False,
@@ -2063,6 +2095,33 @@ def read_idle_sleep_min_seconds() -> int:
         )
         return DEFAULT_IDLE_SLEEP_MIN_SECONDS
     return max(0, value)
+
+
+def sleep_notices_enabled() -> bool:
+    return os.environ.get(DEV_SLEEP_NOTICES_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def send_sleep_notice(
+    telegram: TelegramClient | None,
+    chat_id: int | None,
+    text: str,
+) -> None:
+    if not sleep_notices_enabled() or telegram is None or chat_id is None:
+        return
+    try:
+        telegram.send_message(chat_id, text)
+    except Exception as err:
+        log_exception("failed to send dev sleep notice", err)
+
+
+def chat_id_from_session_id(session_id: str) -> int | None:
+    prefix = "telegram_"
+    if not session_id.startswith(prefix):
+        return None
+    try:
+        return int(session_id.removeprefix(prefix))
+    except ValueError:
+        return None
 
 
 
