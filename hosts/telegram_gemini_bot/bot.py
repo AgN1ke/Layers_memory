@@ -553,13 +553,14 @@ def handle_update(
     package = context_package(engine, session_id, chat_id, text)
     model = llm_config.chat_model().model
     prompt = chat_prompt(package, text)
+    prompt_telemetry = chat_prompt_telemetry(package, session_id, prompt)
     answer_response = gemini.generate_text(
         model=model,
         system_instruction=chat_system_instruction(),
         prompt=prompt,
         operation="chat_reply",
         model_role=llm_config.chat_role,
-        telemetry=chat_prompt_telemetry(package, session_id, prompt),
+        telemetry=prompt_telemetry,
     )
     answer = answer_response.text
     telegram.send_message(chat_id, answer)
@@ -587,6 +588,7 @@ def handle_update(
         chat_id=chat_id,
         session_id=session_id,
         package=package,
+        prompt_telemetry=prompt_telemetry,
     )
 
 
@@ -631,6 +633,7 @@ def maybe_queue_token_pressure_sleep(
     chat_id: int | None,
     session_id: str,
     package: dict[str, Any],
+    prompt_telemetry: dict[str, Any],
 ) -> None:
     if has_pending_sleep_task(engine, session_id):
         return
@@ -641,7 +644,7 @@ def maybe_queue_token_pressure_sleep(
 
     budget = package.get("budget") if isinstance(package.get("budget"), dict) else {}
     ratio = read_token_pressure_ratio()
-    reasons = token_pressure_reasons(budget, stats, ratio)
+    reasons = token_pressure_reasons(budget, stats, prompt_telemetry, ratio)
     if not reasons:
         return
 
@@ -650,6 +653,7 @@ def maybe_queue_token_pressure_sleep(
         f"session={session_id} reasons={','.join(reasons)} "
         f"unarchived_events={stats['event_count']} "
         f"unarchived_est_tokens={stats['estimated_tokens']} "
+        f"prompt_est_tokens={int_or_zero(prompt_telemetry.get('compact_prompt_estimated_tokens'))} "
         f"ratio={ratio:.2f}"
     )
     queue_sleep_update(
@@ -666,6 +670,7 @@ def maybe_queue_token_pressure_sleep(
 def token_pressure_reasons(
     budget: dict[str, Any],
     stats: dict[str, Any],
+    prompt_telemetry: dict[str, Any],
     ratio: float,
 ) -> list[str]:
     reasons: list[str] = []
@@ -674,18 +679,13 @@ def token_pressure_reasons(
 
     if int_or_zero(budget.get("dropped_session_recent")) > 0:
         reasons.append("dropped_session_recent")
-    if int_or_zero(budget.get("dropped_session_trace")) > 0:
-        reasons.append("dropped_session_trace")
 
     total_budget = int_or_zero(budget.get("total_budget_tokens"))
-    total_estimated = int_or_zero(budget.get("estimated_total_tokens"))
-    if total_budget and total_estimated >= int(total_budget * ratio):
-        reasons.append("total_budget_pressure")
+    prompt_estimated = int_or_zero(prompt_telemetry.get("compact_prompt_estimated_tokens"))
+    if total_budget and prompt_estimated >= int(total_budget * ratio):
+        reasons.append("prompt_budget_pressure")
 
     current_budget = int_or_zero(budget.get("current_memory_budget_tokens"))
-    current_estimated = int_or_zero(budget.get("estimated_current_memory_tokens"))
-    if current_budget and current_estimated >= int(current_budget * ratio):
-        reasons.append("current_memory_pressure")
     if current_budget and int(stats["estimated_tokens"]) >= int(current_budget * ratio):
         reasons.append("unarchived_session_pressure")
 

@@ -3856,6 +3856,43 @@ PyO3 rebuild спершу не зміг замінити старий `.pyd`, б
 - `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
 - `git diff --check` — пройшло.
 
+## Запис 69 — 2026-05-25 17:40 +03:00 — Виправлено фальшивий token-pressure sleep
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Під час live-test бот двічі запустив `token pressure sleep` після малих фрагментів розмови. У логах raw sleep chunks були приблизно 1091 і 1025 estimated tokens, але sleep тригерився через `current_memory_pressure`.
+
+**Задум:**
+Token-pressure має дивитись на LLM-facing prompt або raw unarchived session, а не на debug-estimate `core_context_package`, який рахує `session_recent + session_trace` як JSON і може завищувати або дублювати active context.
+
+**Що робили:**
+- `hosts/telegram_gemini_bot/bot.py`: `handle_update` тепер один раз формує `chat_prompt_telemetry` і передає її в token-pressure check.
+- `token_pressure_reasons`: прибрано `current_memory_pressure` на основі `estimated_current_memory_tokens`.
+- `token_pressure_reasons`: прибрано `dropped_session_trace` як причину sleep, бо trace trimming не означає втрату recent active dialogue.
+- Додано `prompt_budget_pressure` на основі `compact_prompt_estimated_tokens` і 11k total budget.
+- `unarchived_session_pressure` лишився на основі raw unarchived session проти 7k current memory budget.
+
+**Що зробили детально:**
+Тепер sleep від token pressure запускається, якщо:
+- `budget_exceeded`;
+- dropped саме `session_recent`;
+- LLM-facing prompt наблизився до total budget;
+- raw unarchived session наблизилась до current-memory budget.
+
+Debug package estimate більше не може самостійно покласти бота спати.
+
+**Проблеми чи виклики:**
+Нічний scheduled idle sleep о 4:00 лишається штатним режимом і не є багом. Якщо він заважає під час dev-test, його треба окремо вимикати env-конфігом або підняти threshold для idle sleep, але це інше рішення.
+
+**Фідбек користувача:**
+Користувач помітив, що sleep запускається надто часто при ~1000 токенів raw chat, і справедливо поставив під сумнів token-pressure logic.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `git diff --check` — пройшло.
+
 ## Запис 68 — 2026-05-24 16:30 +03:00 — Додано dev-only Telegram notices для sleep
 
 **Правила:**
