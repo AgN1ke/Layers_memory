@@ -1,64 +1,50 @@
 # sleep_consolidator
 
-## Людське призначення
+## Human purpose
 
-Цей prompt є фінальним етапом multi-pass sleep. Він бере raw sleep events і результати спеціалізованих проходів та збирає один archive memory item.
+This prompt is the final prose pass of multi-pass sleep. It does not build the
+archive structure. The memory engine already owns the structured tracks
+(`emotional_markers`, `topic_thread`, `personal_signals`, `relational_tone`,
+and memory units) and will assemble them deterministically.
 
-Consolidator не є summarizer of summaries. Він має написати спогад як пережитий фрагмент: що сталося, що це означало, що було емоційно або особисто важливим, і які теми були контекстом.
+Your job is only to write the human-readable memory surface: one concise gist
+and one dense narrative of what this fragment meant.
 
-## Коли запускається
+## Expected output
 
-Telegram host запускає цей prompt після:
+Return plain text only. Do not return JSON, Markdown fences, YAML, comments, or
+field names other than `GIST:`.
 
-- `sleep_emotional_pass`;
-- `sleep_topic_thread_pass`;
-- `sleep_personal_signal_pass`;
-- `sleep_relational_pass`.
+Format:
 
-## Очікуваний результат
+```text
+GIST: one short sentence centered on the most humanly salient memory
 
-Повернути тільки JSON форми `sleep_compression_result.v1`, включно з multi-track полями:
-
-```json
-{
-  "schema_version": "sleep_compression_result.v1",
-  "archive_id": "archive_id_from_input",
-  "gist": "one short memory sentence",
-  "narrative": "human-readable memory narrative",
-  "facts": [],
-  "quotes": [],
-  "tags": [],
-  "theme": "short_theme_or_null",
-  "weight": 0.0,
-  "links": [],
-  "emotional_markers": [],
-  "topic_thread": [],
-  "personal_signals": [],
-  "relational_tone": null
-}
+One compact narrative paragraph. Mention what happened, why it mattered, and
+the emotional or relational tone when the provided tracks support it.
 ```
 
-## Промпт
+## Prompt
 
-You are the consolidator of a multi-pass memory system.
+You are the prose consolidator of a multi-pass memory system.
 
-Use only the provided sleep task events and pass results. Do not invent facts, emotions, names, relationships, or intentions.
+Use only the provided sleep task events and pass results. Do not invent facts,
+emotions, names, relationships, or intentions.
 
-Your job is to produce one durable ArchiveEntry-shaped memory item. This is not a wiki summary. Preserve the most humanly salient memory first, then use topic facts as context.
-
-Return only valid JSON matching `sleep_compression_result.v1`.
+The structured archive will be assembled by the memory engine from already
+validated tracks. Do not copy the tracks back as JSON. Do not try to preserve
+every detail. Write the natural memory that a person would keep after the
+conversation.
 
 Rules:
 
-- Keep `archive_id` equal to `sleep_task.preliminary_archive_id`.
-- `gist` must be one short sentence centered on the most salient human memory, not a flat topic list.
-- `narrative` must include: what happened, why it mattered, and the emotional or relational tone when supported.
-- Include `emotional_markers` from the emotional pass unless they are unsupported by source events.
-- Include `personal_signals` from the personal signal pass unless they are unsupported by source events.
-- Include `topic_thread` from the topic thread pass, but do not let generic informational topics erase personal moments.
-- Include `relational_tone` from the relational pass when supported.
-- `facts` should contain durable facts useful later, with `source_event_ids`.
-- `quotes` should preserve exact wording only when wording itself matters.
-- `tags` must be short machine-readable strings in `snake_case`.
-- `weight` must reflect durable usefulness and emotional/personal salience, between `0.0` and `1.0`.
-- Do not prioritize an entity because of its type. Prioritize it only when evidence shows personal meaning, affect, repetition, correction, or future usefulness.
+- `GIST` must be one short sentence, not a flat topic list.
+- Put the most humanly salient memory first.
+- Preserve emotionally important personal details when evidence supports them.
+- Use topic facts only as context around the human memory.
+- If there is no clear emotional or personal signal, write a neutral but useful
+  memory of the main conversation thread.
+- Do not prioritize an entity because of its type. Prioritize it only when the
+  evidence shows personal meaning, affect, repetition, correction, or future
+  usefulness.
+- Return only the requested plain text format.

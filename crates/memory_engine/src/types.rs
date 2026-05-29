@@ -21,6 +21,7 @@ pub const RECALL_QUERY_SCHEMA_VERSION: &str = "recall_query.v1";
 pub const RECALL_RESULT_SCHEMA_VERSION: &str = "recall_result.v1";
 pub const PENDING_TASK_SCHEMA_VERSION: &str = "pending_task.v1";
 pub const SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION: &str = "sleep_compression_result.v1";
+pub const CONSOLIDATOR_TEXT_SCHEMA_VERSION: &str = "consolidator_text.v1";
 pub const COMPACT_MEMORY_RESULT_SCHEMA_VERSION: &str = "compact_memory_text.v1";
 pub const MEMORY_UNITS_RESULT_SCHEMA_VERSION: &str = "memory_units_result.v1";
 pub const MANIFEST_SCHEMA_VERSION: &str = "manifest.v1";

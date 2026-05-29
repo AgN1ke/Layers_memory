@@ -88,7 +88,9 @@ pub struct SleepRun {
     #[serde(default)]
     pub relational_pass: Option<Value>,
     #[serde(default)]
-    pub consolidated_result: Option<Value>,
+    pub consolidator_gist: Option<String>,
+    #[serde(default)]
+    pub consolidator_narrative: Option<String>,
     #[serde(default)]
     pub completion_mode: Option<String>,
 }

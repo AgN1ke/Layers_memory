@@ -1131,8 +1131,12 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
     let batch = step.batch.expect("consolidator batch");
     assert_eq!(batch.requests.len(), 1);
     assert_eq!(batch.requests[0].prompt_id, "sleep_consolidator");
+    assert_eq!(
+        batch.requests[0].expected_output_schema,
+        memory_engine::types::CONSOLIDATOR_TEXT_SCHEMA_VERSION
+    );
 
-    let consolidated = json!({
+    let _consolidated = json!({
         "schema_version": SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
         "archive_id": run.archive_id,
         "gist": "Користувач сказав, що любить космос.",
@@ -1164,7 +1168,7 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
             run,
             vec![LlmResponse::Ok {
                 request_id: batch.requests[0].request_id.clone(),
-                text: format!("```json\n{consolidated}\n```"),
+                text: "GIST: РљРѕСЂРёСЃС‚СѓРІР°С‡ СЃРєР°Р·Р°РІ, С‰Рѕ Р»СЋР±РёС‚СЊ РєРѕСЃРјРѕСЃ.\n\nРљРѕСЂРёСЃС‚СѓРІР°С‡ РїСЂСЏРјРѕ РЅР°Р·РІР°РІСЃСЏ РњРёРєРёС‚РѕСЋ С– С‚РµРїР»Рѕ РѕРїРёСЃР°РІ Р»СЋР±РѕРІ РґРѕ РєРѕСЃРјРѕСЃСѓ.".to_string(),
             }],
         )
         .expect("submit consolidator");
@@ -1174,6 +1178,11 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
     let outcome = engine.finish_sleep_run(run).expect("finish sleep run");
     assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
     assert_eq!(outcome.completion_mode, "consolidated");
+    assert!(!outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "consolidator_fallback"));
     assert_eq!(outcome.core_summary.created, 1);
     assert!(engine.pending_tasks().expect("pending tasks").is_empty());
 
@@ -1195,6 +1204,122 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
         .core_facts
         .iter()
         .any(|fact| fact.text == "Користувач любить космос."));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_run_falls_back_when_consolidator_returns_empty_text() {
+    let root = unique_temp_dir("sleep_run_consolidator_text_fallback");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "I love space and want this remembered.",
+        vec!["personal_fact", "interest"],
+    );
+
+    let mut run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let step = engine.next_sleep_batch(run).expect("first batch");
+    run = step.run;
+    let batch = step.batch.expect("extraction batch");
+    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+
+    let responses = batch
+        .requests
+        .into_iter()
+        .map(|request| {
+            let text = match request.prompt_id.as_str() {
+                "memory_unit_pass" => json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": run.archive_id,
+                    "memory_units": [{
+                        "thesis": "Space -> user loves this topic.",
+                        "source_event_ids": [event_id.clone()],
+                        "weight": 0.95
+                    }]
+                }),
+                "sleep_emotional_pass" => json!({
+                    "emotional_markers": [{
+                        "target": "space",
+                        "affect": "love",
+                        "strength": 0.9,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_topic_thread_pass" => json!({
+                    "topic_thread": [{
+                        "topic": "space_interest",
+                        "summary": "The user said they love space.",
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_personal_signal_pass" => json!({
+                    "personal_signals": [{
+                        "text": "The user loves space.",
+                        "category": "interest",
+                        "confidence": 0.95,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_relational_pass" => json!({"relational_tone": null}),
+                other => panic!("unexpected request: {other}"),
+            };
+            LlmResponse::Ok {
+                request_id: request.request_id,
+                text: text.to_string(),
+            }
+        })
+        .collect();
+
+    let step = engine
+        .submit_sleep_batch(run, responses)
+        .expect("submit extraction");
+    run = step.run;
+
+    for attempt in 0..3 {
+        let step = engine.next_sleep_batch(run).expect("consolidator batch");
+        run = step.run;
+        let batch = step.batch.expect("consolidator request");
+        assert_eq!(batch.requests.len(), 1);
+        let step = engine
+            .submit_sleep_batch(
+                run,
+                vec![LlmResponse::Ok {
+                    request_id: batch.requests[0].request_id.clone(),
+                    text: String::new(),
+                }],
+            )
+            .expect("submit empty consolidator");
+        run = step.run;
+        if attempt < 2 {
+            assert_eq!(run.stage, SleepRunStage::Consolidation);
+        }
+    }
+
+    assert_eq!(run.stage, SleepRunStage::ReadyToFinish);
+    let outcome = engine.finish_sleep_run(run).expect("finish fallback");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert_eq!(outcome.completion_mode, "fallback_from_tracks");
+    assert!(outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "consolidator_fallback"));
+    assert!(outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "pass_failed:sleep_consolidator"));
+    assert_eq!(outcome.core_summary.created, 1);
+    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
 
     fs::remove_dir_all(root).ok();
 }

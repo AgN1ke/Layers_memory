@@ -30,14 +30,15 @@ use crate::tasks::{PendingTask, TaskState, TaskType};
 use crate::types::{
     ImportanceHint, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
     ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION,
-    COMPACT_MEMORY_RESULT_SCHEMA_VERSION, CORE_CONTEXT_PACKAGE_SCHEMA_VERSION,
-    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
-    CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_RESULT_SCHEMA_VERSION,
-    CORE_FACT_SCHEMA_VERSION, CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION,
-    EVENT_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION,
-    MANIFEST_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION,
-    PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION,
-    SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    COMPACT_MEMORY_RESULT_SCHEMA_VERSION, CONSOLIDATOR_TEXT_SCHEMA_VERSION,
+    CORE_CONTEXT_PACKAGE_SCHEMA_VERSION, CORE_CONTEXT_REQUEST_SCHEMA_VERSION,
+    CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_INPUT_SCHEMA_VERSION,
+    CORE_FACT_PATCH_RESULT_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
+    CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
+    INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
+    MEMORY_UNITS_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION,
+    RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
+    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use crate::{MemoryEngineError, Result};
 
@@ -502,11 +503,23 @@ impl<S: Storage> MemoryEngine<S> {
             ));
         }
 
-        let mut sleep_result = if let Some(value) = run.consolidated_result.clone() {
-            serde_json::from_value::<SleepCompressionResult>(value)?
-        } else {
-            fallback_sleep_compression_from_tracks(&run)?
-        };
+        let mut sleep_result = assemble_sleep_compression_from_tracks(&run)?;
+        if let Some(gist) = run
+            .consolidator_gist
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            sleep_result.gist = gist.to_string();
+        }
+        if let Some(narrative) = run
+            .consolidator_narrative
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            sleep_result.narrative = narrative.to_string();
+        }
         apply_sleep_run_tags(&mut sleep_result, &run);
 
         let mut archive_entry = self.resume_sleep_compression(&run.sleep_task_id, sleep_result)?;
@@ -1909,7 +1922,8 @@ fn sleep_run_from_stage1(stage1: SleepStage1Result) -> Result<SleepRun> {
         topic_thread_pass: None,
         personal_signal_pass: None,
         relational_pass: None,
-        consolidated_result: None,
+        consolidator_gist: None,
+        consolidator_narrative: None,
         completion_mode: None,
     })
 }
@@ -2001,7 +2015,7 @@ fn ensure_consolidator_request(run: &mut SleepRun) -> Result<()> {
                 "personal_signal_pass": run.personal_signal_pass.clone().unwrap_or_else(|| json!({ "personal_signals": [] })),
                 "relational_pass": run.relational_pass.clone().unwrap_or_else(|| json!({ "relational_tone": null })),
             }),
-            expected_output_schema: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+            expected_output_schema: CONSOLIDATOR_TEXT_SCHEMA_VERSION.to_string(),
         },
         attempts: 0,
         completed: false,
@@ -2079,6 +2093,14 @@ fn handle_sleep_pass_error(
 }
 
 fn parse_sleep_response_text(track: SleepTrack, text: &str, run: &SleepRun) -> Result<Value> {
+    if track == SleepTrack::Consolidator {
+        let (gist, narrative) = parse_consolidator_text(text)?;
+        return Ok(json!({
+            "gist": gist,
+            "narrative": narrative,
+        }));
+    }
+
     let value = parse_json_value_from_llm_text(text)?;
     match track {
         SleepTrack::MemoryUnit => {
@@ -2092,17 +2114,7 @@ fn parse_sleep_response_text(track: SleepTrack, text: &str, run: &SleepRun) -> R
             result.validate_basic()?;
             Ok(serde_json::to_value(result)?)
         }
-        SleepTrack::Consolidator => {
-            let mut result: SleepCompressionResult = serde_json::from_value(value)?;
-            if result.schema_version.trim().is_empty() {
-                result.schema_version = SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string();
-            }
-            if result.archive_id != run.archive_id {
-                result.archive_id = run.archive_id.clone();
-            }
-            result.validate_basic()?;
-            Ok(serde_json::to_value(result)?)
-        }
+        SleepTrack::Consolidator => unreachable!("consolidator text is parsed before JSON tracks"),
         SleepTrack::Emotional
         | SleepTrack::TopicThread
         | SleepTrack::PersonalSignal
@@ -2137,6 +2149,51 @@ fn parse_json_value_from_llm_text(text: &str) -> Result<Value> {
     }
 }
 
+fn parse_consolidator_text(text: &str) -> Result<(String, String)> {
+    let mut candidate = text.trim();
+    if candidate.starts_with("```") {
+        candidate = candidate
+            .trim_start_matches("```text")
+            .trim_start_matches("```")
+            .trim();
+        if let Some(stripped) = candidate.strip_suffix("```") {
+            candidate = stripped.trim();
+        }
+    }
+
+    if candidate.is_empty() {
+        return Err(MemoryEngineError::Validation(
+            "consolidator returned empty text".to_string(),
+        ));
+    }
+
+    let mut lines = candidate.lines();
+    let first_nonempty = lines
+        .by_ref()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .ok_or_else(|| {
+            MemoryEngineError::Validation("consolidator returned empty text".to_string())
+        })?;
+
+    let gist = first_nonempty
+        .strip_prefix("GIST:")
+        .or_else(|| first_nonempty.strip_prefix("gist:"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(first_nonempty)
+        .to_string();
+
+    let narrative = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+    let narrative = if narrative.is_empty() {
+        gist.clone()
+    } else {
+        narrative
+    };
+
+    Ok((gist, narrative))
+}
+
 fn assign_sleep_track_result(run: &mut SleepRun, track: SleepTrack, value: Value) {
     match track {
         SleepTrack::MemoryUnit => run.memory_unit_result = Some(value),
@@ -2145,7 +2202,14 @@ fn assign_sleep_track_result(run: &mut SleepRun, track: SleepTrack, value: Value
         SleepTrack::PersonalSignal => run.personal_signal_pass = Some(value),
         SleepTrack::Relational => run.relational_pass = Some(value),
         SleepTrack::Consolidator => {
-            run.consolidated_result = Some(value);
+            run.consolidator_gist = value
+                .get("gist")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            run.consolidator_narrative = value
+                .get("narrative")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
             run.completion_mode = Some("consolidated".to_string());
         }
     }
@@ -2194,7 +2258,7 @@ fn empty_memory_unit_result(archive_id: &str) -> MemoryUnitPassResult {
     }
 }
 
-fn fallback_sleep_compression_from_tracks(run: &SleepRun) -> Result<SleepCompressionResult> {
+fn assemble_sleep_compression_from_tracks(run: &SleepRun) -> Result<SleepCompressionResult> {
     let emotional_markers = run
         .emotional_pass
         .as_ref()
@@ -2223,16 +2287,20 @@ fn fallback_sleep_compression_from_tracks(run: &SleepRun) -> Result<SleepCompres
     let mut result = SleepCompressionResult {
         schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
         archive_id: run.archive_id.clone(),
-        gist: "Сесія збережена через fallback без фінального consolidator.".to_string(),
-        narrative: "Consolidator не повернув валідний результат; архів зібрано з доступних треків."
-            .to_string(),
+        gist: "Сесія збережена як набір важливих спогадів.".to_string(),
+        narrative: neutral_narrative_from_tracks(
+            &serde_json::from_value::<Vec<crate::archive::EmotionalMarker>>(
+                emotional_markers.clone(),
+            )?,
+            &serde_json::from_value::<Vec<crate::archive::TopicThreadItem>>(topic_thread.clone())?,
+            &serde_json::from_value::<Vec<crate::archive::PersonalSignal>>(
+                personal_signals.clone(),
+            )?,
+        ),
         compact_memory: None,
         facts: Vec::new(),
         quotes: Vec::new(),
-        tags: vec![
-            "multi_pass_sleep".to_string(),
-            "consolidator_fallback".to_string(),
-        ],
+        tags: vec!["multi_pass_sleep".to_string()],
         theme: None,
         weight: 0.55,
         links: Vec::new(),
@@ -2250,9 +2318,60 @@ fn fallback_sleep_compression_from_tracks(run: &SleepRun) -> Result<SleepCompres
     } else if let Some(marker) = result.emotional_markers.first() {
         result.gist = format!("{}: {}", marker.target, marker.affect);
     }
+    if run.completion_mode.as_deref() == Some("fallback_from_tracks") {
+        result.tags.push("consolidator_fallback".to_string());
+    }
     result.weight = fallback_archive_weight(&result);
     result.validate_basic()?;
     Ok(result)
+}
+
+fn neutral_narrative_from_tracks(
+    emotional_markers: &[crate::archive::EmotionalMarker],
+    topic_thread: &[crate::archive::TopicThreadItem],
+    personal_signals: &[crate::archive::PersonalSignal],
+) -> String {
+    let mut parts = Vec::new();
+    if !personal_signals.is_empty() {
+        let signals = personal_signals
+            .iter()
+            .take(3)
+            .map(|signal| signal.text.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        parts.push(format!("Особисті сигнали: {signals}."));
+    }
+    if !emotional_markers.is_empty() {
+        let markers = emotional_markers
+            .iter()
+            .take(3)
+            .map(|marker| format!("{} ({})", marker.target, marker.affect))
+            .collect::<Vec<_>>()
+            .join("; ");
+        parts.push(format!("Емоційно помітні моменти: {markers}."));
+    }
+    if !topic_thread.is_empty() {
+        let topics = topic_thread
+            .iter()
+            .take(4)
+            .map(|topic| {
+                topic
+                    .summary
+                    .as_deref()
+                    .filter(|summary| !summary.trim().is_empty())
+                    .unwrap_or(&topic.topic)
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        parts.push(format!("Теми розмови: {topics}."));
+    }
+
+    if parts.is_empty() {
+        "Сесія була стиснута у структуровані треки, але без виразних довготривалих сигналів."
+            .to_string()
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn fallback_archive_weight(result: &SleepCompressionResult) -> f64 {

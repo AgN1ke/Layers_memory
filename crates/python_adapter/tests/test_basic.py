@@ -344,6 +344,7 @@ def test_sleep_driver_cycle_finishes_archive_and_seeds_core(engine: memory_engin
     run = step["run"]
     batch = step["batch"]
     assert [request["prompt_id"] for request in batch["requests"]] == ["sleep_consolidator"]
+    assert batch["requests"][0]["expected_output_schema"] == "consolidator_text.v1"
 
     consolidated = {
         "schema_version": "sleep_compression_result.v1",
@@ -377,7 +378,12 @@ def test_sleep_driver_cycle_finishes_archive_and_seeds_core(engine: memory_engin
                     {
                         "status": "ok",
                         "request_id": batch["requests"][0]["request_id"],
-                        "text": json.dumps(consolidated, ensure_ascii=False),
+                        "text": (
+                            "GIST: РљРѕСЂРёСЃС‚СѓРІР°С‡ СЃРєР°Р·Р°РІ, "
+                            "С‰Рѕ Р»СЋР±РёС‚СЊ РєРѕСЃРјРѕСЃ.\n\n"
+                            "РљРѕСЂРёСЃС‚СѓРІР°С‡ РїСЂСЏРјРѕ РїРѕРІС–РґРѕРјРёРІ "
+                            "СЃС‚Р°Р±С–Р»СЊРЅРёР№ С–РЅС‚РµСЂРµСЃ РґРѕ РєРѕСЃРјРѕСЃСѓ."
+                        ),
                     }
                 ]
             ),
@@ -387,6 +393,7 @@ def test_sleep_driver_cycle_finishes_archive_and_seeds_core(engine: memory_engin
 
     assert outcome["archive_entry"]["status"] == "complete"
     assert outcome["completion_mode"] == "consolidated"
+    assert "consolidator_fallback" not in outcome["archive_entry"]["tags"]
     assert outcome["core_summary"]["created"] == 1
     assert json.loads(engine.pending_tasks()) == []
 

@@ -46,6 +46,32 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-30 — Consolidator now returns prose, not archive JSON
+
+Live Telegram testing of the pull-based sleep driver showed that the core driver, fail-soft path, and Archive-to-Core bridge worked, but `sleep_consolidator` repeatedly failed schema validation. The root cause was the contract: the LLM was asked to return a full nested `sleep_compression_result.v1` JSON object even though the core already had validated track outputs.
+
+**What changed:**
+- `sleep_consolidator` now returns plain text using `GIST: ...` plus a narrative paragraph.
+- Added `consolidator_text.v1` as the expected output schema for the consolidator request.
+- `SleepRun` stores `consolidator_gist` and `consolidator_narrative` instead of a full `consolidated_result` JSON value.
+- `finish_sleep_run` always assembles `SleepCompressionResult` deterministically from validated tracks, then overlays the LLM-provided gist/narrative when present.
+- The fallback path now writes a neutral assembled narrative from available tracks instead of an error-like placeholder sentence.
+- Added driver tests for both successful prose consolidation and fallback after three empty consolidator responses.
+
+**What is retracted (if applicable):**
+- The previous consolidator contract was too broad. Asking a prose model to reconstruct a full archive JSON object duplicated core responsibility and made rich sessions fragile.
+
+**What is still true:**
+- The core still owns archive structure, track validation, retry, fail-soft, task completion, and Archive-to-Core bridge.
+- The host still only loads prompt text, calls a provider, and returns text or an error.
+- If the consolidator fails, sleep still completes with full validated tracks and `consolidator_fallback` audit tags.
+
+**What we are doing:**
+- Re-run adapter tests and a short Telegram sleep check, then continue to the concurrency branch.
+
+**Thanks:**
+- Mykyta Zagamula for catching that "valid JSON from LLM" was the wrong abstraction at the final memory boundary.
+
 ## 2026-05-29 — Sleep orchestration moved into the core as a pull-based LLM driver
 
 The owner challenged the project boundary: Memory Engine must be a reusable memory library, not a Telegram bot with memory logic embedded in the host. The Telegram host had accumulated sleep pass ordering, semantic retry, fail-soft fallback, JSON extraction, Archive-to-Core bridge, and task completion policy. That would force future Godot or third-party adapters to reimplement memory behavior.

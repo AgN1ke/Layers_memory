@@ -3690,6 +3690,43 @@ Retry додано тільки на host-side LLM orchestration у `hosts/teleg
 - `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
 - `git diff --check` — пройшло.
 
+## Запис 70 — 2026-05-30 02:44 +03:00 — Consolidator переведено з великого JSON на prose-only контракт
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після live-тесту гілки `feature/core-orchestration` стало видно, що головна межа B-гілки працює: sleep-driver у ядрі доходить до `finish_sleep_run`, fail-soft працює, Archive→Core bridge поповнює Core уже з Rust core. Але `sleep_consolidator` стабільно падав після трьох спроб і sleep завершувався через `fallback_from_tracks`. Причина була не в одиничному JSON parsing bug, а в неправильному контракті: LLM просили повернути повний вкладений `sleep_compression_result.v1`, хоча структурні треки вже були валідовані ядром.
+
+**Задум:**
+Забрати у consolidator структурну відповідальність. LLM має писати тільки людський `gist` і `narrative`, а ядро має детерміновано збирати `SleepCompressionResult` із валідованих треків. Це продовжує принцип "структура в ядрі, проза від LLM" і прибирає крихкість великого JSON на фінальному кроці sleep.
+
+**Що робили:**
+- Переписано `prompts/sleep_consolidator.md`: тепер очікується plain text формат `GIST: ...` + один narrative paragraph, без JSON.
+- Додано schema marker `consolidator_text.v1`.
+- У `SleepRun` замість `consolidated_result: Option<Value>` додано `consolidator_gist` і `consolidator_narrative`.
+- `finish_sleep_run` тепер завжди збирає `SleepCompressionResult` із наявних треків, а потім накладає gist/narrative від consolidator, якщо вони є.
+- Fallback більше не пише narrative типу "Consolidator не повернув валідний результат"; замість цього створюється нейтральний narrative із personal signals, emotional markers і topic thread.
+- Оновлено Rust і PyO3 тести під новий contract.
+- Додано HISTORY-запис `2026-05-30 — Consolidator now returns prose, not archive JSON`.
+
+**Що зробили детально:**
+Успішний consolidator path тепер не може впасти через кому або дужку в JSON, бо не парситься як JSON. Якщо consolidator повертає валідний prose, archive отримує LLM-gist і narrative без `consolidator_fallback`. Якщо consolidator повертає порожній або непридатний текст три рази, driver все одно завершує sleep, archive стає `complete`, треки зберігаються, а audit tags містять `consolidator_fallback` і `pass_failed:sleep_consolidator`.
+
+**Проблеми чи виклики:**
+Під час першого тестового прогону новий fallback-тест падав через невідповідність session id і надто довгий temp path на Windows. Це виправлено: тест використовує `live_session`, а назву тимчасової теки скорочено. Для PyO3 rebuild довелося зупинити запущений Telegram bot process, щоб Windows не тримав старий `.pyd`.
+
+**Фідбек користувача:**
+Користувач справедливо вказав, що DEVLOG не був оновлений після зміни. Це виправлено цим записом. Також користувач прийняв аналіз Claude: проблема consolidator була саме контрактною, а не просто "треба краще парсити JSON".
+
+**Перевірки:**
+- 2026-05-30 02:30–02:35 +03:00: `cargo fmt --check` — пройшло.
+- 2026-05-30 02:30–02:35 +03:00: `cargo test --workspace` — пройшло.
+- 2026-05-30 02:30–02:35 +03:00: `cargo clippy --workspace -- -D warnings` — пройшло.
+- 2026-05-30 02:36 +03:00: `maturin develop` у `crates/python_adapter` — пройшло після зупинки bot process.
+- 2026-05-30 02:36 +03:00: `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+- Коміт: `0201331 Make sleep consolidator prose-only`.
+
 ## Запис 63 — 2026-05-23 11:41 +03:00 — Зафіксовано напрям v0.2: memory units, fidelity validation, reflection і opt-in vector storage
 
 **Правила:**
