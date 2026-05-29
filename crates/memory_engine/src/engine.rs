@@ -15,6 +15,10 @@ use crate::core_store::{
     CoreFactPatchResult, CoreFactStatus, CoreFactUpsertResult,
 };
 use crate::event::{IngestEvent, StoredEvent};
+use crate::llm::{
+    CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmRequest, LlmResponse, SleepOutcome,
+    SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
+};
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
 use crate::recall::{
     RecallDebug, RecallFilters, RecallItem, RecallQuery, RecallResult, RecallSourceLayer,
@@ -38,6 +42,8 @@ use crate::types::{
 use crate::{MemoryEngineError, Result};
 
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const SLEEP_RUN_SCHEMA_VERSION: &str = "sleep_run.v1";
+const DEFAULT_SLEEP_PASS_MAX_ATTEMPTS: u32 = 3;
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -434,6 +440,203 @@ impl<S: Storage> MemoryEngine<S> {
             memory_unit_task: Some(memory_unit_task),
             compact_memory_task: None,
         })
+    }
+
+    pub fn begin_sleep_run(&mut self, session_id: &str) -> Result<SleepRun> {
+        let sleep_result = self.sleep(session_id)?;
+        sleep_run_from_stage1(sleep_result)
+    }
+
+    pub fn next_sleep_batch(&mut self, mut run: SleepRun) -> Result<SleepRunStep> {
+        validate_sleep_run(&run)?;
+        advance_sleep_run_stage(&mut run)?;
+
+        let requests = run
+            .requests
+            .iter()
+            .filter(|state| !state.completed && state_stage(state.track) == run.stage)
+            .map(|state| state.request.clone())
+            .collect::<Vec<_>>();
+
+        let batch = (!requests.is_empty()).then_some(LlmBatch { requests });
+        Ok(SleepRunStep { run, batch })
+    }
+
+    pub fn submit_sleep_batch(
+        &mut self,
+        mut run: SleepRun,
+        responses: Vec<LlmResponse>,
+    ) -> Result<SleepRunStep> {
+        validate_sleep_run(&run)?;
+
+        for response in responses {
+            let request_id = llm_response_request_id(&response).to_string();
+            let Some(index) = run
+                .requests
+                .iter()
+                .position(|state| state.request.request_id == request_id)
+            else {
+                return Err(MemoryEngineError::Validation(format!(
+                    "LLM response does not match any request in sleep run: {request_id}"
+                )));
+            };
+
+            let mut state = run.requests[index].clone();
+            if state.completed {
+                continue;
+            }
+            state.attempts += 1;
+            handle_sleep_response(&mut run, &mut state, response)?;
+            run.requests[index] = state;
+        }
+
+        self.next_sleep_batch(run)
+    }
+
+    pub fn finish_sleep_run(&mut self, mut run: SleepRun) -> Result<SleepOutcome> {
+        validate_sleep_run(&run)?;
+        advance_sleep_run_stage(&mut run)?;
+        if run.stage != SleepRunStage::ReadyToFinish {
+            return Err(MemoryEngineError::Validation(
+                "sleep run is not ready to finish".to_string(),
+            ));
+        }
+
+        let mut sleep_result = if let Some(value) = run.consolidated_result.clone() {
+            serde_json::from_value::<SleepCompressionResult>(value)?
+        } else {
+            fallback_sleep_compression_from_tracks(&run)?
+        };
+        apply_sleep_run_tags(&mut sleep_result, &run);
+
+        let mut archive_entry = self.resume_sleep_compression(&run.sleep_task_id, sleep_result)?;
+
+        if let Some(memory_unit_task_id) = run.memory_unit_task_id.clone() {
+            let memory_unit_result = run
+                .memory_unit_result
+                .clone()
+                .map(serde_json::from_value::<MemoryUnitPassResult>)
+                .transpose()?
+                .unwrap_or_else(|| empty_memory_unit_result(&run.archive_id));
+            archive_entry =
+                self.resume_memory_unit_pass(&memory_unit_task_id, memory_unit_result)?;
+        }
+
+        let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
+        run.stage = SleepRunStage::Finished;
+
+        Ok(SleepOutcome {
+            archive_entry,
+            core_summary,
+            failed_passes: run.failed_passes,
+            completion_mode: run
+                .completion_mode
+                .unwrap_or_else(|| "consolidated".to_string()),
+        })
+    }
+
+    pub fn seed_core_from_archives(&mut self) -> Result<CoreArchiveSeedSummary> {
+        self.ensure_manifest()?;
+        let mut summary = CoreArchiveSeedSummary::default();
+        let archives = self.storage.read_archive(&ArchiveFilters::default())?;
+        for archive in archives
+            .into_iter()
+            .filter(|archive| archive.status == ArchiveStatus::Complete)
+        {
+            summary.archives += 1;
+            let archive_summary = self.apply_archive_personal_signal_bridge(&archive)?;
+            summary.created += archive_summary.created;
+            summary.updated += archive_summary.updated;
+            summary.skipped += archive_summary.skipped;
+        }
+        Ok(summary)
+    }
+
+    fn apply_archive_personal_signal_bridge(
+        &mut self,
+        archive: &ArchiveEntry,
+    ) -> Result<CoreSignalSummary> {
+        let mut summary = CoreSignalSummary::default();
+        if archive.status != ArchiveStatus::Complete {
+            return Ok(summary);
+        }
+
+        let session = self.storage.read_session(&archive.source_session_id)?;
+        let user_event_ids = session
+            .events
+            .iter()
+            .filter(|event| event.event_type == "user_message")
+            .map(|event| event.event_id.clone())
+            .collect::<HashSet<_>>();
+        let scope = Some(archive.source_session_id.as_str());
+
+        for signal in &archive.personal_signals {
+            let text = normalize_whitespace(&signal.text);
+            let category = normalize_category_name(&signal.category);
+            let has_user_source = !user_event_ids.is_empty()
+                && signal
+                    .source_event_ids
+                    .iter()
+                    .any(|event_id| user_event_ids.contains(event_id));
+
+            if text.is_empty()
+                || category.is_empty()
+                || signal.confidence < 0.85
+                || !has_user_source
+                || self.is_near_duplicate_core_fact(&category, scope, &text)?
+            {
+                summary.skipped += 1;
+                continue;
+            }
+
+            let result = self.upsert_core_fact(CoreFactInput {
+                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                category: category.clone(),
+                scope: scope.map(str::to_string),
+                text,
+                confidence: signal.confidence,
+                tags: vec![
+                    "archive_signal".to_string(),
+                    "signal_category".to_string(),
+                    format!("signal_category:{category}"),
+                ],
+                source_archive_ids: vec![archive.archive_id.clone()],
+                source_candidate_id: None,
+            })?;
+            if result.created {
+                summary.created += 1;
+            } else {
+                summary.updated += 1;
+            }
+        }
+
+        Ok(summary)
+    }
+
+    fn is_near_duplicate_core_fact(
+        &self,
+        category_name: &str,
+        scope: Option<&str>,
+        text: &str,
+    ) -> Result<bool> {
+        let normalized_scope = normalize_optional_string(scope);
+        let needle = normalize_match_text(text);
+        let needle_tokens = meaningful_tokens(text);
+        let category = self.storage.read_core_store_category(category_name)?;
+
+        for fact in category.facts {
+            if fact.status != CoreFactStatus::Active || fact.scope != normalized_scope {
+                continue;
+            }
+            if normalize_match_text(&fact.text) == needle {
+                return Ok(false);
+            }
+            if token_overlap_sets(&needle_tokens, &meaningful_tokens(&fact.text)) >= 0.55 {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     pub fn resume_sleep_compression(
@@ -1632,6 +1835,497 @@ fn archive_weight(events: &[&StoredEvent]) -> f64 {
         .map(|event| event.initial_weight)
         .fold(0.0, f64::max)
         .clamp(0.0, 1.0)
+}
+
+fn sleep_run_from_stage1(stage1: SleepStage1Result) -> Result<SleepRun> {
+    let mut requests = Vec::new();
+    let sleep_task = stage1.pending_task;
+
+    if let Some(memory_unit_task) = stage1.memory_unit_task.clone() {
+        requests.push(SleepRequestState {
+            track: SleepTrack::MemoryUnit,
+            request: llm_request_from_task(
+                &memory_unit_task,
+                "memory_unit_pass",
+                json!({ "sleep_task": memory_unit_task.inputs }),
+            )?,
+            attempts: 0,
+            completed: false,
+            last_error: None,
+        });
+    }
+
+    for (track, prompt_id, fallback_schema) in [
+        (
+            SleepTrack::Emotional,
+            "sleep_emotional_pass",
+            "sleep_emotional_pass.v1",
+        ),
+        (
+            SleepTrack::TopicThread,
+            "sleep_topic_thread_pass",
+            "sleep_topic_thread_pass.v1",
+        ),
+        (
+            SleepTrack::PersonalSignal,
+            "sleep_personal_signal_pass",
+            "sleep_personal_signal_pass.v1",
+        ),
+        (
+            SleepTrack::Relational,
+            "sleep_relational_pass",
+            "sleep_relational_pass.v1",
+        ),
+    ] {
+        requests.push(SleepRequestState {
+            track,
+            request: LlmRequest {
+                request_id: new_id("llm_req")?,
+                task_id: sleep_task.task_id.clone(),
+                role_hint: sleep_task.role_hint,
+                prompt_id: prompt_id.to_string(),
+                prompt_version: sleep_task.prompt_version,
+                prompt_inputs: json!({ "sleep_task": sleep_task.inputs }),
+                expected_output_schema: fallback_schema.to_string(),
+            },
+            attempts: 0,
+            completed: false,
+            last_error: None,
+        });
+    }
+
+    Ok(SleepRun {
+        schema_version: SLEEP_RUN_SCHEMA_VERSION.to_string(),
+        session_id: stage1.archive_entry.source_session_id.clone(),
+        archive_id: stage1.archive_entry.archive_id,
+        sleep_task_id: sleep_task.task_id,
+        memory_unit_task_id: stage1.memory_unit_task.map(|task| task.task_id),
+        stage: SleepRunStage::Extraction,
+        max_pass_attempts: DEFAULT_SLEEP_PASS_MAX_ATTEMPTS,
+        requests,
+        failed_passes: Vec::new(),
+        memory_unit_result: None,
+        emotional_pass: None,
+        topic_thread_pass: None,
+        personal_signal_pass: None,
+        relational_pass: None,
+        consolidated_result: None,
+        completion_mode: None,
+    })
+}
+
+fn llm_request_from_task(
+    task: &PendingTask,
+    prompt_id: &str,
+    prompt_inputs: Value,
+) -> Result<LlmRequest> {
+    Ok(LlmRequest {
+        request_id: new_id("llm_req")?,
+        task_id: task.task_id.clone(),
+        role_hint: task.role_hint,
+        prompt_id: prompt_id.to_string(),
+        prompt_version: task.prompt_version,
+        prompt_inputs,
+        expected_output_schema: task.expected_output_schema.clone(),
+    })
+}
+
+fn validate_sleep_run(run: &SleepRun) -> Result<()> {
+    if run.schema_version != SLEEP_RUN_SCHEMA_VERSION {
+        return Err(MemoryEngineError::IncompatibleSchema {
+            expected: SLEEP_RUN_SCHEMA_VERSION.to_string(),
+            actual: run.schema_version.clone(),
+        });
+    }
+    if run.session_id.trim().is_empty()
+        || run.archive_id.trim().is_empty()
+        || run.sleep_task_id.trim().is_empty()
+    {
+        return Err(MemoryEngineError::Validation(
+            "sleep run must include session_id, archive_id, and sleep_task_id".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn advance_sleep_run_stage(run: &mut SleepRun) -> Result<()> {
+    match run.stage {
+        SleepRunStage::Extraction => {
+            if run
+                .requests
+                .iter()
+                .filter(|state| state_stage(state.track) == SleepRunStage::Extraction)
+                .all(|state| state.completed)
+            {
+                run.stage = SleepRunStage::Consolidation;
+                ensure_consolidator_request(run)?;
+            }
+        }
+        SleepRunStage::Consolidation => {
+            if run
+                .requests
+                .iter()
+                .filter(|state| state_stage(state.track) == SleepRunStage::Consolidation)
+                .all(|state| state.completed)
+            {
+                run.stage = SleepRunStage::ReadyToFinish;
+            }
+        }
+        SleepRunStage::ReadyToFinish | SleepRunStage::Finished => {}
+    }
+    Ok(())
+}
+
+fn ensure_consolidator_request(run: &mut SleepRun) -> Result<()> {
+    if run
+        .requests
+        .iter()
+        .any(|state| state.track == SleepTrack::Consolidator)
+        || run.completion_mode.as_deref() == Some("fallback_from_tracks")
+    {
+        return Ok(());
+    }
+
+    run.requests.push(SleepRequestState {
+        track: SleepTrack::Consolidator,
+        request: LlmRequest {
+            request_id: new_id("llm_req")?,
+            task_id: run.sleep_task_id.clone(),
+            role_hint: ModelRole::Balanced,
+            prompt_id: "sleep_consolidator".to_string(),
+            prompt_version: 1,
+            prompt_inputs: json!({
+                "sleep_task": sleep_task_input_from_run(run),
+                "emotional_pass": run.emotional_pass.clone().unwrap_or_else(|| json!({ "emotional_markers": [] })),
+                "topic_thread_pass": run.topic_thread_pass.clone().unwrap_or_else(|| json!({ "topic_thread": [] })),
+                "personal_signal_pass": run.personal_signal_pass.clone().unwrap_or_else(|| json!({ "personal_signals": [] })),
+                "relational_pass": run.relational_pass.clone().unwrap_or_else(|| json!({ "relational_tone": null })),
+            }),
+            expected_output_schema: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+        },
+        attempts: 0,
+        completed: false,
+        last_error: None,
+    });
+    Ok(())
+}
+
+fn sleep_task_input_from_run(run: &SleepRun) -> Value {
+    run.requests
+        .iter()
+        .find(|state| {
+            matches!(
+                state.track,
+                SleepTrack::Emotional
+                    | SleepTrack::TopicThread
+                    | SleepTrack::PersonalSignal
+                    | SleepTrack::Relational
+            )
+        })
+        .and_then(|state| state.request.prompt_inputs.get("sleep_task").cloned())
+        .unwrap_or_else(|| json!({}))
+}
+
+fn state_stage(track: SleepTrack) -> SleepRunStage {
+    match track {
+        SleepTrack::Consolidator => SleepRunStage::Consolidation,
+        SleepTrack::MemoryUnit
+        | SleepTrack::Emotional
+        | SleepTrack::TopicThread
+        | SleepTrack::PersonalSignal
+        | SleepTrack::Relational => SleepRunStage::Extraction,
+    }
+}
+
+fn handle_sleep_response(
+    run: &mut SleepRun,
+    state: &mut SleepRequestState,
+    response: LlmResponse,
+) -> Result<()> {
+    match response {
+        LlmResponse::Ok { text, .. } => match parse_sleep_response_text(state.track, &text, run) {
+            Ok(value) => {
+                assign_sleep_track_result(run, state.track, value);
+                state.completed = true;
+                state.last_error = None;
+            }
+            Err(err) => handle_sleep_pass_error(run, state, err.to_string())?,
+        },
+        LlmResponse::Err { kind, detail, .. } => {
+            handle_sleep_pass_error(run, state, format!("{kind:?}: {detail}"))?
+        }
+    }
+    Ok(())
+}
+
+fn handle_sleep_pass_error(
+    run: &mut SleepRun,
+    state: &mut SleepRequestState,
+    error: String,
+) -> Result<()> {
+    state.last_error = Some(error.clone());
+    if state.attempts < run.max_pass_attempts {
+        state.request.prompt_inputs = add_retry_instruction(&state.request.prompt_inputs, &error);
+        return Ok(());
+    }
+
+    push_unique(&mut run.failed_passes, state.request.prompt_id.clone());
+    let fallback = fallback_value_for_track(state.track, run);
+    if state.track != SleepTrack::Consolidator {
+        assign_sleep_track_result(run, state.track, fallback);
+    }
+    state.completed = true;
+    Ok(())
+}
+
+fn parse_sleep_response_text(track: SleepTrack, text: &str, run: &SleepRun) -> Result<Value> {
+    let value = parse_json_value_from_llm_text(text)?;
+    match track {
+        SleepTrack::MemoryUnit => {
+            let mut result: MemoryUnitPassResult = serde_json::from_value(value)?;
+            if result.schema_version.trim().is_empty() {
+                result.schema_version = MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string();
+            }
+            if result.archive_id != run.archive_id {
+                result.archive_id = run.archive_id.clone();
+            }
+            result.validate_basic()?;
+            Ok(serde_json::to_value(result)?)
+        }
+        SleepTrack::Consolidator => {
+            let mut result: SleepCompressionResult = serde_json::from_value(value)?;
+            if result.schema_version.trim().is_empty() {
+                result.schema_version = SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string();
+            }
+            if result.archive_id != run.archive_id {
+                result.archive_id = run.archive_id.clone();
+            }
+            result.validate_basic()?;
+            Ok(serde_json::to_value(result)?)
+        }
+        SleepTrack::Emotional
+        | SleepTrack::TopicThread
+        | SleepTrack::PersonalSignal
+        | SleepTrack::Relational => Ok(value),
+    }
+}
+
+fn parse_json_value_from_llm_text(text: &str) -> Result<Value> {
+    let mut candidate = text.trim().to_string();
+    if candidate.starts_with("```") {
+        candidate = candidate
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim()
+            .to_string();
+        if candidate.ends_with("```") {
+            candidate.truncate(candidate.len().saturating_sub(3));
+        }
+    }
+
+    match serde_json::from_str::<Value>(candidate.trim()) {
+        Ok(value) => Ok(value),
+        Err(original_err) => {
+            let Some(start) = candidate.find('{') else {
+                return Err(original_err.into());
+            };
+            let Some(end) = candidate.rfind('}') else {
+                return Err(original_err.into());
+            };
+            serde_json::from_str::<Value>(&candidate[start..=end]).map_err(Into::into)
+        }
+    }
+}
+
+fn assign_sleep_track_result(run: &mut SleepRun, track: SleepTrack, value: Value) {
+    match track {
+        SleepTrack::MemoryUnit => run.memory_unit_result = Some(value),
+        SleepTrack::Emotional => run.emotional_pass = Some(value),
+        SleepTrack::TopicThread => run.topic_thread_pass = Some(value),
+        SleepTrack::PersonalSignal => run.personal_signal_pass = Some(value),
+        SleepTrack::Relational => run.relational_pass = Some(value),
+        SleepTrack::Consolidator => {
+            run.consolidated_result = Some(value);
+            run.completion_mode = Some("consolidated".to_string());
+        }
+    }
+}
+
+fn fallback_value_for_track(track: SleepTrack, run: &mut SleepRun) -> Value {
+    match track {
+        SleepTrack::MemoryUnit => serde_json::to_value(empty_memory_unit_result(&run.archive_id))
+            .unwrap_or_else(|_| json!({ "memory_units": [] })),
+        SleepTrack::Emotional => json!({ "emotional_markers": [] }),
+        SleepTrack::TopicThread => json!({ "topic_thread": [] }),
+        SleepTrack::PersonalSignal => json!({ "personal_signals": [] }),
+        SleepTrack::Relational => json!({ "relational_tone": null }),
+        SleepTrack::Consolidator => {
+            run.completion_mode = Some("fallback_from_tracks".to_string());
+            json!(null)
+        }
+    }
+}
+
+fn add_retry_instruction(prompt_inputs: &Value, error: &str) -> Value {
+    let mut value = prompt_inputs.clone();
+    if let Value::Object(ref mut object) = value {
+        object.insert(
+            "retry_instruction".to_string(),
+            json!({
+                "previous_response_error": error,
+                "instruction": "Your previous response was not accepted. Return only the requested valid output schema. No prose, no markdown, no comments."
+            }),
+        );
+    }
+    value
+}
+
+fn llm_response_request_id(response: &LlmResponse) -> &str {
+    match response {
+        LlmResponse::Ok { request_id, .. } | LlmResponse::Err { request_id, .. } => request_id,
+    }
+}
+
+fn empty_memory_unit_result(archive_id: &str) -> MemoryUnitPassResult {
+    MemoryUnitPassResult {
+        schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+        archive_id: archive_id.to_string(),
+        memory_units: Vec::new(),
+    }
+}
+
+fn fallback_sleep_compression_from_tracks(run: &SleepRun) -> Result<SleepCompressionResult> {
+    let emotional_markers = run
+        .emotional_pass
+        .as_ref()
+        .and_then(|value| value.get("emotional_markers"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let topic_thread = run
+        .topic_thread_pass
+        .as_ref()
+        .and_then(|value| value.get("topic_thread"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let personal_signals = run
+        .personal_signal_pass
+        .as_ref()
+        .and_then(|value| value.get("personal_signals"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let relational_tone = run
+        .relational_pass
+        .as_ref()
+        .and_then(|value| value.get("relational_tone"))
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    let mut result = SleepCompressionResult {
+        schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+        archive_id: run.archive_id.clone(),
+        gist: "Сесія збережена через fallback без фінального consolidator.".to_string(),
+        narrative: "Consolidator не повернув валідний результат; архів зібрано з доступних треків."
+            .to_string(),
+        compact_memory: None,
+        facts: Vec::new(),
+        quotes: Vec::new(),
+        tags: vec![
+            "multi_pass_sleep".to_string(),
+            "consolidator_fallback".to_string(),
+        ],
+        theme: None,
+        weight: 0.55,
+        links: Vec::new(),
+        emotional_markers: serde_json::from_value(emotional_markers)?,
+        topic_thread: serde_json::from_value(topic_thread)?,
+        personal_signals: serde_json::from_value(personal_signals)?,
+        relational_tone: serde_json::from_value(relational_tone)?,
+    };
+
+    if let Some(signal) = result.personal_signals.first() {
+        result.gist = signal.text.clone();
+    } else if let Some(topic) = result.topic_thread.first() {
+        result.gist = topic.summary.clone().unwrap_or_else(|| topic.topic.clone());
+        result.theme = Some(topic.topic.clone());
+    } else if let Some(marker) = result.emotional_markers.first() {
+        result.gist = format!("{}: {}", marker.target, marker.affect);
+    }
+    result.weight = fallback_archive_weight(&result);
+    result.validate_basic()?;
+    Ok(result)
+}
+
+fn fallback_archive_weight(result: &SleepCompressionResult) -> f64 {
+    let strongest_emotion = result
+        .emotional_markers
+        .iter()
+        .map(|marker| marker.strength)
+        .fold(0.0, f64::max);
+    let strongest_signal = result
+        .personal_signals
+        .iter()
+        .map(|signal| signal.confidence)
+        .fold(0.0, f64::max);
+    strongest_emotion.max(strongest_signal).clamp(0.55, 1.0)
+}
+
+fn apply_sleep_run_tags(result: &mut SleepCompressionResult, run: &SleepRun) {
+    if let Some(mode) = &run.completion_mode {
+        result.tags.push(format!("completion_mode:{mode}"));
+    }
+    for prompt_id in &run.failed_passes {
+        result.tags.push(format!("pass_failed:{prompt_id}"));
+    }
+    result.tags = unique_strings(std::mem::take(&mut result.tags));
+}
+
+fn push_unique(target: &mut Vec<String>, value: String) {
+    if !target.iter().any(|existing| existing == &value) {
+        target.push(value);
+    }
+}
+
+fn normalize_category_name(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut previous_underscore = false;
+    for ch in normalize_whitespace(value).to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            normalized.push(ch);
+            previous_underscore = false;
+        } else if !previous_underscore {
+            normalized.push('_');
+            previous_underscore = true;
+        }
+    }
+    normalized.trim_matches('_').chars().take(64).collect()
+}
+
+fn meaningful_tokens(text: &str) -> BTreeSet<String> {
+    let stop_words = [
+        "the",
+        "and",
+        "this",
+        "that",
+        "користувач",
+        "користувача",
+        "користувачу",
+        "дуже",
+        "любить",
+        "цікавиться",
+    ];
+    let stop_words = stop_words.into_iter().collect::<BTreeSet<_>>();
+    tokenize(text)
+        .into_iter()
+        .filter(|token| !stop_words.contains(token.as_str()))
+        .collect()
+}
+
+fn token_overlap_sets(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    let overlap = left.intersection(right).count();
+    overlap as f64 / left.len().min(right.len()) as f64
 }
 
 fn event_text(event: &StoredEvent) -> Option<String> {

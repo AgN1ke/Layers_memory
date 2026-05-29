@@ -46,6 +46,57 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-29 — Sleep orchestration moved into the core as a pull-based LLM driver
+
+The owner challenged the project boundary: Memory Engine must be a reusable memory library, not a Telegram bot with memory logic embedded in the host. The Telegram host had accumulated sleep pass ordering, semantic retry, fail-soft fallback, JSON extraction, Archive-to-Core bridge, and task completion policy. That would force future Godot or third-party adapters to reimplement memory behavior.
+
+**What changed:**
+- Added core LLM boundary types in `crates/memory_engine/src/llm.rs`: `LlmRequest`, `LlmResponse`, `LlmBatch`, `SleepRun`, `SleepRunStep`, and `SleepOutcome`.
+- Added pull-based driver methods: `begin_sleep_run`, `next_sleep_batch`, `submit_sleep_batch`, and `finish_sleep_run`.
+- The core now owns sleep pass graph progression, JSON extraction from LLM text, schema validation, semantic retry state, fail-soft empty tracks, consolidator fallback, memory-unit completion, and Archive-to-Core seeding.
+- The Python adapter exposes the new driver through JSON-string methods while keeping provider/model/API-key selection outside Rust.
+- Telegram sleep execution now runs the generic driver loop and implements only the host primitive: load prompt text, call Gemini, return `{request_id, text}` or `{request_id, error}`.
+- `seed_core_from_archives` moved Archive-to-Core bridge backfill into the core.
+- `bot.py` dropped the old sleep pass orchestration helpers and shrank from roughly 2650 lines to roughly 1940 lines.
+
+**What is retracted (if applicable):**
+- The earlier practical shape of the host was too thick. The claim "hosts are thin adapters" was not structurally true while multi-pass sleep orchestration and Core seeding lived in `bot.py`.
+
+**What is still true:**
+- The core still does no network I/O and knows no provider, model, API key, or `prompts_dir`.
+- Prompt files still live outside the Rust core; hosts load/render prompt text.
+- Provider/network retry remains a host concern. The core handles semantic retry and memory-level fallback after the host returns text or an error.
+- Existing direct `sleep()` and `resume_*` APIs remain available for compatibility while the driver becomes the preferred host integration path.
+
+**What we are doing:**
+- Next: concurrency hardening. Convert read paths toward `&self`, remove PyO3 `unsendable`, add per-session storage locks, and add a 1000-session stress test before Phase B reflection validation.
+
+**Thanks:**
+- Mykyta Zagamula for forcing the reusable-library boundary before Phase B added more host-owned memory intelligence.
+
+## 2026-05-29 — File storage safety before core orchestration
+
+Before moving orchestration, we hardened the file storage layer so the next refactor would not sit on known write and scan hazards.
+
+**What changed:**
+- Atomic writes now use unique temp paths in the target directory instead of a shared `.tmp` path.
+- `session.md` is append-only and no longer rereads/replaces the full file on every event.
+- Completed tasks move to `tasks/completed/`; pending task scans ignore completed tasks while `load_task(id)` can still find them for audit.
+- High-frequency derived files avoid unnecessary fsync while durable event and archive/task/core writes remain durable.
+
+**What is retracted (if applicable):**
+- Nothing about the storage contract is retracted; this is a safety and scalability correction.
+
+**What is still true:**
+- `events.jsonl` remains the session source of truth.
+- Completed tasks remain available for audit.
+
+**What we are doing:**
+- Use this as the storage baseline for the pull-based core orchestration branch.
+
+**Thanks:**
+- Mykyta Zagamula and Claude for identifying fixed temp paths, O(n²) session markdown writes, and unbounded hot task scans as early collapse risks.
+
 ## 2026-05-23 — Sleep pass failures no longer leave pending tasks stuck
 
 A live Telegram test showed that a single specialized sleep pass can be blocked by Gemini safety/no-candidates while the other passes are fine. The failed `sleep_personal_signal_pass` left both `sleep_compression` and `compact_memory_pass` tasks pending, which blocked all future sleep for the session.

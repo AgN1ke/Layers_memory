@@ -68,10 +68,7 @@ MEMORY_KEYWORD_PARTS = (
 
 ARCHIVE_LIST_LIMIT = 5
 ARCHIVE_DETAIL_LIMIT = 10
-CORE_SIGNAL_MIN_CONFIDENCE = 0.85
 MAX_CORE_CATEGORY_LENGTH = 64
-SLEEP_PASS_MAX_ATTEMPTS = 3
-SLEEP_PASS_RETRY_DELAY_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -137,12 +134,12 @@ class SleepRunner:
 
     def submit(
         self,
-        sleep_result: dict[str, Any],
+        sleep_run: dict[str, Any],
         telegram: "TelegramClient | None" = None,
         chat_id: int | None = None,
         reason: str = "background sleep",
     ) -> bool:
-        task_id = sleep_result.get("pending_task", {}).get("task_id")
+        task_id = clean_string(sleep_run.get("sleep_task_id"))
         if not task_id:
             log_line(f"{reason} ignored: missing task_id")
             return False
@@ -155,7 +152,7 @@ class SleepRunner:
 
         thread = threading.Thread(
             target=self._run,
-            args=(task_id, sleep_result, telegram, chat_id, reason),
+            args=(task_id, sleep_run, telegram, chat_id, reason),
             name=f"sleep-{task_id}",
             daemon=True,
         )
@@ -166,7 +163,7 @@ class SleepRunner:
     def _run(
         self,
         task_id: str,
-        sleep_result: dict[str, Any],
+        sleep_run: dict[str, Any],
         telegram: "TelegramClient | None",
         chat_id: int | None,
         reason: str,
@@ -181,7 +178,7 @@ class SleepRunner:
                 str(MEMORY_DIR),
                 host_id="telegram_gemini_bot",
             )
-            summary = complete_sleep_result(engine, self._gemini, self._llm_config, sleep_result)
+            summary = complete_sleep_result(engine, self._gemini, self._llm_config, sleep_run)
             log_line(f"{reason} completed: {summary.replace(chr(10), ' | ')}")
             if telegram is not None and chat_id is not None:
                 if sleep_notices_enabled():
@@ -604,23 +601,21 @@ def queue_sleep_update(
     if has_pending_sleep_task(engine, session_id):
         log_line(f"{reason} skipped: pending sleep task already exists for session={session_id}")
         return
-    sleep_result = json.loads(engine.sleep(session_id))
+    sleep_run = json.loads(engine.begin_sleep_run(session_id))
     queued = sleep_runner.submit(
-        sleep_result,
+        sleep_run,
         telegram=telegram,
         chat_id=chat_id,
         reason=reason,
     )
     if queued and (notify or sleep_notices_enabled()) and telegram is not None and chat_id is not None:
         if sleep_notices_enabled():
-            archive = sleep_result.get("archive_entry", {})
-            task = sleep_result.get("pending_task", {})
-            event_count = len(archive.get("source_event_ids", []))
             telegram.send_message(
                 chat_id,
                 "[dev sleep] queued: "
-                f"{reason}, archive={archive.get('archive_id')}, "
-                f"task={task.get('task_id')}, events={event_count}",
+                f"{reason}, archive={sleep_run.get('archive_id')}, "
+                f"task={sleep_run.get('sleep_task_id')}, "
+                f"requests={len(sleep_run.get('requests', []))}",
             )
         else:
             telegram.send_message(chat_id, "Memory update queued.")
@@ -879,55 +874,48 @@ def run_sleep(
     llm_config: HostLlmConfig,
     session_id: str,
 ) -> str:
-    sleep_result = json.loads(engine.sleep(session_id))
-    return complete_sleep_result(engine, gemini, llm_config, sleep_result)
+    sleep_run = json.loads(engine.begin_sleep_run(session_id))
+    return complete_sleep_result(engine, gemini, llm_config, sleep_run)
 
 
 def complete_sleep_result(
     engine: memory_engine.MemoryEngine,
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
-    sleep_result: dict[str, Any],
+    sleep_run: dict[str, Any],
 ) -> str:
-    task = sleep_result["pending_task"]
-    archive = sleep_result["archive_entry"]
-    memory_unit_task = sleep_result.get("memory_unit_task")
-    compact_task = sleep_result.get("compact_memory_task")
-    llm_result = execute_sleep_compression(
-        task,
-        gemini,
-        llm_config,
-        memory_unit_task=memory_unit_task,
-        compact_task=compact_task,
-    )
-    updated = json.loads(
-        engine.resume_sleep_compression(task["task_id"], json.dumps(llm_result, ensure_ascii=False))
-    )
-    memory_units = normalize_memory_units(llm_result.get("memory_units"))
-    compact_memory = clean_string(llm_result.get("compact_memory"))
-    if isinstance(memory_unit_task, dict) and memory_units:
-        memory_unit_result = {
-            "schema_version": memory_unit_task.get("expected_output_schema")
-            or "memory_units_result.v1",
-            "archive_id": archive["archive_id"],
-            "memory_units": memory_units,
-        }
-        updated = json.loads(
-            engine.resume_memory_unit_pass(
-                memory_unit_task["task_id"],
-                json.dumps(memory_unit_result, ensure_ascii=False),
+    run = sleep_run
+    step = json.loads(engine.next_sleep_batch(json.dumps(run, ensure_ascii=False)))
+    while True:
+        run = step["run"]
+        batch = step.get("batch")
+        if not batch:
+            break
+        responses = [execute_llm_request(request, gemini, llm_config) for request in batch["requests"]]
+        step = json.loads(
+            engine.submit_sleep_batch(
+                json.dumps(run, ensure_ascii=False),
+                json.dumps(responses, ensure_ascii=False),
             )
         )
-    elif isinstance(compact_task, dict) and compact_memory:
-        updated = json.loads(engine.resume_compact_memory_pass(compact_task["task_id"], compact_memory))
-    log_sleep_compression_metrics(task, llm_result)
-    core_summary = promote_archive_personal_signals(engine, updated)
+        run = step["run"]
+
+    outcome = json.loads(engine.finish_sleep_run(json.dumps(run, ensure_ascii=False)))
+    updated = outcome["archive_entry"]
+    core_summary = outcome.get("core_summary", {})
     compact_tokens = estimate_tokens(clean_string(updated.get("compact_memory")))
+    log_line(
+        "sleep_driver_completed "
+        f"archive={updated.get('archive_id')} "
+        f"completion_mode={outcome.get('completion_mode')} "
+        f"failed_passes={','.join(outcome.get('failed_passes', [])) or 'none'} "
+        f"compact_tokens={compact_tokens}"
+    )
     return (
-        f"Archive: {archive['archive_id']}\n"
-        f"Task: {task['task_id']}\n"
-        f"Model role: {task['role_hint']}\n"
-        f"Model: {llm_config.for_role(task['role_hint']).model}\n"
+        f"Archive: {updated.get('archive_id')}\n"
+        f"Task: {sleep_run.get('sleep_task_id')}\n"
+        f"Completion: {outcome.get('completion_mode')}\n"
+        f"Failed passes: {', '.join(outcome.get('failed_passes', [])) or 'none'}\n"
         f"Compact memory tokens: {compact_tokens}\n"
         f"Emotional markers: {len(updated.get('emotional_markers', []))}\n"
         f"Personal signals: {len(updated.get('personal_signals', []))}\n"
@@ -936,71 +924,60 @@ def complete_sleep_result(
     )
 
 
-def promote_archive_personal_signals(
-    engine: memory_engine.MemoryEngine,
-    archive: dict[str, Any],
-) -> dict[str, int]:
-    summary = {"created": 0, "updated": 0, "skipped": 0}
-    if archive.get("status") != "complete":
-        return summary
-
-    archive_id = clean_string(archive.get("archive_id"))
-    session_id = clean_string(archive.get("source_session_id"))
-    scope = core_scope(session_id) if session_id else ""
-    user_event_ids = user_event_ids_for_session(session_id)
-    personal_signals = archive.get("personal_signals", [])
-    for signal in personal_signals if isinstance(personal_signals, list) else []:
-        if not isinstance(signal, dict):
-            summary["skipped"] += 1
-            continue
-
-        text = clean_string(signal.get("text"))
-        source_category = normalize_category(signal.get("category"))
-        core_category = source_category
-        confidence = clamp_float(signal.get("confidence"), 0.0)
-        source_event_ids = normalize_string_list(signal.get("source_event_ids"))
-        has_user_source = bool(user_event_ids) and any(
-            event_id in user_event_ids for event_id in source_event_ids
+def execute_llm_request(
+    request: dict[str, Any],
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+) -> dict[str, Any]:
+    request_id = clean_string(request.get("request_id"))
+    prompt_id = clean_string(request.get("prompt_id"))
+    role_hint = clean_string(request.get("role_hint")) or "balanced"
+    try:
+        prompt_path = PROMPTS_DIR / f"{prompt_id}.md"
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        selection = llm_config.for_role(role_hint)
+        prompt_payload = json.dumps(request.get("prompt_inputs", {}), ensure_ascii=False, indent=2)
+        response = gemini.generate_text(
+            model=selection.model,
+            system_instruction=prompt_text,
+            prompt=prompt_payload,
+            response_mime_type="application/json",
+            operation=prompt_id,
+            model_role=role_hint,
+            telemetry={
+                "prompt_id": prompt_id,
+                "request_id": request_id,
+                "task_id": request.get("task_id"),
+            },
         )
-        if (
-            not text
-            or not core_category
-            or confidence < CORE_SIGNAL_MIN_CONFIDENCE
-            or not has_user_source
-            or is_near_duplicate_core_fact(core_category, scope, text)
-        ):
-            summary["skipped"] += 1
-            continue
-
-        result = upsert_core_fact(
-            engine=engine,
-            category=core_category,
-            scope=scope,
-            text=text,
-            confidence=confidence,
-            tags=[
-                "archive_signal",
-                "telegram",
-                f"signal_category:{source_category}",
-            ],
-            source_archive_ids=[archive_id] if archive_id else [],
-        )
-        if result.get("created"):
-            summary["created"] += 1
-        else:
-            summary["updated"] += 1
-
-    return summary
+        return {"status": "ok", "request_id": request_id, "text": response.text}
+    except GeminiNoCandidatesError as err:
+        kind = "provider_blocked" if err.block_reason else "other"
+        return {
+            "status": "err",
+            "request_id": request_id,
+            "kind": kind,
+            "detail": str(err),
+        }
+    except GeminiApiError as err:
+        kind = "transport" if err.status_code in (None, 408, 409, 429, 500, 502, 503, 504) else "other"
+        return {
+            "status": "err",
+            "request_id": request_id,
+            "kind": kind,
+            "detail": str(err),
+        }
+    except Exception as err:
+        return {
+            "status": "err",
+            "request_id": request_id,
+            "kind": "other",
+            "detail": f"{type(err).__name__}: {err}",
+        }
 
 
 def promote_existing_archives(engine: memory_engine.MemoryEngine) -> dict[str, int]:
-    summary = {"archives": 0, "created": 0, "updated": 0, "skipped": 0}
-    for archive in complete_archives():
-        summary["archives"] += 1
-        archive_summary = promote_archive_personal_signals(engine, archive)
-        for key in ("created", "updated", "skipped"):
-            summary[key] += archive_summary[key]
-    return summary
+    return json.loads(engine.seed_core_from_archives())
 
 
 def format_core_signal_counts(summary: dict[str, int]) -> str:
@@ -1009,753 +986,6 @@ def format_core_signal_counts(summary: dict[str, int]) -> str:
         f"{summary.get('updated', 0)} updated, "
         f"{summary.get('skipped', 0)} skipped"
     )
-
-
-def is_near_duplicate_core_fact(category: str, scope: str, text: str) -> bool:
-    for existing_text in active_core_texts(category, scope):
-        if normalized_text(existing_text) == normalized_text(text):
-            return False
-        if token_overlap(existing_text, text) >= 0.55:
-            return True
-    return False
-
-
-def active_core_texts(category: str, scope: str) -> list[str]:
-    path = MEMORY_DIR / "core" / "store" / f"{category}.json"
-    if not path.exists():
-        return []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-
-    texts = []
-    facts = payload.get("facts", []) if isinstance(payload, dict) else []
-    for fact in facts if isinstance(facts, list) else []:
-        if not isinstance(fact, dict):
-            continue
-        if fact.get("status") != "active":
-            continue
-        if clean_string(fact.get("scope")) != scope:
-            continue
-        text = clean_string(fact.get("text"))
-        if text:
-            texts.append(text)
-    return texts
-
-
-def normalized_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text.strip().lower())
-
-
-def token_overlap(left: str, right: str) -> float:
-    left_tokens = meaningful_tokens(left)
-    right_tokens = meaningful_tokens(right)
-    if not left_tokens or not right_tokens:
-        return 0.0
-    return len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
-
-
-def meaningful_tokens(text: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[0-9A-Za-zА-Яа-яІіЇїЄєҐґ_-]{4,}", text.lower())
-        if token
-        not in {
-            "user",
-            "users",
-            "the",
-            "and",
-            "with",
-            "that",
-            "this",
-            "has",
-            "have",
-            "interest",
-            "interested",
-            "strong",
-            "specifically",
-            "користувач",
-            "користувача",
-            "користувачу",
-            "дуже",
-            "любить",
-            "цікавиться",
-        }
-    }
-
-
-def execute_sleep_compression(
-    task: dict[str, Any],
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-    memory_unit_task: dict[str, Any] | None = None,
-    compact_task: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    sleep_mode = os.environ.get("MEMORY_BOT_SLEEP_MODE", "multi_pass").strip().lower()
-    if sleep_mode == "single":
-        return execute_single_pass_sleep_compression(
-            task,
-            gemini,
-            llm_config,
-            memory_unit_task=memory_unit_task,
-            compact_task=compact_task,
-        )
-    return execute_multi_pass_sleep_compression(
-        task,
-        gemini,
-        llm_config,
-        memory_unit_task=memory_unit_task,
-        compact_task=compact_task,
-    )
-
-
-def execute_single_pass_sleep_compression(
-    task: dict[str, Any],
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-    memory_unit_task: dict[str, Any] | None = None,
-    compact_task: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    if isinstance(memory_unit_task, dict):
-        memory_units_result = execute_memory_unit_pass(memory_unit_task, gemini, llm_config)
-    else:
-        memory_units_result = empty_memory_unit_result(task)
-    memory_units = normalize_memory_units(memory_units_result.get("memory_units"))
-    compact_memory = memory_units_to_compact_memory(memory_units)
-    if not compact_memory and compact_task:
-        compact_memory = execute_compact_memory_pass(compact_task, gemini, llm_config)
-    parsed = execute_prompt_json(
-        prompt_id=task["prompt_id"],
-        prompt_input=task["inputs"],
-        role_hint=task["role_hint"],
-        gemini=gemini,
-        llm_config=llm_config,
-    )
-    normalize_sleep_compression_result(parsed, task)
-    parsed["compact_memory"] = compact_memory
-    parsed["memory_units"] = memory_units
-    return parsed
-
-
-def execute_multi_pass_sleep_compression(
-    task: dict[str, Any],
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-    memory_unit_task: dict[str, Any] | None = None,
-    compact_task: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    sleep_input = task["inputs"]
-    pass_input = {"sleep_task": sleep_input}
-    failed_passes: list[str] = []
-    if isinstance(memory_unit_task, dict):
-        memory_units_result = safe_execute_memory_unit_pass(
-            memory_unit_task, gemini, llm_config, failed_passes
-        )
-    else:
-        memory_units_result = empty_memory_unit_result(task)
-    memory_units = normalize_memory_units(memory_units_result.get("memory_units"))
-    compact_memory = memory_units_to_compact_memory(memory_units)
-    if not compact_memory and compact_task:
-        compact_memory = safe_execute_compact_memory_pass(
-            compact_task, gemini, llm_config, failed_passes
-        )
-    emotional = safe_execute_sleep_pass_json(
-        prompt_id="sleep_emotional_pass",
-        prompt_input=pass_input,
-        role_hint=task["role_hint"],
-        gemini=gemini,
-        llm_config=llm_config,
-        fallback={"emotional_markers": []},
-        failed_passes=failed_passes,
-    )
-    topic_thread = safe_execute_sleep_pass_json(
-        prompt_id="sleep_topic_thread_pass",
-        prompt_input=pass_input,
-        role_hint=task["role_hint"],
-        gemini=gemini,
-        llm_config=llm_config,
-        fallback={"topic_thread": []},
-        failed_passes=failed_passes,
-    )
-    personal_signals = safe_execute_sleep_pass_json(
-        prompt_id="sleep_personal_signal_pass",
-        prompt_input=pass_input,
-        role_hint=task["role_hint"],
-        gemini=gemini,
-        llm_config=llm_config,
-        fallback={"personal_signals": []},
-        failed_passes=failed_passes,
-    )
-    relational = safe_execute_sleep_pass_json(
-        prompt_id="sleep_relational_pass",
-        prompt_input=pass_input,
-        role_hint=task["role_hint"],
-        gemini=gemini,
-        llm_config=llm_config,
-        fallback={"relational_tone": None},
-        failed_passes=failed_passes,
-    )
-
-    consolidator_input = {
-        "sleep_task": sleep_input,
-        "emotional_pass": emotional,
-        "topic_thread_pass": topic_thread,
-        "personal_signal_pass": personal_signals,
-        "relational_pass": relational,
-    }
-    try:
-        consolidated = execute_prompt_json(
-            "sleep_consolidator",
-            consolidator_input,
-            task["role_hint"],
-            gemini,
-            llm_config,
-            retry_on_json_error=True,
-        )
-        completion_mode = "consolidated"
-    except Exception as err:
-        log_exception("sleep_consolidator failed; using track fallback", err)
-        consolidated = fallback_sleep_compression_result(
-            task=task,
-            emotional=emotional,
-            topic_thread=topic_thread,
-            personal_signals=personal_signals,
-            relational=relational,
-            error=err,
-        )
-        completion_mode = "fallback_from_tracks"
-
-    normalize_sleep_compression_result(consolidated, task)
-    consolidated["compact_memory"] = compact_memory
-    consolidated["memory_units"] = memory_units
-    if not consolidated["emotional_markers"]:
-        consolidated["emotional_markers"] = emotional.get("emotional_markers", [])
-    if not consolidated["topic_thread"]:
-        consolidated["topic_thread"] = topic_thread.get("topic_thread", [])
-    if not consolidated["personal_signals"]:
-        consolidated["personal_signals"] = personal_signals.get("personal_signals", [])
-    if consolidated.get("relational_tone") is None:
-        consolidated["relational_tone"] = relational.get("relational_tone")
-    tags = [*consolidated.get("tags", []), f"completion_mode:{completion_mode}"]
-    tags.extend(f"pass_failed:{prompt_id}" for prompt_id in failed_passes)
-    consolidated["tags"] = unique_preserve_order(tags)
-    normalize_sleep_compression_result(consolidated, task)
-    return consolidated
-
-
-def safe_execute_memory_unit_pass(
-    task: dict[str, Any],
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-    failed_passes: list[str],
-) -> dict[str, Any]:
-    prompt_id = clean_string(task.get("prompt_id")) or "memory_unit_pass"
-    fallback = {
-        "schema_version": task.get("expected_output_schema") or "memory_units_result.v1",
-        "archive_id": task["inputs"]["preliminary_archive_id"],
-        "memory_units": [],
-    }
-    last_error: Exception | None = None
-    for attempt in range(1, SLEEP_PASS_MAX_ATTEMPTS + 1):
-        try:
-            return execute_memory_unit_pass(task, gemini, llm_config)
-        except Exception as err:
-            last_error = err
-            if attempt < SLEEP_PASS_MAX_ATTEMPTS:
-                log_line(
-                    f"{prompt_id} attempt={attempt}/{SLEEP_PASS_MAX_ATTEMPTS} failed; "
-                    f"retrying: {type(err).__name__}: {err}"
-                )
-                time.sleep(SLEEP_PASS_RETRY_DELAY_SECONDS)
-                continue
-            failed_passes.append(prompt_id)
-            log_exception(
-                f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
-                "continuing without memory units",
-                err,
-            )
-            return fallback
-
-    failed_passes.append(prompt_id)
-    if last_error is not None:
-        log_exception(
-            f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
-            "continuing without memory units",
-            last_error,
-        )
-    return fallback
-
-
-def empty_memory_unit_result(task: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "schema_version": "memory_units_result.v1",
-        "archive_id": task["inputs"]["preliminary_archive_id"],
-        "memory_units": [],
-    }
-
-
-def safe_execute_compact_memory_pass(
-    task: dict[str, Any],
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-    failed_passes: list[str],
-) -> str:
-    prompt_id = clean_string(task.get("prompt_id")) or "compact_memory_pass"
-    last_error: Exception | None = None
-    for attempt in range(1, SLEEP_PASS_MAX_ATTEMPTS + 1):
-        try:
-            return execute_compact_memory_pass(task, gemini, llm_config)
-        except Exception as err:
-            last_error = err
-            if attempt < SLEEP_PASS_MAX_ATTEMPTS:
-                log_line(
-                    f"{prompt_id} attempt={attempt}/{SLEEP_PASS_MAX_ATTEMPTS} failed; "
-                    f"retrying: {type(err).__name__}: {err}"
-                )
-                time.sleep(SLEEP_PASS_RETRY_DELAY_SECONDS)
-                continue
-            failed_passes.append(prompt_id)
-            log_exception(
-                f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
-                "continuing without compact memory",
-                err,
-            )
-            return ""
-
-    failed_passes.append(prompt_id)
-    if last_error is not None:
-        log_exception(
-            f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
-            "continuing without compact memory",
-            last_error,
-        )
-    return ""
-
-
-def safe_execute_sleep_pass_json(
-    prompt_id: str,
-    prompt_input: dict[str, Any],
-    role_hint: str,
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-    fallback: dict[str, Any],
-    failed_passes: list[str],
-) -> dict[str, Any]:
-    last_error: Exception | None = None
-    for attempt in range(1, SLEEP_PASS_MAX_ATTEMPTS + 1):
-        try:
-            return execute_prompt_json(
-                prompt_id,
-                prompt_input,
-                role_hint,
-                gemini,
-                llm_config,
-                retry_on_json_error=True,
-            )
-        except Exception as err:
-            last_error = err
-            if attempt < SLEEP_PASS_MAX_ATTEMPTS:
-                log_line(
-                    f"{prompt_id} attempt={attempt}/{SLEEP_PASS_MAX_ATTEMPTS} failed; "
-                    f"retrying: {type(err).__name__}: {err}"
-                )
-                time.sleep(SLEEP_PASS_RETRY_DELAY_SECONDS)
-                continue
-            failed_passes.append(prompt_id)
-            log_exception(
-                f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
-                "using empty track fallback",
-                err,
-            )
-            return fallback.copy()
-
-    failed_passes.append(prompt_id)
-    if last_error is not None:
-        log_exception(
-            f"{prompt_id} failed after {SLEEP_PASS_MAX_ATTEMPTS} attempts; "
-            "using empty track fallback",
-            last_error,
-        )
-    return fallback.copy()
-
-
-def execute_memory_unit_pass(
-    task: dict[str, Any],
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-) -> dict[str, Any]:
-    prompt_id = clean_string(task.get("prompt_id")) or "memory_unit_pass"
-    parsed = execute_prompt_json(
-        prompt_id=prompt_id,
-        prompt_input={"sleep_task": task["inputs"]},
-        role_hint=task["role_hint"],
-        gemini=gemini,
-        llm_config=llm_config,
-        retry_on_json_error=True,
-    )
-    normalize_memory_unit_pass_result(parsed, task)
-    return parsed
-
-
-def execute_compact_memory_pass(
-    task: dict[str, Any],
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-) -> str:
-    prompt_id = clean_string(task.get("prompt_id")) or "compact_memory_pass"
-    prompt_path = PROMPTS_DIR / f"{prompt_id}.md"
-    prompt_text = prompt_path.read_text(encoding="utf-8")
-    selection = llm_config.for_role(task["role_hint"])
-    prompt_payload = json.dumps({"sleep_task": task["inputs"]}, ensure_ascii=False, indent=2)
-    response = gemini.generate_text(
-        model=selection.model,
-        system_instruction=prompt_text,
-        prompt=prompt_payload,
-        operation="compact_memory_pass",
-        model_role=task["role_hint"],
-        telemetry={"prompt_id": prompt_id},
-    )
-    return normalize_compact_memory_text(response.text)
-
-
-def fallback_sleep_compression_result(
-    task: dict[str, Any],
-    emotional: dict[str, Any],
-    topic_thread: dict[str, Any],
-    personal_signals: dict[str, Any],
-    relational: dict[str, Any],
-    error: Exception,
-) -> dict[str, Any]:
-    emotional_markers = normalize_emotional_markers(emotional.get("emotional_markers"))
-    topic_items = normalize_topic_thread(topic_thread.get("topic_thread"))
-    signals = normalize_personal_signals(personal_signals.get("personal_signals"))
-    relational_tone = normalize_relational_tone(relational.get("relational_tone"))
-
-    primary_signal = signals[0]["text"] if signals else ""
-    primary_topic = topic_items[0]["topic"] if topic_items else ""
-    primary_emotion = ""
-    if emotional_markers:
-        marker = emotional_markers[0]
-        primary_emotion = f"{marker['target']} ({marker['affect']})"
-
-    gist_parts = [part for part in (primary_signal, primary_topic, primary_emotion) if part]
-    gist = "; ".join(gist_parts[:2]) or "Сесія збережена через fallback без фінального consolidator."
-
-    topic_lines = [
-        f"- {item['topic']}: {item.get('summary', '')}".strip()
-        for item in topic_items[:8]
-    ]
-    signal_lines = [f"- {signal['text']}" for signal in signals[:10]]
-    emotion_lines = [
-        f"- {marker['target']}: {marker['affect']} ({marker['strength']:.2f})"
-        for marker in emotional_markers[:10]
-    ]
-    narrative_sections = [
-        "Consolidator не повернув валідний JSON, тому archive зібрано з успішних спеціалізованих проходів.",
-        f"Причина fallback: {type(error).__name__}: {truncate_chars(str(error), 220)}",
-    ]
-    if topic_lines:
-        narrative_sections.append("Теми:\n" + "\n".join(topic_lines))
-    if signal_lines:
-        narrative_sections.append("Особисті сигнали:\n" + "\n".join(signal_lines))
-    if emotion_lines:
-        narrative_sections.append("Емоційні маркери:\n" + "\n".join(emotion_lines))
-
-    tags = ["multi_pass_sleep", "consolidator_fallback"]
-    for item in topic_items[:5]:
-        tags.append(normalize_category(item["topic"]))
-
-    return {
-        "schema_version": task["expected_output_schema"],
-        "archive_id": task["inputs"]["preliminary_archive_id"],
-        "gist": gist,
-        "narrative": "\n\n".join(narrative_sections),
-        "facts": [],
-        "quotes": [],
-        "tags": unique_preserve_order([tag for tag in tags if tag]),
-        "theme": primary_topic or None,
-        "weight": fallback_weight(emotional_markers, signals),
-        "links": [],
-        "compact_memory": None,
-        "emotional_markers": emotional_markers,
-        "topic_thread": topic_items,
-        "personal_signals": signals,
-        "relational_tone": relational_tone,
-    }
-
-
-def fallback_weight(emotional_markers: list[dict[str, Any]], signals: list[dict[str, Any]]) -> float:
-    strongest_emotion = max(
-        (clamp_float(marker.get("strength"), 0.0) for marker in emotional_markers),
-        default=0.0,
-    )
-    strongest_signal = max(
-        (clamp_float(signal.get("confidence"), 0.0) for signal in signals),
-        default=0.0,
-    )
-    return max(0.55, min(1.0, max(strongest_emotion, strongest_signal)))
-
-
-def execute_prompt_json(
-    prompt_id: str,
-    prompt_input: dict[str, Any],
-    role_hint: str,
-    gemini: GeminiClient,
-    llm_config: HostLlmConfig,
-    retry_on_json_error: bool = False,
-) -> dict[str, Any]:
-    prompt_path = PROMPTS_DIR / f"{prompt_id}.md"
-    prompt_text = prompt_path.read_text(encoding="utf-8")
-    selection = llm_config.for_role(role_hint)
-    prompt_payload = json.dumps(prompt_input, ensure_ascii=False, indent=2)
-    response = gemini.generate_text(
-        model=selection.model,
-        system_instruction=prompt_text,
-        prompt=prompt_payload,
-        response_mime_type="application/json",
-        operation=prompt_id,
-        model_role=role_hint,
-        telemetry={"prompt_id": prompt_id},
-    )
-    try:
-        return parse_json_object(response.text)
-    except (json.JSONDecodeError, ValueError) as err:
-        if not retry_on_json_error:
-            raise
-        retry_prompt = (
-            f"{prompt_payload}\n\n"
-            "The previous response was not valid JSON.\n"
-            f"JSON parser error: {err}\n"
-            "Return ONLY one valid JSON object matching the requested schema. "
-            "No prose. No markdown. No comments."
-        )
-        retry_response = gemini.generate_text(
-            model=selection.model,
-            system_instruction=prompt_text,
-            prompt=retry_prompt,
-            response_mime_type="application/json",
-            operation=f"{prompt_id}_retry",
-            model_role=role_hint,
-            telemetry={"prompt_id": prompt_id, "retry_reason": "json_decode_error"},
-        )
-        return parse_json_object(retry_response.text)
-
-
-def normalize_sleep_compression_result(parsed: dict[str, Any], task: dict[str, Any]) -> None:
-    if parsed.get("archive_id") != task["inputs"]["preliminary_archive_id"]:
-        parsed["archive_id"] = task["inputs"]["preliminary_archive_id"]
-    parsed.setdefault("schema_version", task["expected_output_schema"])
-    compact_memory = normalize_compact_memory_text(parsed.get("compact_memory"))
-    parsed["compact_memory"] = compact_memory or None
-    parsed["facts"] = normalize_weighted_facts(parsed.get("facts"))
-    parsed["quotes"] = normalize_quotes(parsed.get("quotes"))
-    parsed["tags"] = normalize_string_list(parsed.get("tags"))
-    parsed["links"] = normalize_links(parsed.get("links"))
-    parsed["emotional_markers"] = normalize_emotional_markers(parsed.get("emotional_markers"))
-    parsed["topic_thread"] = normalize_topic_thread(parsed.get("topic_thread"))
-    parsed["personal_signals"] = normalize_personal_signals(parsed.get("personal_signals"))
-    parsed["relational_tone"] = normalize_relational_tone(parsed.get("relational_tone"))
-
-
-def normalize_memory_unit_pass_result(parsed: dict[str, Any], task: dict[str, Any]) -> None:
-    if parsed.get("archive_id") != task["inputs"]["preliminary_archive_id"]:
-        parsed["archive_id"] = task["inputs"]["preliminary_archive_id"]
-    parsed.setdefault("schema_version", task.get("expected_output_schema") or "memory_units_result.v1")
-    parsed["memory_units"] = normalize_memory_units(parsed.get("memory_units"))
-
-
-def normalize_memory_units(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    units: list[dict[str, Any]] = []
-    for raw in value:
-        if not isinstance(raw, dict):
-            continue
-        thesis = clean_string(raw.get("thesis"))
-        if not thesis:
-            continue
-        unit = {
-            "thesis": thesis,
-            "source_event_ids": normalize_string_list(raw.get("source_event_ids")),
-            "tags": normalize_string_list(raw.get("tags")),
-            "weight": clamp_float(raw.get("weight"), 0.55),
-        }
-        evidence = clean_string(raw.get("evidence"))
-        if evidence:
-            unit["evidence"] = truncate_text(evidence, 320)
-        units.append(unit)
-    return units
-
-
-def memory_units_to_compact_memory(units: list[dict[str, Any]]) -> str:
-    theses = []
-    for unit in units:
-        thesis = clean_string(unit.get("thesis"))
-        if thesis:
-            theses.append(thesis)
-    return "\n".join(theses).strip()
-
-
-def normalize_compact_memory_text(value: Any) -> str:
-    text = clean_string(value)
-    if not text:
-        return ""
-    text = re.sub(r"^```(?:text|markdown)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*```$", "", text)
-    lines = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        line = re.sub(r"^\s*[-*]\s+", "", line)
-        line = re.sub(r"^\s*\d+[.)]\s+", "", line)
-        if line:
-            lines.append(line)
-    return "\n".join(lines).strip()
-
-
-def normalize_weighted_facts(value: Any) -> list[dict[str, Any]]:
-    items = []
-    for item in (value if isinstance(value, list) else []):
-        if not isinstance(item, dict):
-            continue
-        text = clean_string(item.get("text"))
-        if not text:
-            continue
-        items.append(
-            {
-                "text": text,
-                "confidence": clamp_float(item.get("confidence"), 0.5),
-                "source_event_ids": normalize_string_list(item.get("source_event_ids")),
-            }
-        )
-    return items
-
-
-def normalize_quotes(value: Any) -> list[dict[str, Any]]:
-    items = []
-    for item in (value if isinstance(value, list) else []):
-        if not isinstance(item, dict):
-            continue
-        text = clean_string(item.get("text"))
-        if not text:
-            continue
-        quote: dict[str, Any] = {"text": text}
-        source_event_id = clean_string(item.get("source_event_id"))
-        if source_event_id:
-            quote["source_event_id"] = source_event_id
-        items.append(quote)
-    return items
-
-
-def normalize_links(value: Any) -> list[dict[str, Any]]:
-    items = []
-    for item in (value if isinstance(value, list) else []):
-        if not isinstance(item, dict):
-            continue
-        kind = clean_string(item.get("kind"))
-        target = clean_string(item.get("target"))
-        if not kind or not target:
-            continue
-        link: dict[str, Any] = {"kind": kind, "target": target}
-        note = clean_string(item.get("note"))
-        if note:
-            link["note"] = note
-        items.append(link)
-    return items
-
-
-def normalize_emotional_markers(value: Any) -> list[dict[str, Any]]:
-    items = []
-    for item in (value if isinstance(value, list) else []):
-        if not isinstance(item, dict):
-            continue
-        target = clean_string(item.get("target"))
-        affect = clean_string(item.get("affect"))
-        if not target or not affect:
-            continue
-        marker: dict[str, Any] = {
-            "target": target,
-            "affect": affect,
-            "strength": clamp_float(item.get("strength"), 0.5),
-            "source_event_ids": normalize_string_list(item.get("source_event_ids")),
-        }
-        quote = clean_string(item.get("quote"))
-        evidence = clean_string(item.get("evidence"))
-        if quote:
-            marker["quote"] = quote
-        if evidence:
-            marker["evidence"] = evidence
-        items.append(marker)
-    return items
-
-
-def normalize_topic_thread(value: Any) -> list[dict[str, Any]]:
-    items = []
-    for item in (value if isinstance(value, list) else []):
-        if not isinstance(item, dict):
-            continue
-        topic = clean_string(item.get("topic"))
-        if not topic:
-            continue
-        thread_item: dict[str, Any] = {
-            "topic": topic,
-            "subtopics": normalize_string_list(item.get("subtopics")),
-            "source_event_ids": normalize_string_list(item.get("source_event_ids")),
-        }
-        energy = clean_string(item.get("energy"))
-        summary = clean_string(item.get("summary"))
-        if energy:
-            thread_item["energy"] = energy
-        if summary:
-            thread_item["summary"] = summary
-        items.append(thread_item)
-    return items
-
-
-def normalize_personal_signals(value: Any) -> list[dict[str, Any]]:
-    items = []
-    for item in (value if isinstance(value, list) else []):
-        if not isinstance(item, dict):
-            continue
-        text = clean_string(item.get("text"))
-        category = normalize_category(item.get("category"))
-        if not text or not category:
-            continue
-        signal: dict[str, Any] = {
-            "text": text,
-            "category": category,
-            "confidence": clamp_float(item.get("confidence"), 0.5),
-            "source_event_ids": normalize_string_list(item.get("source_event_ids")),
-        }
-        evidence = clean_string(item.get("evidence"))
-        if evidence:
-            signal["evidence"] = evidence
-        items.append(signal)
-    return items
-
-
-def normalize_relational_tone(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    tone: dict[str, Any] = {
-        "source_event_ids": normalize_string_list(value.get("source_event_ids")),
-    }
-    for key in (
-        "warmth",
-        "intellectual_engagement",
-        "intimacy",
-        "trust",
-        "playfulness",
-        "tension",
-    ):
-        if value.get(key) is not None:
-            tone[key] = clamp_float(value.get(key), 0.0)
-    summary = clean_string(value.get("summary"))
-    if summary:
-        tone["summary"] = summary
-    return tone
 
 
 def normalize_string_list(value: Any) -> list[str]:
@@ -3000,23 +2230,6 @@ def extract_gemini_text(result: dict[str, Any], model: str) -> str:
     if not texts:
         raise GeminiNoCandidatesError(model, result)
     return "\n".join(texts).strip()
-
-
-def parse_json_object(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```$", "", text)
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            raise
-        parsed = json.loads(match.group(0))
-    if not isinstance(parsed, dict):
-        raise ValueError("Expected JSON object from Gemini")
-    return parsed
 
 
 def chunk_text(text: str, limit: int) -> list[str]:

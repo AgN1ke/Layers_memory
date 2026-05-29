@@ -264,6 +264,133 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
     assert "narrative" not in recall["items"][0]
 
 
+def test_sleep_driver_cycle_finishes_archive_and_seeds_core(engine: memory_engine.MemoryEngine):
+    ingest = _ingest(
+        engine,
+        "driver_session",
+        "Я люблю космос.",
+        tags=["personal_fact", "interest"],
+        theme="space_interest",
+        importance_hint="high",
+    )
+    event_id = ingest["stored_event"]["event_id"]
+
+    run = json.loads(engine.begin_sleep_run("driver_session"))
+    step = json.loads(engine.next_sleep_batch(json.dumps(run)))
+    run = step["run"]
+    batch = step["batch"]
+    assert len(batch["requests"]) == 5
+
+    responses = []
+    for request in batch["requests"]:
+        prompt_id = request["prompt_id"]
+        if prompt_id == "memory_unit_pass":
+            payload = {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": run["archive_id"],
+                "memory_units": [
+                    {
+                        "thesis": "Космос -> користувач любить цю тему.",
+                        "source_event_ids": [event_id],
+                        "weight": 0.95,
+                    }
+                ],
+            }
+        elif prompt_id == "sleep_emotional_pass":
+            payload = {
+                "emotional_markers": [
+                    {
+                        "target": "космос",
+                        "affect": "love",
+                        "strength": 0.95,
+                        "source_event_ids": [event_id],
+                    }
+                ]
+            }
+        elif prompt_id == "sleep_topic_thread_pass":
+            payload = {
+                "topic_thread": [
+                    {
+                        "topic": "space_interest",
+                        "summary": "Користувач сказав, що любить космос.",
+                        "source_event_ids": [event_id],
+                    }
+                ]
+            }
+        elif prompt_id == "sleep_personal_signal_pass":
+            payload = {
+                "personal_signals": [
+                    {
+                        "text": "Користувач любить космос.",
+                        "category": "interest",
+                        "confidence": 0.95,
+                        "source_event_ids": [event_id],
+                    }
+                ]
+            }
+        elif prompt_id == "sleep_relational_pass":
+            payload = {"relational_tone": None}
+        else:
+            raise AssertionError(f"unexpected prompt_id: {prompt_id}")
+        responses.append(
+            {
+                "status": "ok",
+                "request_id": request["request_id"],
+                "text": json.dumps(payload, ensure_ascii=False),
+            }
+        )
+
+    step = json.loads(engine.submit_sleep_batch(json.dumps(run), json.dumps(responses)))
+    run = step["run"]
+    batch = step["batch"]
+    assert [request["prompt_id"] for request in batch["requests"]] == ["sleep_consolidator"]
+
+    consolidated = {
+        "schema_version": "sleep_compression_result.v1",
+        "archive_id": run["archive_id"],
+        "gist": "Користувач сказав, що любить космос.",
+        "narrative": "Користувач прямо повідомив стабільний інтерес до космосу.",
+        "compact_memory": "Космос -> користувач любить цю тему.",
+        "facts": [],
+        "quotes": [],
+        "tags": ["space_interest"],
+        "theme": "space_interest",
+        "weight": 0.95,
+        "links": [],
+        "emotional_markers": [],
+        "topic_thread": [],
+        "personal_signals": [
+            {
+                "text": "Користувач любить космос.",
+                "category": "interest",
+                "confidence": 0.95,
+                "source_event_ids": [event_id],
+            }
+        ],
+        "relational_tone": None,
+    }
+    step = json.loads(
+        engine.submit_sleep_batch(
+            json.dumps(run),
+            json.dumps(
+                [
+                    {
+                        "status": "ok",
+                        "request_id": batch["requests"][0]["request_id"],
+                        "text": json.dumps(consolidated, ensure_ascii=False),
+                    }
+                ]
+            ),
+        )
+    )
+    outcome = json.loads(engine.finish_sleep_run(json.dumps(step["run"])))
+
+    assert outcome["archive_entry"]["status"] == "complete"
+    assert outcome["completion_mode"] == "consolidated"
+    assert outcome["core_summary"]["created"] == 1
+    assert json.loads(engine.pending_tasks()) == []
+
+
 def test_sleep_resume_persists_multi_track_fields(engine: memory_engine.MemoryEngine):
     _ingest(
         engine,
