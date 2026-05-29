@@ -3690,7 +3690,109 @@ Retry додано тільки на host-side LLM orchestration у `hosts/teleg
 - `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
 - `git diff --check` — пройшло.
 
-## Запис 70 — 2026-05-30 02:44 +03:00 — Consolidator переведено з великого JSON на prose-only контракт
+## Запис 70 — 2026-05-30 02:46 +03:00 — Дозаписано storage-safety сесію, яку пропустили в DEVLOG
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Перед переносом sleep-оркестрації в ядро було небезпечно будувати нову логіку поверх storage-шару з відомими ризиками: фіксований `.tmp` шлях для atomic write, переписування `session.md` цілком на кожен event, нескінченне накопичення completed tasks у гарячій теці `tasks/` і зайвий fsync на похідні файли.
+
+**Задум:**
+Спочатку зробити малу гілку `feature/storage-safety`, яка не змінює поведінку памʼяті, але прибирає ризики корупції, O(n²)-перезапису markdown-сесії і зростання task scan.
+
+**Що робили:**
+- Створено гілку `feature/storage-safety`.
+- У `file_storage.rs` замінено фіксований temporary path на унікальний temp-файл у тій самій директорії.
+- `session.md` переведено на append-only запис замість `read_to_string -> rewrite`.
+- Завершені tasks переносяться в `tasks/completed/`, а hot scan читає тільки активну теку `tasks/`.
+- Для похідних session-файлів зменшено fsync-навантаження; джерелом правди лишається `events.jsonl`.
+
+**Що зробили детально:**
+Коміт `34c34c1 Harden file storage writes and task layout` зафіксував storage-safety checkpoint перед великою B-гілкою. Це не змінило модель памʼяті, але зменшило ризик race/corruption і підготувало storage до майбутньої concurrency-гілки.
+
+**Проблеми чи виклики:**
+Це ще не робить систему multi-writer safe. Per-session locks, `&self`, PyO3 `unsendable` і 1000-session stress test лишаються для окремої `feature/concurrency`.
+
+**Фідбек користувача:**
+Користувач підтвердив стратегічний напрям: памʼять має бути бібліотекою, яку можна проганяти через багато чатів і адаптерів, а не Telegram-ботом із локальним storage-hack.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine` — пройшло.
+- Коміт: `34c34c1 Harden file storage writes and task layout`.
+
+## Запис 71 — 2026-05-30 02:46 +03:00 — Дозаписано core-orchestration сесію: sleep-driver перенесено в ядро
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Головна стратегічна загроза: інтелект памʼяті накопичувався в `hosts/telegram_gemini_bot/bot.py`, а не в Rust core. Sleep pass ordering, semantic retry, fail-soft, fallback, Archive→Core bridge і seeding жили в Telegram-хості. Для Godot або іншого адаптера це означало б повторне написання мозку замість тонкого adapter layer.
+
+**Задум:**
+Перенести оркестрацію sleep у core як pull-based LLM driver. Ядро не має ходити в мережу і не має знати provider/model/key/prompts_dir. Воно має віддавати `LlmRequest`, отримувати текст або помилку від хоста, саме керувати фазами, retry, fallback і складанням архіву.
+
+**Що робили:**
+- Створено гілку `feature/core-orchestration`.
+- Додано `crates/memory_engine/src/llm.rs` з `LlmRequest`, `LlmResponse`, `LlmBatch`, `SleepRun`, `SleepRunStep`, `SleepOutcome`.
+- Додано `begin_sleep_run`, `next_sleep_batch`, `submit_sleep_batch`, `finish_sleep_run`.
+- Archive→Core bridge і `seed_core_from_archives` перенесено в ядро.
+- PyO3 adapter отримав JSON-boundary методи для нового driver.
+- Telegram bot перейшов на цикл: отримати batch від ядра, виконати prompt через Gemini, повернути response в ядро.
+- Старі Python helper-и для sleep orchestration, JSON retry, fallback і Core seeding прибрано з `bot.py`.
+
+**Що зробили детально:**
+Коміт `19e1072 Move sleep orchestration into core driver` змінив межу відповідальності. Host лишився власником provider/model/key/prompt loading/network retry. Core став власником memory graph, semantic retry, fail-soft, task completion, memory-unit completion і Archive→Core bridge. `bot.py` схуд приблизно з 2650 до 1940 рядків.
+
+**Проблеми чи виклики:**
+Це ще не весь ідеальний B-план. `begin_resume` для in-flight driver state і канонічний `render_memory_view` у core лишаються follow-up. Також retry state поки живе в serialized `SleepRun`, а не як повністю durable mid-run attempt state в task files.
+
+**Фідбек користувача:**
+Користувач наполіг, що фундаментально ми будуємо бібліотеку-мозок: текст зайшов, core сформував memory/task/context, host тільки прогнав prompt через будь-яку модель і повернув результат. Цей запис фіксує, що напрям виконано не тільки в HISTORY, а й у DEVLOG.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `maturin develop` у `crates/python_adapter` — пройшло.
+- `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+- Коміт: `19e1072 Move sleep orchestration into core driver`.
+
+## Запис 72 — 2026-05-30 02:46 +03:00 — Дозаписано live-тест B-гілки перед consolidator-фіксом
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після перенесення sleep-driver у core треба було перевірити не unit-тестами, а живою Telegram-розмовою: чи доходить driver до `finish_sleep_run`, чи sleep не зависає, чи fail-soft працює вже в ядрі, чи Archive→Core bridge реально поповнює Core.
+
+**Задум:**
+Запустити Telegram bot на `feature/core-orchestration` із чистою памʼяттю, дати користувачу провести довгу природну розмову, а потім перевірити `bot.log`, archive files, pending tasks і core store.
+
+**Що робили:**
+- Перебрано PyO3 adapter через `maturin develop`.
+- Запущено один `bot.py` process із ключами з `secrets.local.json`, переданими через env.
+- Памʼять перед тестом очищено в `hosts/telegram_gemini_bot/runtime/memory`, offset і secrets залишено.
+- Після розмови перевірено `bot.log`, `runtime/memory/archive`, `runtime/memory/tasks`, `runtime/memory/core/store`.
+
+**Що зробили детально:**
+Live-тест підтвердив головне: sleep тригерився по token pressure, driver виконував extraction passes, доходив до completion, archives ставали `complete`, pending tasks після завершення не лишались, Core поповнювався з ядра. У логах були приклади `Core signals: 8 new`, gist про кішку Іржу і записи `sleep_driver_completed`.
+
+**Проблеми чи виклики:**
+Виявлено реальний дефект: `sleep_consolidator` стабільно падав після трьох спроб, і sleep завершувався через `fallback_from_tracks`. Це підтвердило, що fail-soft у core працює, але також показало неправильний contract consolidator: модель не повинна повертати великий nested JSON. Цей дефект потім виправлено в Записі 70 і коміті `3474b52`.
+
+**Фідбек користувача:**
+Користувач спочатку справедливо помітив, що я не стер памʼять перед запуском. Памʼять була очищена, бот перезапущений, і тест проведений заново. Пізніше користувач помітив, що не було Telegram sleep notices; перевірка показала, що `dev_sleep_notices=False`, тому sleep ішов тільки в логах, не в чаті.
+
+**Перевірки:**
+- У `bot.log` знайдено `token_pressure_sleep_trigger`, `token pressure sleep queued`, `sleep_driver_completed`.
+- Перевірено, що останній sleep завершився, archive став `complete`, pending tasks очистились.
+- Підтверджено `Core signals` у live-логах.
+- Виявлено стабільний fallback саме на `sleep_consolidator`, що став підставою для prose-only контракту.
+
+## Запис 73 — 2026-05-30 02:44 +03:00 — Consolidator переведено з великого JSON на prose-only контракт
 
 **Правила:**
 DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
