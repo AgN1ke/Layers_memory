@@ -7,6 +7,7 @@ use memory_engine::core_store::{
 use memory_engine::event::IngestEvent;
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressionResult};
+use memory_engine::storage::Storage;
 use memory_engine::tasks::TaskType;
 use memory_engine::types::{
     CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
@@ -1002,6 +1003,47 @@ fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
     );
     assert_eq!(unit_updated.memory_units.len(), 1);
     assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+
+    let sleep_task_id = &sleep_result.pending_task.task_id;
+    let memory_unit_task_id = &sleep_result
+        .memory_unit_task
+        .as_ref()
+        .expect("memory unit task")
+        .task_id;
+    assert!(!root
+        .join("tasks")
+        .join(format!("{sleep_task_id}.json"))
+        .exists());
+    assert!(!root
+        .join("tasks")
+        .join(format!("{memory_unit_task_id}.json"))
+        .exists());
+    assert!(root
+        .join("tasks")
+        .join("completed")
+        .join(format!("{sleep_task_id}.json"))
+        .exists());
+    assert!(root
+        .join("tasks")
+        .join("completed")
+        .join(format!("{memory_unit_task_id}.json"))
+        .exists());
+
+    let storage_view = FileStorage::with_host_id(&root, "terminal");
+    assert_eq!(
+        storage_view
+            .load_task(sleep_task_id)
+            .expect("load completed sleep task")
+            .state,
+        memory_engine::tasks::TaskState::Completed
+    );
+    assert_eq!(
+        storage_view
+            .load_task(memory_unit_task_id)
+            .expect("load completed memory unit task")
+            .state,
+        memory_engine::tasks::TaskState::Completed
+    );
 
     fs::remove_dir_all(root).ok();
 }
