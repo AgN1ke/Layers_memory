@@ -4099,6 +4099,44 @@ Consolidator лишається prose-only проходом: `expected_output_sc
 - `maturin develop` у `crates/python_adapter` — пройшло.
 - `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
 
+## Запис 76 — 2026-05-30 12:12 +03:00 — Consolidator отримав output gate для gist
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після кількох live-раундів стало видно, що ми ловимо окремі форми відповіді Gemini на вході consolidator boundary: JSON-object, quoted prose, fences тощо. Це корисно, але не завершує клас проблеми, бо модель може вигадати нову форму і знову записати поганий `gist` у runtime archive. Потрібен gate за якістю виходу, а не ще один unwrap конкретної форми.
+
+**Задум:**
+Залишити каскад input-розпаковувачів для частих форм, але після отримання `(gist, narrative)` перевіряти, що `gist` справді схожий на короткий однорядковий summary. Якщо ні — parser повертає validation error, driver дає consolidator до трьох спроб самовиправлення, а потім переходить на детермінований fallback із треків без overlay. Так брак не потрапляє в сховище.
+
+**Що робили:**
+- Зупинили запущений Telegram bot, щоб не проводити live-check на `5ccbf58` без gate.
+- У `crates/memory_engine/src/engine.rs` додали `validate_consolidator_overlay`, `gist_looks_valid`, `narrative_looks_valid` і marker `consolidator_gist_rejected`.
+- `gist` тепер відхиляється, якщо він порожній, довший за 200 символів, містить newline, починається зі структурного wrapper-а (`{`, `[`, `"`, `` ` ``) або сам парситься як JSON.
+- `narrative` відхиляється, якщо виглядає як raw structured blob.
+- Якщо consolidator остаточно падає саме через поганий gist, archive tags отримують `consolidator_gist_rejected` разом із `consolidator_fallback` і `pass_failed:sleep_consolidator`.
+- Додали unit-тест `parse_consolidator_text_rejects_structural_gist`.
+- Додали сценарний тест `engine_sleep_run_falls_back_when_consolidator_gist_is_rejected`: три погані відповіді consolidator, sleep завершується, archive `complete`, gist береться з детермінованого personal signal, а tags містять `consolidator_gist_rejected`.
+
+**Що зробили детально:**
+Consolidator contract лишився prose-only. Ми не повернули великий JSON-контракт і не дали LLM право будувати archive structure. Output gate стоїть на вузькому місці: тільки текстовий overlay `gist/narrative` може бути прийнятий або відхилений. Якщо overlay відхилено, структура архіву все одно збирається ядром із уже валідованих memory units, emotional markers, topic thread, personal signals і relational tone.
+
+**Проблеми чи виклики:**
+Це свідомий backstop, а не заміна prompt-дисципліни. Якщо gate часто спрацьовуватиме в live logs, треба буде правити `sleep_consolidator.md`, але runtime archive більше не має псуватись новою невідомою формою відповіді.
+
+**Фідбек користувача:**
+Користувач погодився з зауваженням, що нескінченне додавання parser-unwrap-ів не закриває клас проблеми, і попросив зробити output validation до фінального live-check.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine parse_consolidator_text -- --nocapture` — 4 passed.
+- `cargo test -p memory_engine engine_sleep_run_falls_back_when_consolidator_gist_is_rejected -- --nocapture` — 1 passed.
+- `cargo test --workspace` — 34 passed.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `maturin develop` у `crates/python_adapter` — пройшло.
+- `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+
 ## Запис 75 — 2026-05-30 03:52 +03:00 — Consolidator parser навчився розгортати quoted prose
 
 **Правила:**

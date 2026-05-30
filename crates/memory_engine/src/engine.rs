@@ -45,6 +45,7 @@ use crate::{MemoryEngineError, Result};
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SLEEP_RUN_SCHEMA_VERSION: &str = "sleep_run.v1";
 const DEFAULT_SLEEP_PASS_MAX_ATTEMPTS: u32 = 3;
+const CONSOLIDATOR_GIST_REJECTED_MARKER: &str = "consolidator_gist_rejected";
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -2162,8 +2163,8 @@ fn parse_consolidator_text(text: &str) -> Result<(String, String)> {
         return parse_consolidator_text(&decoded);
     }
 
-    if let Some(parsed) = parse_consolidator_json_object(candidate)? {
-        return Ok(parsed);
+    if let Some((gist, narrative)) = parse_consolidator_json_object(candidate)? {
+        return validate_consolidator_overlay(gist, narrative);
     }
 
     let mut lines = candidate.lines();
@@ -2184,7 +2185,7 @@ fn parse_consolidator_text(text: &str) -> Result<(String, String)> {
         narrative
     };
 
-    Ok((gist, narrative))
+    validate_consolidator_overlay(gist, narrative)
 }
 
 fn strip_markdown_fence(text: &str) -> &str {
@@ -2254,6 +2255,56 @@ fn strip_consolidator_gist_prefix(text: &str) -> &str {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| text.trim())
+}
+
+fn validate_consolidator_overlay(gist: String, narrative: String) -> Result<(String, String)> {
+    if !gist_looks_valid(&gist) {
+        return Err(MemoryEngineError::Validation(format!(
+            "{CONSOLIDATOR_GIST_REJECTED_MARKER}: consolidator gist is not a compact single-line summary"
+        )));
+    }
+    if !narrative_looks_valid(&narrative) {
+        return Err(MemoryEngineError::Validation(
+            "consolidator_narrative_rejected: consolidator narrative looks like a raw structured blob"
+                .to_string(),
+        ));
+    }
+    Ok((gist, narrative))
+}
+
+fn gist_looks_valid(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 200 {
+        return false;
+    }
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        return false;
+    }
+    if starts_with_structural_wrapper(trimmed) {
+        return false;
+    }
+    serde_json::from_str::<Value>(trimmed).is_err()
+}
+
+fn narrative_looks_valid(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if matches!(trimmed.chars().next(), Some('{') | Some('[') | Some('`')) {
+        return false;
+    }
+    if trimmed.starts_with('"') && serde_json::from_str::<String>(trimmed).is_ok() {
+        return false;
+    }
+    true
+}
+
+fn starts_with_structural_wrapper(value: &str) -> bool {
+    matches!(
+        value.chars().next(),
+        Some('{') | Some('[') | Some('"') | Some('`')
+    )
 }
 
 fn assign_sleep_track_result(run: &mut SleepRun, track: SleepTrack, value: Value) {
@@ -2453,6 +2504,22 @@ fn fallback_archive_weight(result: &SleepCompressionResult) -> f64 {
 fn apply_sleep_run_tags(result: &mut SleepCompressionResult, run: &SleepRun) {
     if let Some(mode) = &run.completion_mode {
         result.tags.push(format!("completion_mode:{mode}"));
+    }
+    if run
+        .failed_passes
+        .iter()
+        .any(|prompt_id| prompt_id == "sleep_consolidator")
+        && run.requests.iter().any(|state| {
+            state.track == SleepTrack::Consolidator
+                && state
+                    .last_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains(CONSOLIDATOR_GIST_REJECTED_MARKER))
+        })
+    {
+        result
+            .tags
+            .push(CONSOLIDATOR_GIST_REJECTED_MARKER.to_string());
     }
     for prompt_id in &run.failed_passes {
         result.tags.push(format!("pass_failed:{prompt_id}"));
@@ -2715,5 +2782,15 @@ mod tests {
             narrative,
             "The user kept testing the assistant's claim about quasars and galactic dust."
         );
+    }
+
+    #[test]
+    fn parse_consolidator_text_rejects_structural_gist() {
+        let error = parse_consolidator_text(
+            "GIST: {\"gist\":\"still structured\"}\n\nThe narrative itself is readable.",
+        )
+        .expect_err("structured gist should be rejected");
+
+        assert!(error.to_string().contains("consolidator_gist_rejected"));
     }
 }
