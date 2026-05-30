@@ -46,6 +46,42 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-30 — Engine supports shared-reference calls and resource-scoped write locks
+
+After the pull-based sleep driver moved memory orchestration into the core, the next strategic risk was concurrency. The engine still exposed many public calls as `&mut self`, the Python class was marked `unsendable`, and the file-backed Core store had a real lost-update risk because `core/store/<category>.json` is shared by all scopes.
+
+**What changed:**
+- `Storage`, `FileStorage`, and public `MemoryEngine` methods now use shared references for normal operations.
+- `manifest_initialized` is now atomic and guarded by a manifest resource lock.
+- Added an internal resource lock registry for `session:<id>`, `core:<category>`, and manifest operations.
+- `ingest()` serializes writes only within the same session; different sessions can run independently.
+- Core read-modify-write operations are serialized per category, including Archive-to-Core bridge writes.
+- The Python adapter removed `unsendable` and wraps engine calls in `py.allow_threads(...)`.
+- Added `concurrency_stress.rs`, including a quick parallel gate and an explicit 1000-session release stress test for Core lost-update detection.
+
+**What is retracted (if applicable):**
+- The earlier implicit assumption that a single mutable engine instance was acceptable for future adapters is no longer true. The reusable-library goal requires shared-reference calls and resource-scoped synchronization.
+
+**What is still true:**
+- The core still performs no network I/O and knows no provider, model, key, or prompt directory.
+- The storage format remains file-based and human-inspectable.
+- Core facts are still stored in per-category files for now; this change protects that layout with locks rather than migrating to per-scope directories.
+
+**What we are doing:**
+- Keep the explicit 1000-session stress test as the release gate for concurrency work.
+- Revisit per-scope Core layout later if shared hot categories become a performance bottleneck.
+
+**Reproducibility anchor:**
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --check`
+- `cargo test -p memory_engine --release --test concurrency_stress -- --ignored` (1000-session stress)
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
+**Thanks:**
+- Mykyta Zagamula for pushing the project back toward a reusable, concurrent memory library before Phase B reflection added more complexity.
+
 ## 2026-05-30 — Consolidator now returns prose, not archive JSON
 
 Live Telegram testing of the pull-based sleep driver showed that the core driver, fail-soft path, and Archive-to-Core bridge worked, but `sleep_consolidator` repeatedly failed schema validation. The root cause was the contract: the LLM was asked to return a full nested `sleep_compression_result.v1` JSON object even though the core already had validated track outputs.
