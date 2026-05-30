@@ -4330,3 +4330,41 @@ Chat telemetry тепер має окреме поле `prompt_memory_view_estim
 
 **Висновок:**
 Тепер у Telegram host немає власної prompt projection policy. Залишився обов'язковий live-check: багатоходова розмова без привітань посеред діалогу, перевірка short/long/core memory і відсутність XML-тегів у відповіді.
+
+## Запис 81 — 2026-05-30 22:42 +03:00 — Core budget став query-aware після провалу з Іржею
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Під час live-check користувач запитав "А кішка?", але бот не дістав факт про Іржу, хоча розмова про кішку вже була заархівована і перенесена в Core. Перевірка файлів показала: факт не втрачений. Він є в `runtime/memory/core/store/pet.json` і в archive/memory units. Проблема була в prompt selection: `core_context_package` мав бюджет Core 1k і відкинув 22 Core-факти. Оскільки майже всі факти мали confidence `0.95`, сортування фактично йшло за категорією, і `pet` програв алфавітному порядку.
+
+**Задум:**
+Не збільшувати Core budget і не хардкодити кішку. Замість цього зробити Core selection контекстним: якщо користувач питає про конкретну тему, Core-факти з цією темою мають пріоритет перед нерелевантними фактами з тією самою confidence.
+
+**Що робили:**
+- Додали query-aware ranking для Core facts перед `apply_context_token_budget`.
+- Ранжування використовує токени поточного query/current_text і порівнює їх із текстом, категорією та тегами Core-факту.
+- Якщо query порожній або не має змістовних токенів, старий порядок confidence/category/id зберігається.
+- Додали regression test `engine_core_context_package_keeps_query_relevant_core_fact_under_budget`.
+
+**Що зробили детально:**
+Для запиту `А кішка?` факт `У користувача є триколірна кішка на ім'я Іржа...` тепер стає першим у `core_memory` і виживає при тому самому бюджеті, де раніше його відкидало. Це загальне правило релевантності, не спеціальний код для кішок чи Іржі.
+
+**Проблеми чи виклики:**
+Перша ручна Python-перевірка через PowerShell pipe зіпсувала Unicode, тому query доходив у ядро як `? ??????`. Повторна перевірка через Unicode escape підтвердила, що виправлений core ranking працює коректно: `pet` потрапляє в rendered memory view.
+
+**Фідбек користувача:**
+Користувач показав конкретний live-транскрипт: бот мав знати про кішку Іржу, але не використав цю пам'ять. Це виявило реальний дефект budgeting/ranking, а не дефект sleep чи Core bridge.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine --test engine_sleep_recall engine_core_context_package_keeps_query_relevant_core_fact_under_budget` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+- Ручна перевірка `engine.render_memory_view(...)` для query `А кішка?` — у `<core_memory>` є `pet (0.95)` з Іржею.
+
+**Висновок:**
+Core memory тепер не лише стабільна, а й контекстно корисна під бюджетом. Наступний live-check має повторити питання про кішку після перезапуску бота на оновленому PyO3 adapter.

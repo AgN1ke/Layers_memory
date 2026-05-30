@@ -359,6 +359,7 @@ impl<S: Storage> MemoryEngine<S> {
                     .and_then(Value::as_str)
                     .map(str::to_string)
             });
+        let query_text_for_core_ranking = query_text.clone();
 
         let archive_relevant = self
             .recall(RecallQuery {
@@ -383,6 +384,8 @@ impl<S: Storage> MemoryEngine<S> {
         } else {
             Vec::new()
         };
+        let core_facts =
+            rank_core_facts_for_query(core_facts, query_text_for_core_ranking.as_deref());
         let mut notes = if request.include_core && core_facts.is_empty() {
             vec![
                 "core_facts are empty; no stable Core Store facts have been saved yet.".to_string(),
@@ -1460,6 +1463,82 @@ fn keep_front_within_budget<T: Clone + Serialize>(
 
     let dropped = original_len.saturating_sub(kept.len());
     (kept, used, dropped)
+}
+
+fn rank_core_facts_for_query(
+    mut facts: Vec<CoreContextFact>,
+    query_text: Option<&str>,
+) -> Vec<CoreContextFact> {
+    let query_tokens = core_query_tokens(query_text.unwrap_or_default());
+    if query_tokens.is_empty() {
+        return facts;
+    }
+
+    facts.sort_by(|left, right| {
+        core_fact_query_score(right, &query_tokens)
+            .cmp(&core_fact_query_score(left, &query_tokens))
+            .then_with(|| right.confidence.total_cmp(&left.confidence))
+            .then_with(|| left.category.cmp(&right.category))
+            .then_with(|| left.core_fact_id.cmp(&right.core_fact_id))
+    });
+    facts
+}
+
+fn core_fact_query_score(fact: &CoreContextFact, query_tokens: &[String]) -> usize {
+    let fact_text = normalize_match_text(&fact.text);
+    let fact_category = normalize_match_text(&fact.category);
+    let fact_tags: Vec<String> = fact
+        .tags
+        .iter()
+        .map(|tag| normalize_match_text(tag))
+        .collect();
+    let fact_tokens: HashSet<String> = core_query_tokens(&fact.text).into_iter().collect();
+
+    query_tokens
+        .iter()
+        .map(|token| {
+            let mut score = 0usize;
+            if fact_tokens.contains(token) {
+                score += 12;
+            } else if fact_text.contains(token) {
+                score += 6;
+            }
+            if fact_category.contains(token) {
+                score += 4;
+            }
+            if fact_tags.iter().any(|tag| tag.contains(token)) {
+                score += 2;
+            }
+            score
+        })
+        .sum()
+}
+
+fn core_query_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = String::new();
+
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            current.extend(ch.to_lowercase());
+        } else {
+            push_core_query_token(&mut tokens, &mut seen, &mut current);
+        }
+    }
+    push_core_query_token(&mut tokens, &mut seen, &mut current);
+    tokens
+}
+
+fn push_core_query_token(
+    tokens: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    current: &mut String,
+) {
+    if current.chars().count() >= 3 && seen.insert(current.clone()) {
+        tokens.push(current.clone());
+    }
+    current.clear();
 }
 
 fn keep_recent_within_budget<T: Clone + Serialize>(

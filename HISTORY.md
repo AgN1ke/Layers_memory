@@ -46,6 +46,29 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-30 — Query-aware Core fact budgeting
+
+Core Store facts are now ranked against the current query before the 1k Core memory budget is applied. Previously, active Core facts were sorted mostly by confidence and category, so when many facts had the same confidence, a directly relevant fact could be dropped only because its category sorted later.
+
+**What changed:**
+- `core_context_package` now preserves query-relevant Core facts ahead of unrelated same-confidence facts before token-budget trimming.
+- Added a regression test proving that a relevant `pet` Core fact survives a tight Core budget for the query `А кішка?`.
+
+**What is retracted (if applicable):**
+- The implicit assumption that confidence-only Core ranking was enough for prompt budgeting. It is not enough once Core contains many equally confident facts.
+
+**What is still true:**
+- Core admission rules are unchanged.
+- Core token budget remains 1k by default.
+- This is not a hardcoded pet/cat rule; it is a general query-token relevance ranking for Core facts.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_sleep_recall engine_core_context_package_keeps_query_relevant_core_fact_under_budget`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
 ## 2026-05-30 — Core-owned prompt memory view
 
 The ordinary chat prompt no longer relies on Telegram-specific Python code to decide how memory layers should be rendered. The Rust core now exposes `render_memory_view(package, current_user_message)` and returns the compact LLM-facing memory block with explicit layer geometry: `core_memory`, `long_memory`, `short_memory`, `current_user_message`, and `assistant_response_slot`.
