@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn engine_ingest_stores_event_and_updates_session_files() {
     let root = unique_temp_dir("engine_ingest_stores_event_and_updates_session_files");
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
-    let mut engine = MemoryEngine::new(storage);
+    let engine = MemoryEngine::new(storage);
 
     let ingest_result = engine
         .ingest(IngestEvent {
@@ -62,7 +62,7 @@ fn engine_ingest_stores_event_and_updates_session_files() {
 fn engine_ingest_rejects_wrong_schema_version() {
     let root = unique_temp_dir("engine_ingest_rejects_wrong_schema_version");
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
-    let mut engine = MemoryEngine::new(storage);
+    let engine = MemoryEngine::new(storage);
 
     let error = engine
         .ingest(IngestEvent {
@@ -92,11 +92,11 @@ fn engine_ingest_rejects_wrong_schema_version() {
 fn engine_ingest_does_not_trigger_sleep_from_event_count() {
     let root = unique_temp_dir("engine_ingest_does_not_trigger_sleep_from_event_count");
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
-    let mut engine = MemoryEngine::new(storage);
+    let engine = MemoryEngine::new(storage);
 
     let mut last = None;
     for index in 0..60 {
-        last = Some(ingest_numbered_event(&mut engine, index));
+        last = Some(ingest_numbered_event(&engine, index));
     }
 
     assert_eq!(
@@ -108,8 +108,46 @@ fn engine_ingest_does_not_trigger_sleep_from_event_count() {
     fs::remove_dir_all(root).ok();
 }
 
+#[test]
+fn engine_ingest_appends_session_markdown_without_rewriting_header() {
+    let root = unique_temp_dir("engine_ingest_appends_session_markdown_without_rewriting_header");
+    let storage = FileStorage::with_host_id(&root, "telegram_bot");
+    let engine = MemoryEngine::new(storage);
+
+    for index in 0..3 {
+        engine
+            .ingest(IngestEvent {
+                schema_version: EVENT_SCHEMA_VERSION.to_string(),
+                event_type: "user_message".to_string(),
+                source: "telegram_user_42".to_string(),
+                timestamp: format!("2026-05-17T16:32:1{index}.420Z"),
+                session_id: "append_md_session".to_string(),
+                payload: json!({ "text": format!("Повідомлення {index}") }),
+                tags: vec!["telegram_message".to_string()],
+                theme: Some("telegram_conversation".to_string()),
+                emotional_tone: None,
+                links: vec![],
+                importance_hint: Default::default(),
+                processing_mode: Default::default(),
+            })
+            .expect("ingest event");
+    }
+
+    let session_md_path = root
+        .join("sessions")
+        .join("append_md_session")
+        .join("session.md");
+    let session_md = fs::read_to_string(session_md_path).expect("session md");
+    assert_eq!(session_md.matches("# Сесія append_md_session").count(), 1);
+    assert_eq!(session_md.matches("- 2026-05-17T16:32:").count(), 3);
+    assert!(session_md.contains("Повідомлення 0"));
+    assert!(session_md.contains("Повідомлення 2"));
+
+    fs::remove_dir_all(root).ok();
+}
+
 fn ingest_numbered_event(
-    engine: &mut MemoryEngine<FileStorage>,
+    engine: &MemoryEngine<FileStorage>,
     index: usize,
 ) -> memory_engine::IngestResult {
     engine

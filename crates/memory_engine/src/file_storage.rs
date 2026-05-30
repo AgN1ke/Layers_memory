@@ -1,19 +1,23 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::archive::{ArchiveEntry, ArchiveFilters};
+use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
 use crate::event::StoredEvent;
 use crate::journal::{JournalOperation, JournalState};
 use crate::manifest::Manifest;
 use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
 use crate::storage::Storage;
+use crate::tasks::TaskState;
 use crate::types::{CORE_STORE_SCHEMA_VERSION, SESSION_SCHEMA_VERSION};
 use crate::{MemoryEngineError, Result};
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub struct FileStorage {
@@ -43,9 +47,12 @@ impl FileStorage {
     pub fn ensure_layout(&self) -> Result<()> {
         fs::create_dir_all(self.root.join("sessions"))?;
         fs::create_dir_all(self.root.join("archive"))?;
+        fs::create_dir_all(self.root.join("archive").join("units"))?;
+        fs::create_dir_all(self.root.join("archive").join("forgotten"))?;
         fs::create_dir_all(self.root.join("core").join("store"))?;
         fs::create_dir_all(self.root.join("core").join("candidates"))?;
         fs::create_dir_all(self.root.join("tasks"))?;
+        fs::create_dir_all(self.root.join("tasks").join("completed"))?;
         fs::create_dir_all(self.root.join("journal"))?;
         Ok(())
     }
@@ -81,7 +88,7 @@ impl FileStorage {
 
     fn archive_entry_path_by_id(&self, archive_id: &str) -> Result<PathBuf> {
         let mut files = Vec::new();
-        collect_json_files(&self.root.join("archive"), &mut files)?;
+        collect_archive_entry_files(&self.root.join("archive"), &mut files)?;
 
         files
             .into_iter()
@@ -98,6 +105,13 @@ impl FileStorage {
             .join(format!("{category}.json"))
     }
 
+    fn memory_unit_path(&self, unit_id: &str) -> PathBuf {
+        self.root
+            .join("archive")
+            .join("units")
+            .join(format!("{unit_id}.json"))
+    }
+
     fn candidate_path(&self, candidate_id: &str) -> PathBuf {
         self.root
             .join("core")
@@ -109,6 +123,13 @@ impl FileStorage {
         self.root.join("tasks").join(format!("{task_id}.json"))
     }
 
+    fn completed_task_path(&self, task_id: &str) -> PathBuf {
+        self.root
+            .join("tasks")
+            .join("completed")
+            .join(format!("{task_id}.json"))
+    }
+
     fn journal_path(&self, op_id: &str) -> PathBuf {
         self.root.join("journal").join(format!("{op_id}.json"))
     }
@@ -118,7 +139,7 @@ impl FileStorage {
     }
 
     fn write_session_metadata(&self, metadata: &SessionMetadata) -> Result<()> {
-        atomic_write_json(&self.session_json_path(&metadata.session_id), metadata)
+        atomic_write_json_relaxed(&self.session_json_path(&metadata.session_id), metadata)
     }
 
     fn upsert_session_metadata(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
@@ -161,13 +182,19 @@ impl FileStorage {
 
     fn update_session_markdown(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
         let path = self.session_md_path(session_id);
-        let mut content = if path.exists() {
-            fs::read_to_string(&path)?
-        } else {
-            format!(
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let needs_header = !path.exists() || fs::metadata(&path)?.len() == 0;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+
+        if needs_header {
+            write!(
+                file,
                 "---\nschema_version: session_view.v1\nsession_id: {session_id}\nstatus: active\n---\n\n# Сесія {session_id}\n\n## Події\n\n"
-            )
-        };
+            )?;
+        }
 
         let line = format!(
             "- {} {}: {}\n",
@@ -175,8 +202,8 @@ impl FileStorage {
             event.event_type,
             event_summary(event)
         );
-        content.push_str(&line);
-        atomic_write_string(&path, &content)
+        file.write_all(line.as_bytes())?;
+        Ok(())
     }
 }
 
@@ -189,7 +216,7 @@ impl Storage for FileStorage {
         read_json(&self.manifest_path())
     }
 
-    fn write_manifest(&mut self, manifest: &Manifest) -> Result<()> {
+    fn write_manifest(&self, manifest: &Manifest) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.manifest_path(), manifest)
     }
@@ -200,7 +227,7 @@ impl Storage for FileStorage {
         Ok(SessionRecord { metadata, events })
     }
 
-    fn append_event(&mut self, session_id: &str, event: &StoredEvent) -> Result<()> {
+    fn append_event(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
         self.ensure_layout()?;
         fs::create_dir_all(self.session_dir(session_id))?;
 
@@ -219,12 +246,12 @@ impl Storage for FileStorage {
         Ok(())
     }
 
-    fn write_archive_entry(&mut self, entry: &ArchiveEntry) -> Result<()> {
+    fn write_archive_entry(&self, entry: &ArchiveEntry) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.archive_entry_path(entry), entry)
     }
 
-    fn update_archive_entry(&mut self, archive_id: &str, entry: &ArchiveEntry) -> Result<()> {
+    fn update_archive_entry(&self, archive_id: &str, entry: &ArchiveEntry) -> Result<()> {
         self.ensure_layout()?;
         let path = self.archive_entry_path_by_id(archive_id)?;
         atomic_write_json(&path, entry)
@@ -237,7 +264,7 @@ impl Storage for FileStorage {
 
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>> {
         let mut files = Vec::new();
-        collect_json_files(&self.root.join("archive"), &mut files)?;
+        collect_archive_entry_files(&self.root.join("archive"), &mut files)?;
 
         let mut entries = Vec::new();
         for path in files {
@@ -248,6 +275,27 @@ impl Storage for FileStorage {
         }
 
         Ok(entries)
+    }
+
+    fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()> {
+        self.ensure_layout()?;
+        atomic_write_json(&self.memory_unit_path(&unit.memory_unit_id), unit)
+    }
+
+    fn read_memory_units_for_archive(&self, archive_id: &str) -> Result<Vec<MemoryUnit>> {
+        let mut files = Vec::new();
+        collect_json_files(&self.root.join("archive").join("units"), &mut files)?;
+
+        let mut units = Vec::new();
+        for path in files {
+            let unit: MemoryUnit = read_json(&path)?;
+            if unit.archive_id == archive_id {
+                units.push(unit);
+            }
+        }
+        units.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+
+        Ok(units)
     }
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory> {
@@ -278,32 +326,48 @@ impl Storage for FileStorage {
         Ok(categories)
     }
 
-    fn write_core_store_category(&mut self, category: &CoreStoreCategory) -> Result<()> {
+    fn write_core_store_category(&self, category: &CoreStoreCategory) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.core_store_path(&category.category), category)
     }
 
-    fn write_candidate_belief(&mut self, candidate: &CandidateBelief) -> Result<()> {
+    fn write_candidate_belief(&self, candidate: &CandidateBelief) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.candidate_path(&candidate.candidate_id), candidate)
     }
 
-    fn save_task(&mut self, task: &crate::tasks::PendingTask) -> Result<()> {
+    fn save_task(&self, task: &crate::tasks::PendingTask) -> Result<()> {
         self.ensure_layout()?;
-        atomic_write_json(&self.task_path(&task.task_id), task)
+        let active_path = self.task_path(&task.task_id);
+        let completed_path = self.completed_task_path(&task.task_id);
+
+        if task_state_is_terminal(&task.state) {
+            atomic_write_json(&completed_path, task)?;
+            remove_file_if_exists(&active_path)?;
+        } else {
+            atomic_write_json(&active_path, task)?;
+            remove_file_if_exists(&completed_path)?;
+        }
+        Ok(())
     }
 
     fn load_task(&self, task_id: &str) -> Result<crate::tasks::PendingTask> {
-        let path = self.task_path(task_id);
-        if !path.exists() {
-            return Err(MemoryEngineError::TaskNotFound(task_id.to_string()));
+        let active_path = self.task_path(task_id);
+        if active_path.exists() {
+            return read_json(&active_path);
         }
-        read_json(&path)
+
+        let completed_path = self.completed_task_path(task_id);
+        if completed_path.exists() {
+            return read_json(&completed_path);
+        }
+
+        Err(MemoryEngineError::TaskNotFound(task_id.to_string()))
     }
 
     fn load_tasks(&self) -> Result<Vec<crate::tasks::PendingTask>> {
         let mut files = Vec::new();
-        collect_json_files(&self.root.join("tasks"), &mut files)?;
+        collect_json_files_shallow(&self.root.join("tasks"), &mut files)?;
 
         let mut tasks = Vec::new();
         for path in files {
@@ -313,12 +377,12 @@ impl Storage for FileStorage {
         Ok(tasks)
     }
 
-    fn begin_journaled_operation(&mut self, operation: &JournalOperation) -> Result<()> {
+    fn begin_journaled_operation(&self, operation: &JournalOperation) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.journal_path(&operation.op_id), operation)
     }
 
-    fn complete_journaled_operation(&mut self, op_id: &str) -> Result<()> {
+    fn complete_journaled_operation(&self, op_id: &str) -> Result<()> {
         self.ensure_layout()?;
         let path = self.journal_path(op_id);
         let mut operation: JournalOperation = read_json(&path)?;
@@ -354,22 +418,69 @@ fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
 
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let content = serde_json::to_string_pretty(value)?;
-    atomic_write_string(path, &format!("{content}\n"))
+    atomic_write_string(path, &format!("{content}\n"), true)
 }
 
-fn atomic_write_string(path: &Path, content: &str) -> Result<()> {
+fn atomic_write_json_relaxed<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let content = serde_json::to_string_pretty(value)?;
+    atomic_write_string(path, &format!("{content}\n"), false)
+}
+
+fn atomic_write_string(path: &Path, content: &str, sync_file: bool) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let tmp_path = path.with_extension("tmp");
+    let tmp_path = unique_tmp_path(path);
     {
         let mut file = File::create(&tmp_path)?;
         file.write_all(content.as_bytes())?;
-        file.sync_all()?;
+        if sync_file {
+            file.sync_all()?;
+        }
     }
 
     fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
+fn unique_tmp_path(path: &Path) -> PathBuf {
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("tmp");
+    path.with_file_name(format!(".{file_name}.{}.{counter}.tmp", std::process::id()))
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn task_state_is_terminal(state: &TaskState) -> bool {
+    matches!(
+        state,
+        TaskState::Completed | TaskState::Failed | TaskState::Cancelled
+    )
+}
+
+fn collect_json_files_shallow(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            files.push(path);
+        }
+    }
+
     Ok(())
 }
 
@@ -383,6 +494,30 @@ fn collect_json_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         let path = entry.path();
         if path.is_dir() {
             collect_json_files(&path, files)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_archive_entry_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if matches!(name, "units" | "forgotten") {
+                continue;
+            }
+            collect_archive_entry_files(&path, files)?;
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
             files.push(path);
         }
@@ -443,4 +578,31 @@ fn event_summary(event: &StoredEvent) -> String {
         .and_then(|value| value.as_str())
         .map(str::to_string)
         .unwrap_or_else(|| event.payload.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unique_tmp_path;
+    use std::path::Path;
+
+    #[test]
+    fn unique_tmp_path_stays_in_same_directory_and_changes_name() {
+        let path = Path::new("root").join("target.json");
+        let left = unique_tmp_path(&path);
+        let right = unique_tmp_path(&path);
+
+        assert_eq!(left.parent(), path.parent());
+        assert_eq!(right.parent(), path.parent());
+        assert_ne!(left, right);
+        assert!(left
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("left tmp name")
+            .starts_with(".target.json."));
+        assert!(right
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("right tmp name")
+            .ends_with(".tmp"));
+    }
 }

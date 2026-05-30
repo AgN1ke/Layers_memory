@@ -5,12 +5,14 @@ use memory_engine::core_store::{
     CoreContextRequest, CoreContextTokenBudget, CoreFactInput, CoreFactPatchInput, CoreFactStatus,
 };
 use memory_engine::event::IngestEvent;
+use memory_engine::llm::{LlmResponse, SleepRunStage};
 use memory_engine::recall::{RecallFilters, RecallQuery};
-use memory_engine::sleep::SleepCompressionResult;
+use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressionResult};
+use memory_engine::storage::Storage;
 use memory_engine::tasks::TaskType;
 use memory_engine::types::{
-    COMPACT_MEMORY_RESULT_SCHEMA_VERSION, CORE_CONTEXT_REQUEST_SCHEMA_VERSION,
-    CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
+    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
+    CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION,
     RECALL_QUERY_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{EngineOptions, FileStorage, MemoryEngine, SleepStage1Result};
@@ -55,15 +57,15 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
         sleep_result.pending_task.expected_output_schema,
         SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION
     );
-    let compact_task = sleep_result
-        .compact_memory_task
+    let memory_unit_task = sleep_result
+        .memory_unit_task
         .as_ref()
-        .expect("compact memory task");
-    assert_eq!(compact_task.task_type, TaskType::CompactMemoryPass);
-    assert_eq!(compact_task.prompt_id, "compact_memory_pass");
+        .expect("memory unit task");
+    assert_eq!(memory_unit_task.task_type, TaskType::MemoryUnitPass);
+    assert_eq!(memory_unit_task.prompt_id, "memory_unit_pass");
     assert_eq!(
-        compact_task.expected_output_schema,
-        COMPACT_MEMORY_RESULT_SCHEMA_VERSION
+        memory_unit_task.expected_output_schema,
+        MEMORY_UNITS_RESULT_SCHEMA_VERSION
     );
 
     let tasks = engine.pending_tasks().expect("pending tasks");
@@ -73,7 +75,7 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
         .any(|task| task.task_id == sleep_result.pending_task.task_id));
     assert!(tasks
         .iter()
-        .any(|task| task.task_id == compact_task.task_id));
+        .any(|task| task.task_id == memory_unit_task.task_id));
 
     assert!(root
         .join("tasks")
@@ -81,7 +83,7 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
         .exists());
     assert!(root
         .join("tasks")
-        .join(format!("{}.json", compact_task.task_id))
+        .join(format!("{}.json", memory_unit_task.task_id))
         .exists());
 
     fs::remove_dir_all(root).ok();
@@ -975,16 +977,472 @@ fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
     assert_eq!(updated.status, ArchiveStatus::Complete);
     assert!(updated.llm_enhanced);
     assert_eq!(updated.prompt_id.as_deref(), Some("sleep_compression"));
-    engine
-        .resume_compact_memory_pass(
+    let unit_updated = engine
+        .resume_memory_unit_pass(
             &sleep_result
-                .compact_memory_task
+                .memory_unit_task
                 .as_ref()
-                .expect("compact memory task")
+                .expect("memory unit task")
                 .task_id,
-            "Берлін -> користувач повідомив стабільний особистий контекст.",
+            MemoryUnitPassResult {
+                schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                memory_units: vec![MemoryUnitDraft {
+                    thesis: "Берлін -> користувач повідомив стабільний особистий контекст."
+                        .to_string(),
+                    source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
+                    evidence: Some("Користувач прямо сказав, що живе в Берліні.".to_string()),
+                    tags: vec!["location".to_string()],
+                    weight: 0.9,
+                }],
+            },
         )
-        .expect("resume compact memory");
+        .expect("resume memory unit pass");
+    assert_eq!(
+        unit_updated.compact_memory.as_deref(),
+        Some("Берлін -> користувач повідомив стабільний особистий контекст.")
+    );
+    assert_eq!(unit_updated.memory_units.len(), 1);
+    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+
+    let sleep_task_id = &sleep_result.pending_task.task_id;
+    let memory_unit_task_id = &sleep_result
+        .memory_unit_task
+        .as_ref()
+        .expect("memory unit task")
+        .task_id;
+    assert!(!root
+        .join("tasks")
+        .join(format!("{sleep_task_id}.json"))
+        .exists());
+    assert!(!root
+        .join("tasks")
+        .join(format!("{memory_unit_task_id}.json"))
+        .exists());
+    assert!(root
+        .join("tasks")
+        .join("completed")
+        .join(format!("{sleep_task_id}.json"))
+        .exists());
+    assert!(root
+        .join("tasks")
+        .join("completed")
+        .join(format!("{memory_unit_task_id}.json"))
+        .exists());
+
+    let storage_view = FileStorage::with_host_id(&root, "terminal");
+    assert_eq!(
+        storage_view
+            .load_task(sleep_task_id)
+            .expect("load completed sleep task")
+            .state,
+        memory_engine::tasks::TaskState::Completed
+    );
+    assert_eq!(
+        storage_view
+            .load_task(memory_unit_task_id)
+            .expect("load completed memory unit task")
+            .state,
+        memory_engine::tasks::TaskState::Completed
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
+    let root = unique_temp_dir("engine_sleep_run_driver_finishes_archive_and_seeds_core");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Мене звати Микита і я дуже люблю космос.",
+        vec!["personal_fact", "interest"],
+    );
+
+    let mut run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let step = engine.next_sleep_batch(run).expect("first batch");
+    run = step.run;
+    let batch = step.batch.expect("extraction batch");
+    assert_eq!(batch.requests.len(), 5);
+
+    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+    let mut responses = Vec::new();
+    for request in batch.requests {
+        let text = match request.prompt_id.as_str() {
+            "memory_unit_pass" => json!({
+                "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                "archive_id": run.archive_id,
+                "memory_units": [{
+                    "thesis": "Користувач прямо назвався Микитою і проявив любов до космосу.",
+                    "source_event_ids": [event_id.clone()],
+                    "weight": 0.95
+                }]
+            }),
+            "sleep_emotional_pass" => json!({
+                "emotional_markers": [{
+                    "target": "космос",
+                    "affect": "love",
+                    "strength": 0.9,
+                    "source_event_ids": [event_id.clone()]
+                }]
+            }),
+            "sleep_topic_thread_pass" => json!({
+                "topic_thread": [{
+                    "topic": "space_interest",
+                    "summary": "Користувач сказав, що дуже любить космос.",
+                    "source_event_ids": [event_id.clone()]
+                }]
+            }),
+            "sleep_personal_signal_pass" => json!({
+                "personal_signals": [{
+                    "text": "Користувач любить космос.",
+                    "category": "interest",
+                    "confidence": 0.95,
+                    "source_event_ids": [event_id.clone()]
+                }]
+            }),
+            "sleep_relational_pass" => json!({
+                "relational_tone": {
+                    "warmth": 0.6,
+                    "intellectual_engagement": 0.8,
+                    "source_event_ids": [event_id.clone()]
+                }
+            }),
+            other => panic!("unexpected request: {other}"),
+        };
+        responses.push(LlmResponse::Ok {
+            request_id: request.request_id,
+            text: text.to_string(),
+        });
+    }
+
+    let step = engine
+        .submit_sleep_batch(run, responses)
+        .expect("submit extraction");
+    run = step.run;
+    let batch = step.batch.expect("consolidator batch");
+    assert_eq!(batch.requests.len(), 1);
+    assert_eq!(batch.requests[0].prompt_id, "sleep_consolidator");
+    assert_eq!(
+        batch.requests[0].expected_output_schema,
+        memory_engine::types::CONSOLIDATOR_TEXT_SCHEMA_VERSION
+    );
+
+    let _consolidated = json!({
+        "schema_version": SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+        "archive_id": run.archive_id,
+        "gist": "Користувач сказав, що любить космос.",
+        "narrative": "Користувач прямо назвався Микитою і тепло описав любов до космосу.",
+        "compact_memory": "Космос -> користувач любить цю тему.",
+        "facts": [],
+        "quotes": [],
+        "tags": ["space_interest"],
+        "theme": "space_interest",
+        "weight": 0.95,
+        "links": [],
+        "emotional_markers": [{
+            "target": "космос",
+            "affect": "love",
+            "strength": 0.9,
+            "source_event_ids": [event_id.clone()]
+        }],
+        "topic_thread": [],
+        "personal_signals": [{
+            "text": "Користувач любить космос.",
+            "category": "interest",
+            "confidence": 0.95,
+            "source_event_ids": [event_id]
+        }],
+        "relational_tone": null
+    });
+    let step = engine
+        .submit_sleep_batch(
+            run,
+            vec![LlmResponse::Ok {
+                request_id: batch.requests[0].request_id.clone(),
+                text: "GIST: РљРѕСЂРёСЃС‚СѓРІР°С‡ СЃРєР°Р·Р°РІ, С‰Рѕ Р»СЋР±РёС‚СЊ РєРѕСЃРјРѕСЃ.\n\nРљРѕСЂРёСЃС‚СѓРІР°С‡ РїСЂСЏРјРѕ РЅР°Р·РІР°РІСЃСЏ РњРёРєРёС‚РѕСЋ С– С‚РµРїР»Рѕ РѕРїРёСЃР°РІ Р»СЋР±РѕРІ РґРѕ РєРѕСЃРјРѕСЃСѓ.".to_string(),
+            }],
+        )
+        .expect("submit consolidator");
+    run = step.run;
+    assert_eq!(run.stage, SleepRunStage::ReadyToFinish);
+
+    let outcome = engine.finish_sleep_run(run).expect("finish sleep run");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert_eq!(outcome.completion_mode, "consolidated");
+    assert!(!outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "consolidator_fallback"));
+    assert_eq!(outcome.core_summary.created, 1);
+    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({}),
+            core_scope: Some("live_session".to_string()),
+            query_text: Some("космос".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 5,
+            session_trace_event_limit: 10,
+            include_core: true,
+            token_budget: None,
+        })
+        .expect("context package");
+    assert!(package
+        .core_facts
+        .iter()
+        .any(|fact| fact.text == "Користувач любить космос."));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_run_falls_back_when_consolidator_returns_empty_text() {
+    let root = unique_temp_dir("sleep_run_consolidator_text_fallback");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "I love space and want this remembered.",
+        vec!["personal_fact", "interest"],
+    );
+
+    let mut run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let step = engine.next_sleep_batch(run).expect("first batch");
+    run = step.run;
+    let batch = step.batch.expect("extraction batch");
+    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+
+    let responses = batch
+        .requests
+        .into_iter()
+        .map(|request| {
+            let text = match request.prompt_id.as_str() {
+                "memory_unit_pass" => json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": run.archive_id,
+                    "memory_units": [{
+                        "thesis": "Space -> user loves this topic.",
+                        "source_event_ids": [event_id.clone()],
+                        "weight": 0.95
+                    }]
+                }),
+                "sleep_emotional_pass" => json!({
+                    "emotional_markers": [{
+                        "target": "space",
+                        "affect": "love",
+                        "strength": 0.9,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_topic_thread_pass" => json!({
+                    "topic_thread": [{
+                        "topic": "space_interest",
+                        "summary": "The user said they love space.",
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_personal_signal_pass" => json!({
+                    "personal_signals": [{
+                        "text": "The user loves space.",
+                        "category": "interest",
+                        "confidence": 0.95,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_relational_pass" => json!({"relational_tone": null}),
+                other => panic!("unexpected request: {other}"),
+            };
+            LlmResponse::Ok {
+                request_id: request.request_id,
+                text: text.to_string(),
+            }
+        })
+        .collect();
+
+    let step = engine
+        .submit_sleep_batch(run, responses)
+        .expect("submit extraction");
+    run = step.run;
+
+    for attempt in 0..3 {
+        let step = engine.next_sleep_batch(run).expect("consolidator batch");
+        run = step.run;
+        let batch = step.batch.expect("consolidator request");
+        assert_eq!(batch.requests.len(), 1);
+        let step = engine
+            .submit_sleep_batch(
+                run,
+                vec![LlmResponse::Ok {
+                    request_id: batch.requests[0].request_id.clone(),
+                    text: String::new(),
+                }],
+            )
+            .expect("submit empty consolidator");
+        run = step.run;
+        if attempt < 2 {
+            assert_eq!(run.stage, SleepRunStage::Consolidation);
+        }
+    }
+
+    assert_eq!(run.stage, SleepRunStage::ReadyToFinish);
+    let outcome = engine.finish_sleep_run(run).expect("finish fallback");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert_eq!(outcome.completion_mode, "fallback_from_tracks");
+    assert!(outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "consolidator_fallback"));
+    assert!(outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "pass_failed:sleep_consolidator"));
+    assert_eq!(outcome.core_summary.created, 1);
+    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_run_falls_back_when_consolidator_gist_is_rejected() {
+    let root = unique_temp_dir("sleep_run_consolidator_gist_rejected");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "I love space and want this remembered.",
+        vec!["personal_fact", "interest"],
+    );
+
+    let mut run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let step = engine.next_sleep_batch(run).expect("first batch");
+    run = step.run;
+    let batch = step.batch.expect("extraction batch");
+    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+
+    let responses = batch
+        .requests
+        .into_iter()
+        .map(|request| {
+            let text = match request.prompt_id.as_str() {
+                "memory_unit_pass" => json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": run.archive_id,
+                    "memory_units": [{
+                        "thesis": "Space -> user loves this topic.",
+                        "source_event_ids": [event_id.clone()],
+                        "weight": 0.95
+                    }]
+                }),
+                "sleep_emotional_pass" => json!({
+                    "emotional_markers": [{
+                        "target": "space",
+                        "affect": "love",
+                        "strength": 0.9,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_topic_thread_pass" => json!({
+                    "topic_thread": [{
+                        "topic": "space_interest",
+                        "summary": "The user said they love space.",
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_personal_signal_pass" => json!({
+                    "personal_signals": [{
+                        "text": "The user loves space.",
+                        "category": "interest",
+                        "confidence": 0.95,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_relational_pass" => json!({"relational_tone": null}),
+                other => panic!("unexpected request: {other}"),
+            };
+            LlmResponse::Ok {
+                request_id: request.request_id,
+                text: text.to_string(),
+            }
+        })
+        .collect();
+
+    let step = engine
+        .submit_sleep_batch(run, responses)
+        .expect("submit extraction");
+    run = step.run;
+
+    for attempt in 0..3 {
+        let step = engine.next_sleep_batch(run).expect("consolidator batch");
+        run = step.run;
+        let batch = step.batch.expect("consolidator request");
+        assert_eq!(batch.requests.len(), 1);
+        let step = engine
+            .submit_sleep_batch(
+                run,
+                vec![LlmResponse::Ok {
+                    request_id: batch.requests[0].request_id.clone(),
+                    text:
+                        "GIST: {\"gist\":\"not a compact summary\"}\n\nThis narrative is readable."
+                            .to_string(),
+                }],
+            )
+            .expect("submit bad gist consolidator");
+        run = step.run;
+        if attempt < 2 {
+            assert_eq!(run.stage, SleepRunStage::Consolidation);
+        }
+    }
+
+    assert_eq!(run.stage, SleepRunStage::ReadyToFinish);
+    let outcome = engine.finish_sleep_run(run).expect("finish fallback");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert_eq!(outcome.completion_mode, "fallback_from_tracks");
+    assert_eq!(outcome.archive_entry.gist, "The user loves space.");
+    assert!(outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "consolidator_fallback"));
+    assert!(outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "consolidator_gist_rejected"));
+    assert!(outcome
+        .archive_entry
+        .tags
+        .iter()
+        .any(|tag| tag == "pass_failed:sleep_consolidator"));
+    assert_eq!(outcome.core_summary.created, 1);
     assert!(engine.pending_tasks().expect("pending tasks").is_empty());
 
     fs::remove_dir_all(root).ok();

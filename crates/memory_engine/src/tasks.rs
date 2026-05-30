@@ -8,6 +8,7 @@ use crate::types::{Id, ModelRole, Timestamp};
 pub enum TaskType {
     SleepCompression,
     CompactMemoryPass,
+    MemoryUnitPass,
     ScoreEvent,
     ReflectionAnalyze,
     RecallRerank,
