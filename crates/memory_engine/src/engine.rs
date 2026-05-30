@@ -2158,6 +2158,10 @@ fn parse_consolidator_text(text: &str) -> Result<(String, String)> {
         ));
     }
 
+    if let Some(decoded) = parse_consolidator_json_string(candidate)? {
+        return parse_consolidator_text(&decoded);
+    }
+
     if let Some(parsed) = parse_consolidator_json_object(candidate)? {
         return Ok(parsed);
     }
@@ -2227,6 +2231,20 @@ fn parse_consolidator_json_object(candidate: &str) -> Result<Option<(String, Str
             "consolidator returned JSON without gist or narrative strings".to_string(),
         )),
     }
+}
+
+fn parse_consolidator_json_string(candidate: &str) -> Result<Option<String>> {
+    if !candidate.starts_with('"') {
+        return Ok(None);
+    }
+
+    serde_json::from_str::<String>(candidate)
+        .map(Some)
+        .map_err(|err| {
+            MemoryEngineError::Validation(format!(
+                "consolidator returned quoted text that could not be decoded: {err}"
+            ))
+        })
 }
 
 fn strip_consolidator_gist_prefix(text: &str) -> &str {
@@ -2682,6 +2700,20 @@ mod tests {
         assert_eq!(
             narrative,
             "The user said they live in Kyiv and were born in 1989."
+        );
+    }
+
+    #[test]
+    fn parse_consolidator_text_unwraps_json_string_response() {
+        let (gist, narrative) = parse_consolidator_text(
+            r#""GIST: User challenged an astronomy explanation.\n\nThe user kept testing the assistant's claim about quasars and galactic dust.""#,
+        )
+        .expect("quoted consolidator text should be decoded and parsed");
+
+        assert_eq!(gist, "User challenged an astronomy explanation.");
+        assert_eq!(
+            narrative,
+            "The user kept testing the assistant's claim about quasars and galactic dust."
         );
     }
 }
