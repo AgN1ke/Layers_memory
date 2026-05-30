@@ -4204,3 +4204,49 @@ Live sleep завершився як `completion_mode=consolidated`, `failed_pas
 **Висновок:**
 B-гілка `feature/core-orchestration` функціонально підтверджена: sleep orchestration і Archive→Core bridge працюють із ядра, consolidator boundary має happy path і output-gate fallback, а живий Telegram-прогін не зіпсував пам'ять.
 - Коміт: `19e1072 Move sleep orchestration into core driver`.
+
+## Запис 78 — 2026-05-30 13:20 +03:00 — Початок feature/concurrency: `&self`, локи ресурсів і stress-test на 1000 сесій
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після закриття B-гілки користувач підтвердив стратегічний ризик: Memory Engine має бути бібліотекою-мозком, яку можна безпечно викликати з багатьох хостів і багатьох чатів паралельно. Після B `MemoryEngine` уже не тримав суттєвого runtime-стану, але API все ще вимагав `&mut self`, PyO3-клас був `unsendable`, а core-store мав реальний lost-update hazard: `core/store/<category>.json` спільний для всіх scope, тому два паралельні записи в одну категорію могли перезаписати один одного.
+
+**Задум:**
+Розпочати `feature/concurrency` без зміни семантики пам'яті: зробити engine callable через shared reference, відпускати Python GIL для важких викликів, додати локи не глобально, а по ресурсах (`session:<id>`, `core:<category>`, `manifest`) і підтвердити це stress-test'ом, який спеціально ловить lost update у спільному core-файлі.
+
+**Що робили:**
+- Створили гілку `feature/concurrency` від `develop`.
+- Перевели `Storage` trait, `FileStorage`, публічні методи `MemoryEngine` і PyO3 adapter з `&mut self` на `&self`.
+- Замінили `manifest_initialized: bool` на `AtomicBool`.
+- Прибрали `unsendable` з PyO3 `MemoryEngine`.
+- Додали `py.allow_threads(...)` у Python adapter для engine-викликів, щоб довгі Rust-операції не тримали GIL.
+- Додали `LockRegistry` у core: реєстр ресурсних локів через `Mutex<HashMap<String, Arc<Mutex<()>>>>`.
+- Закрили записи в сесії локом `session:<session_id>`.
+- Закрили read-modify-write для Core локом `core:<category>`, включно з Archive→Core bridge.
+- Додали stress-test `concurrency_stress.rs`: швидкий стандартний gate і окремий explicit 1000-session release stress.
+
+**Що зробили детально:**
+`ingest()` тепер серіалізує операції тільки в межах однієї сесії, а різні session_id можуть виконуватись паралельно. `upsert_core_fact()`, `patch_core_fact()` і Archive→Core bridge беруть лок саме на нормалізовану core-категорію, бо файл `core/store/name.json` лишається спільним для всіх scope. `finish_sleep_run()` і `seed_core_from_archives()` тримають session-lock під час bridge і далі беруть core-lock, з фіксованим порядком `session → core`, щоб не створювати deadlock. Глобального локу немає.
+
+Стрес-тест запускає багато потоків одночасно через `Barrier`: кожен пише у власну сесію і upsert-ить факт у спільну категорію `name`. Після завершення перевіряється, що кожна сесія має правильну кількість подій, немає leakage між session_id, `core/store/name.json` містить факт для кожного scope, і в дереві не лишились `.tmp` файли.
+
+**Проблеми чи виклики:**
+Перший варіант 1000-thread тесту з двома event'ами на сесію зайняв більше 4 хвилин у debug-режимі на Windows. Це не було ознакою корупції, але такий тест занадто важкий для звичайного `cargo test`. Тому зроблено два рівні: швидкий стандартний test на 64 потоках і explicit ignored stress на 1000 потоках у release. Повний stress пройшов, але зайняв 523.53 секунди, що показує: коректність є, але file-based core-store з послідовним rewrite спільної категорії може бути performance bottleneck. Це підтверджує, що per-scope core layout варто розглядати окремо пізніше, але не змішувати з цією гілкою.
+
+**Фідбек користувача:**
+Користувач підтвердив напрям `feature/concurrency`: не будувати Phase B/C reflection поверх однопотокового фундаменту; спершу зробити бібліотеку безпечною для паралельних сесій і не дати core-store губити факти під навантаженням.
+
+**Перевірки:**
+- `cargo check -p memory_engine` — пройшло після додавання helper-функцій для lock keys.
+- `cargo test -p memory_engine --test concurrency_stress` — 1 passed, 1 ignored.
+- `cargo test -p memory_engine --release --test concurrency_stress -- --ignored` — 1 passed, 1000-session stress, 523.53s.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 12 passed.
+
+**Висновок:**
+Головний concurrency hazard цієї гілки закритий: API більше не потребує mutable engine, Python adapter не прив'язаний до одного OS-потоку через `unsendable`, а паралельні записи в спільну core-категорію більше не гублять scope-факти. Наступний крок — переглянути diff, зафіксувати коміт і вирішити, чи переносити prompt-view/rendering із хоста в ядро окремою малою гілкою, чи йти далі до Phase B reflection.

@@ -29,7 +29,7 @@ use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::storage::Storage;
 use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
 
-#[pyclass(name = "MemoryEngine", unsendable)]
+#[pyclass(name = "MemoryEngine")]
 pub struct PyMemoryEngine {
     inner: CoreEngine<FileStorage>,
 }
@@ -47,116 +47,127 @@ impl PyMemoryEngine {
         })
     }
 
-    fn ingest(&mut self, event_json: &str) -> PyResult<String> {
+    fn ingest(&self, py: Python<'_>, event_json: &str) -> PyResult<String> {
         let event: IngestEvent = parse_json(event_json, "event")?;
-        let stored = self.inner.ingest(event).map_err(map_err)?;
+        let stored = run_without_gil(py, || self.inner.ingest(event))?;
         dump_json(&stored, "stored event")
     }
 
-    fn sleep(&mut self, session_id: &str) -> PyResult<String> {
-        let result = self.inner.sleep(session_id).map_err(map_err)?;
+    fn sleep(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.sleep(session_id))?;
         dump_json(&result, "sleep result")
     }
 
-    fn begin_sleep_run(&mut self, session_id: &str) -> PyResult<String> {
-        let run = self.inner.begin_sleep_run(session_id).map_err(map_err)?;
+    fn begin_sleep_run(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let run = run_without_gil(py, || self.inner.begin_sleep_run(session_id))?;
         dump_json(&run, "sleep run")
     }
 
-    fn next_sleep_batch(&mut self, run_json: &str) -> PyResult<String> {
+    fn next_sleep_batch(&self, py: Python<'_>, run_json: &str) -> PyResult<String> {
         let run: SleepRun = parse_json(run_json, "sleep run")?;
-        let step = self.inner.next_sleep_batch(run).map_err(map_err)?;
+        let step = run_without_gil(py, || self.inner.next_sleep_batch(run))?;
         dump_json(&step, "sleep run step")
     }
 
-    fn submit_sleep_batch(&mut self, run_json: &str, responses_json: &str) -> PyResult<String> {
+    fn submit_sleep_batch(
+        &self,
+        py: Python<'_>,
+        run_json: &str,
+        responses_json: &str,
+    ) -> PyResult<String> {
         let run: SleepRun = parse_json(run_json, "sleep run")?;
         let responses: Vec<LlmResponse> = parse_json(responses_json, "LLM responses")?;
-        let step = self
-            .inner
-            .submit_sleep_batch(run, responses)
-            .map_err(map_err)?;
+        let step = run_without_gil(py, || self.inner.submit_sleep_batch(run, responses))?;
         dump_json(&step, "sleep run step")
     }
 
-    fn finish_sleep_run(&mut self, run_json: &str) -> PyResult<String> {
+    fn finish_sleep_run(&self, py: Python<'_>, run_json: &str) -> PyResult<String> {
         let run: SleepRun = parse_json(run_json, "sleep run")?;
-        let outcome = self.inner.finish_sleep_run(run).map_err(map_err)?;
+        let outcome = run_without_gil(py, || self.inner.finish_sleep_run(run))?;
         dump_json(&outcome, "sleep outcome")
     }
 
-    fn read_session(&self, session_id: &str) -> PyResult<String> {
-        let session = self
-            .inner
-            .storage()
-            .read_session(session_id)
-            .map_err(map_err)?;
+    fn read_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let session = run_without_gil(py, || self.inner.storage().read_session(session_id))?;
         dump_json(&session, "session")
     }
 
-    fn resume_sleep_compression(&mut self, task_id: &str, result_json: &str) -> PyResult<String> {
+    fn resume_sleep_compression(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        result_json: &str,
+    ) -> PyResult<String> {
         let result: SleepCompressionResult = parse_json(result_json, "sleep compression result")?;
-        let updated = self
-            .inner
-            .resume_sleep_compression(task_id, result)
-            .map_err(map_err)?;
+        let updated = run_without_gil(py, || self.inner.resume_sleep_compression(task_id, result))?;
         dump_json(&updated, "archive entry")
     }
 
     fn resume_compact_memory_pass(
-        &mut self,
+        &self,
+        py: Python<'_>,
         task_id: &str,
         compact_memory: &str,
     ) -> PyResult<String> {
-        let updated = self
-            .inner
-            .resume_compact_memory_pass(task_id, compact_memory)
-            .map_err(map_err)?;
+        let updated = run_without_gil(py, || {
+            self.inner
+                .resume_compact_memory_pass(task_id, compact_memory)
+        })?;
         dump_json(&updated, "archive entry")
     }
 
-    fn resume_memory_unit_pass(&mut self, task_id: &str, result_json: &str) -> PyResult<String> {
+    fn resume_memory_unit_pass(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        result_json: &str,
+    ) -> PyResult<String> {
         let result: MemoryUnitPassResult = parse_json(result_json, "memory unit pass result")?;
-        let updated = self
-            .inner
-            .resume_memory_unit_pass(task_id, result)
-            .map_err(map_err)?;
+        let updated = run_without_gil(py, || self.inner.resume_memory_unit_pass(task_id, result))?;
         dump_json(&updated, "archive entry")
     }
 
-    fn recall(&mut self, query_json: &str) -> PyResult<String> {
+    fn recall(&self, py: Python<'_>, query_json: &str) -> PyResult<String> {
         let query: RecallQuery = parse_json(query_json, "recall query")?;
-        let result = self.inner.recall(query).map_err(map_err)?;
+        let result = run_without_gil(py, || self.inner.recall(query))?;
         dump_json(&result, "recall result")
     }
 
-    fn core_context_package(&mut self, request_json: &str) -> PyResult<String> {
+    fn core_context_package(&self, py: Python<'_>, request_json: &str) -> PyResult<String> {
         let request: CoreContextRequest = parse_json(request_json, "core context request")?;
-        let package = self.inner.core_context_package(request).map_err(map_err)?;
+        let package = run_without_gil(py, || self.inner.core_context_package(request))?;
         dump_json(&package, "core context package")
     }
 
-    fn upsert_core_fact(&mut self, fact_json: &str) -> PyResult<String> {
+    fn upsert_core_fact(&self, py: Python<'_>, fact_json: &str) -> PyResult<String> {
         let fact: CoreFactInput = parse_json(fact_json, "core fact input")?;
-        let result = self.inner.upsert_core_fact(fact).map_err(map_err)?;
+        let result = run_without_gil(py, || self.inner.upsert_core_fact(fact))?;
         dump_json(&result, "core fact upsert result")
     }
 
-    fn patch_core_fact(&mut self, patch_json: &str) -> PyResult<String> {
+    fn patch_core_fact(&self, py: Python<'_>, patch_json: &str) -> PyResult<String> {
         let patch: CoreFactPatchInput = parse_json(patch_json, "core fact patch input")?;
-        let result = self.inner.patch_core_fact(patch).map_err(map_err)?;
+        let result = run_without_gil(py, || self.inner.patch_core_fact(patch))?;
         dump_json(&result, "core fact patch result")
     }
 
-    fn pending_tasks(&self) -> PyResult<String> {
-        let tasks = self.inner.pending_tasks().map_err(map_err)?;
+    fn pending_tasks(&self, py: Python<'_>) -> PyResult<String> {
+        let tasks = run_without_gil(py, || self.inner.pending_tasks())?;
         dump_json(&tasks, "pending tasks")
     }
 
-    fn seed_core_from_archives(&mut self) -> PyResult<String> {
-        let summary = self.inner.seed_core_from_archives().map_err(map_err)?;
+    fn seed_core_from_archives(&self, py: Python<'_>) -> PyResult<String> {
+        let summary = run_without_gil(py, || self.inner.seed_core_from_archives())?;
         dump_json(&summary, "core archive seed summary")
     }
+}
+
+fn run_without_gil<T, F>(py: Python<'_>, f: F) -> PyResult<T>
+where
+    T: Send,
+    F: FnOnce() -> std::result::Result<T, MemoryEngineError> + Send,
+{
+    py.allow_threads(f).map_err(map_err)
 }
 
 fn parse_json<T: DeserializeOwned>(raw: &str, what: &str) -> PyResult<T> {

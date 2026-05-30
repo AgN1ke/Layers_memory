@@ -1,5 +1,6 @@
-use std::collections::{BTreeSet, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,11 +50,29 @@ const CONSOLIDATOR_GIST_REJECTED_MARKER: &str = "consolidator_gist_rejected";
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MemoryEngine<S> {
     storage: S,
     options: EngineOptions,
-    manifest_initialized: bool,
+    manifest_initialized: AtomicBool,
+    locks: LockRegistry,
+}
+
+#[derive(Debug, Default)]
+struct LockRegistry {
+    resources: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl LockRegistry {
+    fn resource(&self, key: &str) -> Result<Arc<Mutex<()>>> {
+        let mut resources = self.resources.lock().map_err(|_| {
+            MemoryEngineError::Storage("lock registry mutex was poisoned".to_string())
+        })?;
+        Ok(resources
+            .entry(key.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone())
+    }
 }
 
 impl<S> MemoryEngine<S> {
@@ -65,7 +84,8 @@ impl<S> MemoryEngine<S> {
         Self {
             storage,
             options,
-            manifest_initialized: false,
+            manifest_initialized: AtomicBool::new(false),
+            locks: LockRegistry::default(),
         }
     }
 
@@ -83,38 +103,56 @@ impl<S> MemoryEngine<S> {
 }
 
 impl<S: Storage> MemoryEngine<S> {
-    pub fn ingest(&mut self, event: IngestEvent) -> Result<IngestResult> {
+    fn with_resource_lock<T, F>(&self, key: String, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        let resource = self.locks.resource(&key)?;
+        let _guard = lock_resource(&resource, &key)?;
+        f()
+    }
+
+    pub fn ingest(&self, event: IngestEvent) -> Result<IngestResult> {
         validate_ingest_event(&event)?;
         self.ensure_manifest()?;
 
-        let (initial_weight, weight_reason) = self.options.event_scoring.score_ingest_event(&event);
-        let stored = StoredEvent::from_ingest(
-            event,
-            new_id("event")?,
-            now_rfc3339()?,
-            initial_weight,
-            weight_reason,
-        );
+        let session_id = event.session_id.clone();
+        self.with_resource_lock(session_lock_key(&session_id), || {
+            let (initial_weight, weight_reason) =
+                self.options.event_scoring.score_ingest_event(&event);
+            let stored = StoredEvent::from_ingest(
+                event,
+                new_id("event")?,
+                now_rfc3339()?,
+                initial_weight,
+                weight_reason,
+            );
 
-        self.storage.append_event(&stored.session_id, &stored)?;
+            self.storage.append_event(&stored.session_id, &stored)?;
 
-        Ok(IngestResult {
-            schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
-            stored_event: stored,
+            Ok(IngestResult {
+                schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
+                stored_event: stored,
+            })
         })
     }
 
-    fn ensure_manifest(&mut self) -> Result<()> {
-        if self.manifest_initialized {
+    fn ensure_manifest(&self) -> Result<()> {
+        if self.manifest_initialized.load(Ordering::Acquire) {
             return Ok(());
         }
-        if !self.storage.manifest_exists()? {
-            let now = now_rfc3339()?;
-            let manifest = default_manifest(&now);
-            self.storage.write_manifest(&manifest)?;
-        }
-        self.manifest_initialized = true;
-        Ok(())
+        self.with_resource_lock("manifest".to_string(), || {
+            if self.manifest_initialized.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            if !self.storage.manifest_exists()? {
+                let now = now_rfc3339()?;
+                let manifest = default_manifest(&now);
+                self.storage.write_manifest(&manifest)?;
+            }
+            self.manifest_initialized.store(true, Ordering::Release);
+            Ok(())
+        })
     }
 
     pub fn pending_tasks(&self) -> Result<Vec<PendingTask>> {
@@ -137,12 +175,22 @@ impl<S: Storage> MemoryEngine<S> {
             .collect())
     }
 
-    pub fn upsert_core_fact(&mut self, input: CoreFactInput) -> Result<CoreFactUpsertResult> {
+    pub fn upsert_core_fact(&self, input: CoreFactInput) -> Result<CoreFactUpsertResult> {
         validate_core_fact_input(&input)?;
         self.ensure_manifest()?;
 
-        let now = now_rfc3339()?;
         let category_name = normalize_whitespace(&input.category);
+        self.with_resource_lock(core_lock_key(&category_name), || {
+            self.upsert_core_fact_unlocked(input, category_name)
+        })
+    }
+
+    fn upsert_core_fact_unlocked(
+        &self,
+        input: CoreFactInput,
+        category_name: String,
+    ) -> Result<CoreFactUpsertResult> {
+        let now = now_rfc3339()?;
         let scope = normalize_optional_string(input.scope.as_deref());
         let fact_text = normalize_whitespace(&input.text);
         let mut category = self.storage.read_core_store_category(&category_name)?;
@@ -201,7 +249,7 @@ impl<S: Storage> MemoryEngine<S> {
         })
     }
 
-    pub fn patch_core_fact(&mut self, input: CoreFactPatchInput) -> Result<CoreFactPatchResult> {
+    pub fn patch_core_fact(&self, input: CoreFactPatchInput) -> Result<CoreFactPatchResult> {
         validate_core_fact_patch_input(&input)?;
         self.ensure_manifest()?;
 
@@ -210,13 +258,35 @@ impl<S: Storage> MemoryEngine<S> {
         let patch_text = input.text.as_deref().map(normalize_whitespace);
         let patch_tags = input.tags.map(unique_strings);
 
-        for mut category in self.storage.read_core_store_categories()? {
+        let category_name = self
+            .storage
+            .read_core_store_categories()?
+            .into_iter()
+            .find(|category| {
+                category
+                    .facts
+                    .iter()
+                    .any(|fact| fact.core_fact_id == input.core_fact_id && fact.scope == scope)
+            })
+            .map(|category| category.category)
+            .ok_or_else(|| {
+                MemoryEngineError::Validation(format!(
+                    "core fact not found for requested scope: {}",
+                    input.core_fact_id
+                ))
+            })?;
+
+        self.with_resource_lock(core_lock_key(&category_name), || {
+            let mut category = self.storage.read_core_store_category(&category_name)?;
             let Some(fact) = category
                 .facts
                 .iter_mut()
                 .find(|fact| fact.core_fact_id == input.core_fact_id && fact.scope == scope)
             else {
-                continue;
+                return Err(MemoryEngineError::Validation(format!(
+                    "core fact not found for requested scope: {}",
+                    input.core_fact_id
+                )));
             };
 
             if let Some(text) = patch_text.as_ref() {
@@ -238,23 +308,15 @@ impl<S: Storage> MemoryEngine<S> {
             let category_name = category.category.clone();
             self.storage.write_core_store_category(&category)?;
 
-            return Ok(CoreFactPatchResult {
+            Ok(CoreFactPatchResult {
                 schema_version: CORE_FACT_PATCH_RESULT_SCHEMA_VERSION.to_string(),
                 category: category_name,
                 fact: patched_fact,
-            });
-        }
-
-        Err(MemoryEngineError::Validation(format!(
-            "core fact not found for requested scope: {}",
-            input.core_fact_id
-        )))
+            })
+        })
     }
 
-    pub fn core_context_package(
-        &mut self,
-        request: CoreContextRequest,
-    ) -> Result<CoreContextPackage> {
+    pub fn core_context_package(&self, request: CoreContextRequest) -> Result<CoreContextPackage> {
         validate_core_context_request(&request)?;
         self.ensure_manifest()?;
 
@@ -388,7 +450,7 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(facts)
     }
 
-    pub fn sleep(&mut self, session_id: &str) -> Result<SleepStage1Result> {
+    pub fn sleep(&self, session_id: &str) -> Result<SleepStage1Result> {
         if session_id.trim().is_empty() {
             return Err(MemoryEngineError::Validation(
                 "sleep session_id must not be empty".to_string(),
@@ -396,60 +458,63 @@ impl<S: Storage> MemoryEngine<S> {
         }
         self.ensure_manifest()?;
 
-        let session = self.storage.read_session(session_id)?;
-        if session.events.is_empty() {
-            return Err(MemoryEngineError::Validation(format!(
-                "session has no events: {session_id}"
-            )));
-        }
+        self.with_resource_lock(session_lock_key(session_id), || {
+            let session = self.storage.read_session(session_id)?;
+            if session.events.is_empty() {
+                return Err(MemoryEngineError::Validation(format!(
+                    "session has no events: {session_id}"
+                )));
+            }
 
-        let archived_event_ids =
-            self.archived_event_ids_for_session(&session.metadata.session_id)?;
-        let unarchived_events = session
-            .events
-            .iter()
-            .filter(|event| !archived_event_ids.contains(&event.event_id))
-            .collect::<Vec<_>>();
-        if unarchived_events.is_empty() {
-            return Err(MemoryEngineError::Validation(format!(
-                "session has no unarchived events: {session_id}"
-            )));
-        }
+            let archived_event_ids =
+                self.archived_event_ids_for_session(&session.metadata.session_id)?;
+            let unarchived_events = session
+                .events
+                .iter()
+                .filter(|event| !archived_event_ids.contains(&event.event_id))
+                .collect::<Vec<_>>();
+            if unarchived_events.is_empty() {
+                return Err(MemoryEngineError::Validation(format!(
+                    "session has no unarchived events: {session_id}"
+                )));
+            }
 
-        let compactable_events = compactable_sleep_events(&unarchived_events, &self.options.sleep);
-        let selected_events = select_sleep_events(&compactable_events, &self.options.sleep);
-        let now = now_rfc3339()?;
-        let archive_id = new_id("archive")?;
-        let archive_entry =
-            build_preliminary_archive(&session, &selected_events, &archive_id, &now);
-        self.storage.write_archive_entry(&archive_entry)?;
+            let compactable_events =
+                compactable_sleep_events(&unarchived_events, &self.options.sleep);
+            let selected_events = select_sleep_events(&compactable_events, &self.options.sleep);
+            let now = now_rfc3339()?;
+            let archive_id = new_id("archive")?;
+            let archive_entry =
+                build_preliminary_archive(&session, &selected_events, &archive_id, &now);
+            self.storage.write_archive_entry(&archive_entry)?;
 
-        let pending_task = build_sleep_compression_task(
-            &session,
-            &selected_events,
-            &archive_entry,
-            &self.options.sleep,
-            &now,
-        )?;
-        let memory_unit_task =
-            build_memory_unit_task(&session, &selected_events, &archive_entry, &now)?;
-        self.storage.save_task(&pending_task)?;
-        self.storage.save_task(&memory_unit_task)?;
+            let pending_task = build_sleep_compression_task(
+                &session,
+                &selected_events,
+                &archive_entry,
+                &self.options.sleep,
+                &now,
+            )?;
+            let memory_unit_task =
+                build_memory_unit_task(&session, &selected_events, &archive_entry, &now)?;
+            self.storage.save_task(&pending_task)?;
+            self.storage.save_task(&memory_unit_task)?;
 
-        Ok(SleepStage1Result {
-            archive_entry,
-            pending_task,
-            memory_unit_task: Some(memory_unit_task),
-            compact_memory_task: None,
+            Ok(SleepStage1Result {
+                archive_entry,
+                pending_task,
+                memory_unit_task: Some(memory_unit_task),
+                compact_memory_task: None,
+            })
         })
     }
 
-    pub fn begin_sleep_run(&mut self, session_id: &str) -> Result<SleepRun> {
+    pub fn begin_sleep_run(&self, session_id: &str) -> Result<SleepRun> {
         let sleep_result = self.sleep(session_id)?;
         sleep_run_from_stage1(sleep_result)
     }
 
-    pub fn next_sleep_batch(&mut self, mut run: SleepRun) -> Result<SleepRunStep> {
+    pub fn next_sleep_batch(&self, mut run: SleepRun) -> Result<SleepRunStep> {
         validate_sleep_run(&run)?;
         advance_sleep_run_stage(&mut run)?;
 
@@ -465,7 +530,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub fn submit_sleep_batch(
-        &mut self,
+        &self,
         mut run: SleepRun,
         responses: Vec<LlmResponse>,
     ) -> Result<SleepRunStep> {
@@ -495,7 +560,7 @@ impl<S: Storage> MemoryEngine<S> {
         self.next_sleep_batch(run)
     }
 
-    pub fn finish_sleep_run(&mut self, mut run: SleepRun) -> Result<SleepOutcome> {
+    pub fn finish_sleep_run(&self, mut run: SleepRun) -> Result<SleepOutcome> {
         validate_sleep_run(&run)?;
         advance_sleep_run_stage(&mut run)?;
         if run.stage != SleepRunStage::ReadyToFinish {
@@ -504,52 +569,56 @@ impl<S: Storage> MemoryEngine<S> {
             ));
         }
 
-        let mut sleep_result = assemble_sleep_compression_from_tracks(&run)?;
-        if let Some(gist) = run
-            .consolidator_gist
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            sleep_result.gist = gist.to_string();
-        }
-        if let Some(narrative) = run
-            .consolidator_narrative
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            sleep_result.narrative = narrative.to_string();
-        }
-        apply_sleep_run_tags(&mut sleep_result, &run);
+        let session_id = run.session_id.clone();
+        self.with_resource_lock(session_lock_key(&session_id), || {
+            let mut sleep_result = assemble_sleep_compression_from_tracks(&run)?;
+            if let Some(gist) = run
+                .consolidator_gist
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                sleep_result.gist = gist.to_string();
+            }
+            if let Some(narrative) = run
+                .consolidator_narrative
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                sleep_result.narrative = narrative.to_string();
+            }
+            apply_sleep_run_tags(&mut sleep_result, &run);
 
-        let mut archive_entry = self.resume_sleep_compression(&run.sleep_task_id, sleep_result)?;
+            let mut archive_entry =
+                self.resume_sleep_compression(&run.sleep_task_id, sleep_result)?;
 
-        if let Some(memory_unit_task_id) = run.memory_unit_task_id.clone() {
-            let memory_unit_result = run
-                .memory_unit_result
-                .clone()
-                .map(serde_json::from_value::<MemoryUnitPassResult>)
-                .transpose()?
-                .unwrap_or_else(|| empty_memory_unit_result(&run.archive_id));
-            archive_entry =
-                self.resume_memory_unit_pass(&memory_unit_task_id, memory_unit_result)?;
-        }
+            if let Some(memory_unit_task_id) = run.memory_unit_task_id.clone() {
+                let memory_unit_result = run
+                    .memory_unit_result
+                    .clone()
+                    .map(serde_json::from_value::<MemoryUnitPassResult>)
+                    .transpose()?
+                    .unwrap_or_else(|| empty_memory_unit_result(&run.archive_id));
+                archive_entry =
+                    self.resume_memory_unit_pass(&memory_unit_task_id, memory_unit_result)?;
+            }
 
-        let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
-        run.stage = SleepRunStage::Finished;
+            let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
+            run.stage = SleepRunStage::Finished;
 
-        Ok(SleepOutcome {
-            archive_entry,
-            core_summary,
-            failed_passes: run.failed_passes,
-            completion_mode: run
-                .completion_mode
-                .unwrap_or_else(|| "consolidated".to_string()),
+            Ok(SleepOutcome {
+                archive_entry,
+                core_summary,
+                failed_passes: run.failed_passes,
+                completion_mode: run
+                    .completion_mode
+                    .unwrap_or_else(|| "consolidated".to_string()),
+            })
         })
     }
 
-    pub fn seed_core_from_archives(&mut self) -> Result<CoreArchiveSeedSummary> {
+    pub fn seed_core_from_archives(&self) -> Result<CoreArchiveSeedSummary> {
         self.ensure_manifest()?;
         let mut summary = CoreArchiveSeedSummary::default();
         let archives = self.storage.read_archive(&ArchiveFilters::default())?;
@@ -558,7 +627,10 @@ impl<S: Storage> MemoryEngine<S> {
             .filter(|archive| archive.status == ArchiveStatus::Complete)
         {
             summary.archives += 1;
-            let archive_summary = self.apply_archive_personal_signal_bridge(&archive)?;
+            let archive_summary = self
+                .with_resource_lock(session_lock_key(&archive.source_session_id), || {
+                    self.apply_archive_personal_signal_bridge(&archive)
+                })?;
             summary.created += archive_summary.created;
             summary.updated += archive_summary.updated;
             summary.skipped += archive_summary.skipped;
@@ -567,7 +639,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     fn apply_archive_personal_signal_bridge(
-        &mut self,
+        &self,
         archive: &ArchiveEntry,
     ) -> Result<CoreSignalSummary> {
         let mut summary = CoreSignalSummary::default();
@@ -597,26 +669,38 @@ impl<S: Storage> MemoryEngine<S> {
                 || category.is_empty()
                 || signal.confidence < 0.85
                 || !has_user_source
-                || self.is_near_duplicate_core_fact(&category, scope, &text)?
             {
                 summary.skipped += 1;
                 continue;
             }
 
-            let result = self.upsert_core_fact(CoreFactInput {
-                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
-                category: category.clone(),
-                scope: scope.map(str::to_string),
-                text,
-                confidence: signal.confidence,
-                tags: vec![
-                    "archive_signal".to_string(),
-                    "signal_category".to_string(),
-                    format!("signal_category:{category}"),
-                ],
-                source_archive_ids: vec![archive.archive_id.clone()],
-                source_candidate_id: None,
+            let result = self.with_resource_lock(core_lock_key(&category), || {
+                if self.is_near_duplicate_core_fact(&category, scope, &text)? {
+                    return Ok(None);
+                }
+                self.upsert_core_fact_unlocked(
+                    CoreFactInput {
+                        schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                        category: category.clone(),
+                        scope: scope.map(str::to_string),
+                        text,
+                        confidence: signal.confidence,
+                        tags: vec![
+                            "archive_signal".to_string(),
+                            "signal_category".to_string(),
+                            format!("signal_category:{category}"),
+                        ],
+                        source_archive_ids: vec![archive.archive_id.clone()],
+                        source_candidate_id: None,
+                    },
+                    category.clone(),
+                )
+                .map(Some)
             })?;
+            let Some(result) = result else {
+                summary.skipped += 1;
+                continue;
+            };
             if result.created {
                 summary.created += 1;
             } else {
@@ -654,7 +738,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub fn resume_sleep_compression(
-        &mut self,
+        &self,
         task_id: &str,
         result: SleepCompressionResult,
     ) -> Result<ArchiveEntry> {
@@ -711,7 +795,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub fn resume_compact_memory_pass(
-        &mut self,
+        &self,
         task_id: &str,
         compact_memory: &str,
     ) -> Result<ArchiveEntry> {
@@ -755,7 +839,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub fn resume_memory_unit_pass(
-        &mut self,
+        &self,
         task_id: &str,
         result: MemoryUnitPassResult,
     ) -> Result<ArchiveEntry> {
@@ -837,10 +921,20 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(archive_entry)
     }
 
-    pub fn recall(&mut self, query: RecallQuery) -> Result<RecallResult> {
+    pub fn recall(&self, query: RecallQuery) -> Result<RecallResult> {
         validate_recall_query(&query)?;
         self.ensure_manifest()?;
 
+        if let Some(session_id) = query.session_id.clone() {
+            self.with_resource_lock(session_lock_key(&session_id), || {
+                self.recall_unlocked(query)
+            })
+        } else {
+            self.with_resource_lock("archive:all".to_string(), || self.recall_unlocked(query))
+        }
+    }
+
+    fn recall_unlocked(&self, query: RecallQuery) -> Result<RecallResult> {
         let created_at = query.created_at.clone().map_or_else(now_rfc3339, Ok)?;
         let archive_enabled = query.filters.source_layers.is_empty()
             || query
@@ -1796,9 +1890,12 @@ fn preliminary_gist(events: &[&StoredEvent]) -> String {
         .collect::<Vec<_>>();
 
     if texts.is_empty() {
-        format!("Попередній спогад із {} події(й).", events.len())
+        format!(
+            "РџРѕРїРµСЂРµРґРЅС–Р№ СЃРїРѕРіР°Рґ С–Р· {} РїРѕРґС–С—(Р№).",
+            events.len()
+        )
     } else {
-        format!("Попередній спогад: {}.", texts.join(" / "))
+        format!("РџРѕРїРµСЂРµРґРЅС–Р№ СЃРїРѕРіР°Рґ: {}.", texts.join(" / "))
     }
 }
 
@@ -1819,12 +1916,12 @@ fn preliminary_narrative(session_id: &str, events: &[&StoredEvent]) -> String {
 
     if lines.is_empty() {
         format!(
-            "Попередній архівний спогад із сесії {session_id}, створений алгоритмічно з {} події(й).",
+            "РџРѕРїРµСЂРµРґРЅС–Р№ Р°СЂС…С–РІРЅРёР№ СЃРїРѕРіР°Рґ С–Р· СЃРµСЃС–С— {session_id}, СЃС‚РІРѕСЂРµРЅРёР№ Р°Р»РіРѕСЂРёС‚РјС–С‡РЅРѕ Р· {} РїРѕРґС–С—(Р№).",
             events.len()
         )
     } else {
         format!(
-            "Попередній архівний спогад із сесії {session_id}. Ключові події: {}",
+            "РџРѕРїРµСЂРµРґРЅС–Р№ Р°СЂС…С–РІРЅРёР№ СЃРїРѕРіР°Рґ С–Р· СЃРµСЃС–С— {session_id}. РљР»СЋС‡РѕРІС– РїРѕРґС–С—: {}",
             lines.join(" | ")
         )
     }
@@ -2400,7 +2497,8 @@ fn assemble_sleep_compression_from_tracks(run: &SleepRun) -> Result<SleepCompres
     let mut result = SleepCompressionResult {
         schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
         archive_id: run.archive_id.clone(),
-        gist: "Сесія збережена як набір важливих спогадів.".to_string(),
+        gist: "РЎРµСЃС–СЏ Р·Р±РµСЂРµР¶РµРЅР° СЏРє РЅР°Р±С–СЂ РІР°Р¶Р»РёРІРёС… СЃРїРѕРіР°РґС–РІ."
+            .to_string(),
         narrative: neutral_narrative_from_tracks(
             &serde_json::from_value::<Vec<crate::archive::EmotionalMarker>>(
                 emotional_markers.clone(),
@@ -2452,7 +2550,7 @@ fn neutral_narrative_from_tracks(
             .map(|signal| signal.text.as_str())
             .collect::<Vec<_>>()
             .join("; ");
-        parts.push(format!("Особисті сигнали: {signals}."));
+        parts.push(format!("РћСЃРѕР±РёСЃС‚С– СЃРёРіРЅР°Р»Рё: {signals}."));
     }
     if !emotional_markers.is_empty() {
         let markers = emotional_markers
@@ -2461,7 +2559,9 @@ fn neutral_narrative_from_tracks(
             .map(|marker| format!("{} ({})", marker.target, marker.affect))
             .collect::<Vec<_>>()
             .join("; ");
-        parts.push(format!("Емоційно помітні моменти: {markers}."));
+        parts.push(format!(
+            "Р•РјРѕС†С–Р№РЅРѕ РїРѕРјС–С‚РЅС– РјРѕРјРµРЅС‚Рё: {markers}."
+        ));
     }
     if !topic_thread.is_empty() {
         let topics = topic_thread
@@ -2476,11 +2576,11 @@ fn neutral_narrative_from_tracks(
             })
             .collect::<Vec<_>>()
             .join("; ");
-        parts.push(format!("Теми розмови: {topics}."));
+        parts.push(format!("РўРµРјРё СЂРѕР·РјРѕРІРё: {topics}."));
     }
 
     if parts.is_empty() {
-        "Сесія була стиснута у структуровані треки, але без виразних довготривалих сигналів."
+        "РЎРµСЃС–СЏ Р±СѓР»Р° СЃС‚РёСЃРЅСѓС‚Р° Сѓ СЃС‚СЂСѓРєС‚СѓСЂРѕРІР°РЅС– С‚СЂРµРєРё, Р°Р»Рµ Р±РµР· РІРёСЂР°Р·РЅРёС… РґРѕРІРіРѕС‚СЂРёРІР°Р»РёС… СЃРёРіРЅР°Р»С–РІ."
             .to_string()
     } else {
         parts.join(" ")
@@ -2554,12 +2654,12 @@ fn meaningful_tokens(text: &str) -> BTreeSet<String> {
         "and",
         "this",
         "that",
-        "користувач",
-        "користувача",
-        "користувачу",
-        "дуже",
-        "любить",
-        "цікавиться",
+        "РєРѕСЂРёСЃС‚СѓРІР°С‡",
+        "РєРѕСЂРёСЃС‚СѓРІР°С‡Р°",
+        "РєРѕСЂРёСЃС‚СѓРІР°С‡Сѓ",
+        "РґСѓР¶Рµ",
+        "Р»СЋР±РёС‚СЊ",
+        "С†С–РєР°РІРёС‚СЊСЃСЏ",
     ];
     let stop_words = stop_words.into_iter().collect::<BTreeSet<_>>();
     tokenize(text)
@@ -2688,6 +2788,20 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     let mut truncated = text.chars().take(max_chars).collect::<String>();
     truncated.push_str("...");
     truncated
+}
+
+fn session_lock_key(session_id: &str) -> String {
+    format!("session:{session_id}")
+}
+
+fn core_lock_key(category: &str) -> String {
+    format!("core:{category}")
+}
+
+fn lock_resource<'a>(resource: &'a Arc<Mutex<()>>, key: &str) -> Result<MutexGuard<'a, ()>> {
+    resource
+        .lock()
+        .map_err(|_| MemoryEngineError::Storage(format!("resource lock was poisoned: {key}")))
 }
 
 fn new_id(prefix: &str) -> Result<String> {

@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn engine_ingest_stores_event_and_updates_session_files() {
     let root = unique_temp_dir("engine_ingest_stores_event_and_updates_session_files");
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
-    let mut engine = MemoryEngine::new(storage);
+    let engine = MemoryEngine::new(storage);
 
     let ingest_result = engine
         .ingest(IngestEvent {
@@ -62,7 +62,7 @@ fn engine_ingest_stores_event_and_updates_session_files() {
 fn engine_ingest_rejects_wrong_schema_version() {
     let root = unique_temp_dir("engine_ingest_rejects_wrong_schema_version");
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
-    let mut engine = MemoryEngine::new(storage);
+    let engine = MemoryEngine::new(storage);
 
     let error = engine
         .ingest(IngestEvent {
@@ -92,11 +92,11 @@ fn engine_ingest_rejects_wrong_schema_version() {
 fn engine_ingest_does_not_trigger_sleep_from_event_count() {
     let root = unique_temp_dir("engine_ingest_does_not_trigger_sleep_from_event_count");
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
-    let mut engine = MemoryEngine::new(storage);
+    let engine = MemoryEngine::new(storage);
 
     let mut last = None;
     for index in 0..60 {
-        last = Some(ingest_numbered_event(&mut engine, index));
+        last = Some(ingest_numbered_event(&engine, index));
     }
 
     assert_eq!(
@@ -112,7 +112,7 @@ fn engine_ingest_does_not_trigger_sleep_from_event_count() {
 fn engine_ingest_appends_session_markdown_without_rewriting_header() {
     let root = unique_temp_dir("engine_ingest_appends_session_markdown_without_rewriting_header");
     let storage = FileStorage::with_host_id(&root, "telegram_bot");
-    let mut engine = MemoryEngine::new(storage);
+    let engine = MemoryEngine::new(storage);
 
     for index in 0..3 {
         engine
@@ -147,7 +147,7 @@ fn engine_ingest_appends_session_markdown_without_rewriting_header() {
 }
 
 fn ingest_numbered_event(
-    engine: &mut MemoryEngine<FileStorage>,
+    engine: &MemoryEngine<FileStorage>,
     index: usize,
 ) -> memory_engine::IngestResult {
     engine

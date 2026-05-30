@@ -216,7 +216,7 @@ impl Storage for FileStorage {
         read_json(&self.manifest_path())
     }
 
-    fn write_manifest(&mut self, manifest: &Manifest) -> Result<()> {
+    fn write_manifest(&self, manifest: &Manifest) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.manifest_path(), manifest)
     }
@@ -227,7 +227,7 @@ impl Storage for FileStorage {
         Ok(SessionRecord { metadata, events })
     }
 
-    fn append_event(&mut self, session_id: &str, event: &StoredEvent) -> Result<()> {
+    fn append_event(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
         self.ensure_layout()?;
         fs::create_dir_all(self.session_dir(session_id))?;
 
@@ -246,12 +246,12 @@ impl Storage for FileStorage {
         Ok(())
     }
 
-    fn write_archive_entry(&mut self, entry: &ArchiveEntry) -> Result<()> {
+    fn write_archive_entry(&self, entry: &ArchiveEntry) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.archive_entry_path(entry), entry)
     }
 
-    fn update_archive_entry(&mut self, archive_id: &str, entry: &ArchiveEntry) -> Result<()> {
+    fn update_archive_entry(&self, archive_id: &str, entry: &ArchiveEntry) -> Result<()> {
         self.ensure_layout()?;
         let path = self.archive_entry_path_by_id(archive_id)?;
         atomic_write_json(&path, entry)
@@ -277,7 +277,7 @@ impl Storage for FileStorage {
         Ok(entries)
     }
 
-    fn write_memory_unit(&mut self, unit: &MemoryUnit) -> Result<()> {
+    fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.memory_unit_path(&unit.memory_unit_id), unit)
     }
@@ -326,17 +326,17 @@ impl Storage for FileStorage {
         Ok(categories)
     }
 
-    fn write_core_store_category(&mut self, category: &CoreStoreCategory) -> Result<()> {
+    fn write_core_store_category(&self, category: &CoreStoreCategory) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.core_store_path(&category.category), category)
     }
 
-    fn write_candidate_belief(&mut self, candidate: &CandidateBelief) -> Result<()> {
+    fn write_candidate_belief(&self, candidate: &CandidateBelief) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.candidate_path(&candidate.candidate_id), candidate)
     }
 
-    fn save_task(&mut self, task: &crate::tasks::PendingTask) -> Result<()> {
+    fn save_task(&self, task: &crate::tasks::PendingTask) -> Result<()> {
         self.ensure_layout()?;
         let active_path = self.task_path(&task.task_id);
         let completed_path = self.completed_task_path(&task.task_id);
@@ -377,12 +377,12 @@ impl Storage for FileStorage {
         Ok(tasks)
     }
 
-    fn begin_journaled_operation(&mut self, operation: &JournalOperation) -> Result<()> {
+    fn begin_journaled_operation(&self, operation: &JournalOperation) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.journal_path(&operation.op_id), operation)
     }
 
-    fn complete_journaled_operation(&mut self, op_id: &str) -> Result<()> {
+    fn complete_journaled_operation(&self, op_id: &str) -> Result<()> {
         self.ensure_layout()?;
         let path = self.journal_path(op_id);
         let mut operation: JournalOperation = read_json(&path)?;

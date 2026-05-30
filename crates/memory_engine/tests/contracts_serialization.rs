@@ -206,7 +206,7 @@ fn sleep_compression_result_validates_basic_shape() {
 #[test]
 fn file_storage_appends_and_reads_session_events() {
     let root = unique_temp_dir("file_storage_appends_and_reads_session_events");
-    let mut storage = FileStorage::with_host_id(&root, "telegram_bot");
+    let storage = FileStorage::with_host_id(&root, "telegram_bot");
 
     let ingest = IngestEvent {
         schema_version: EVENT_SCHEMA_VERSION.to_string(),
