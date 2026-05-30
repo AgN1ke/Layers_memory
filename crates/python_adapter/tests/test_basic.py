@@ -109,7 +109,7 @@ def test_explicit_sleep_preserves_active_tail(engine: memory_engine.MemoryEngine
     assert sleep_result["archive_entry"]["source_session_id"] == "sleep_pressure_session"
     assert len(sleep_result["archive_entry"]["source_event_ids"]) == 35
     assert sleep_result["pending_task"]["task_type"] == "sleep_compression"
-    assert sleep_result["compact_memory_task"]["task_type"] == "compact_memory_pass"
+    assert sleep_result["memory_unit_task"]["task_type"] == "memory_unit_pass"
 
     engine.resume_sleep_compression(
         sleep_result["pending_task"]["task_id"],
@@ -128,9 +128,22 @@ def test_explicit_sleep_preserves_active_tail(engine: memory_engine.MemoryEngine
             }
         ),
     )
-    engine.resume_compact_memory_pass(
-        sleep_result["compact_memory_task"]["task_id"],
-        "Події 0-34 -> старша частина сесії стиснулась у коротку пам'ять.",
+    engine.resume_memory_unit_pass(
+        sleep_result["memory_unit_task"]["task_id"],
+        json.dumps(
+            {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": sleep_result["archive_entry"]["archive_id"],
+                "memory_units": [
+                    {
+                        "thesis": "Події 0-34 -> старша частина сесії стиснулась у коротку пам'ять.",
+                        "source_event_ids": sleep_result["archive_entry"]["source_event_ids"][:3],
+                        "tags": ["sleep"],
+                        "weight": 0.85,
+                    }
+                ],
+            }
+        ),
     )
 
     completed_package = json.loads(
@@ -166,21 +179,21 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
     sleep_result = json.loads(engine.sleep("session_b"))
     archive = sleep_result["archive_entry"]
     task = sleep_result["pending_task"]
-    compact_task = sleep_result["compact_memory_task"]
+    memory_unit_task = sleep_result["memory_unit_task"]
 
     assert archive["status"] == "preliminary"
     assert archive["archive_id"].startswith("archive_")
     assert task["task_type"] == "sleep_compression"
     assert task["prompt_id"] == "sleep_compression"
     assert task["role_hint"] == "balanced"
-    assert compact_task["task_type"] == "compact_memory_pass"
-    assert compact_task["prompt_id"] == "compact_memory_pass"
+    assert memory_unit_task["task_type"] == "memory_unit_pass"
+    assert memory_unit_task["prompt_id"] == "memory_unit_pass"
 
     pending = json.loads(engine.pending_tasks())
     assert len(pending) == 2
     assert {item["task_id"] for item in pending} == {
         task["task_id"],
-        compact_task["task_id"],
+        memory_unit_task["task_id"],
     }
 
     llm_result = {
@@ -204,9 +217,29 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
     assert updated["gist"] == llm_result["gist"]
     assert updated["prompt_id"] == "sleep_compression"
 
-    engine.resume_compact_memory_pass(
-        compact_task["task_id"],
-        "Берлін -> користувач повідомив стабільний контекст проживання.",
+    unit_updated = json.loads(
+        engine.resume_memory_unit_pass(
+            memory_unit_task["task_id"],
+            json.dumps(
+                {
+                    "schema_version": "memory_units_result.v1",
+                    "archive_id": archive["archive_id"],
+                    "memory_units": [
+                        {
+                            "thesis": "Берлін -> користувач повідомив стабільний контекст проживання.",
+                            "source_event_ids": archive["source_event_ids"],
+                            "evidence": "Користувач прямо повідомив, що живе в Берліні.",
+                            "tags": ["location"],
+                            "weight": 0.95,
+                        }
+                    ],
+                }
+            ),
+        )
+    )
+    assert unit_updated["memory_units"][0]["memory_unit_id"].startswith("mu_")
+    assert unit_updated["compact_memory"] == (
+        "Берлін -> користувач повідомив стабільний контекст проживання."
     )
     assert json.loads(engine.pending_tasks()) == []
 
@@ -229,6 +262,140 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
     )
     assert recall["items"][0]["gist"] == recall["items"][0]["compact_memory"]
     assert "narrative" not in recall["items"][0]
+
+
+def test_sleep_driver_cycle_finishes_archive_and_seeds_core(engine: memory_engine.MemoryEngine):
+    ingest = _ingest(
+        engine,
+        "driver_session",
+        "Я люблю космос.",
+        tags=["personal_fact", "interest"],
+        theme="space_interest",
+        importance_hint="high",
+    )
+    event_id = ingest["stored_event"]["event_id"]
+
+    run = json.loads(engine.begin_sleep_run("driver_session"))
+    step = json.loads(engine.next_sleep_batch(json.dumps(run)))
+    run = step["run"]
+    batch = step["batch"]
+    assert len(batch["requests"]) == 5
+
+    responses = []
+    for request in batch["requests"]:
+        prompt_id = request["prompt_id"]
+        if prompt_id == "memory_unit_pass":
+            payload = {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": run["archive_id"],
+                "memory_units": [
+                    {
+                        "thesis": "Космос -> користувач любить цю тему.",
+                        "source_event_ids": [event_id],
+                        "weight": 0.95,
+                    }
+                ],
+            }
+        elif prompt_id == "sleep_emotional_pass":
+            payload = {
+                "emotional_markers": [
+                    {
+                        "target": "космос",
+                        "affect": "love",
+                        "strength": 0.95,
+                        "source_event_ids": [event_id],
+                    }
+                ]
+            }
+        elif prompt_id == "sleep_topic_thread_pass":
+            payload = {
+                "topic_thread": [
+                    {
+                        "topic": "space_interest",
+                        "summary": "Користувач сказав, що любить космос.",
+                        "source_event_ids": [event_id],
+                    }
+                ]
+            }
+        elif prompt_id == "sleep_personal_signal_pass":
+            payload = {
+                "personal_signals": [
+                    {
+                        "text": "Користувач любить космос.",
+                        "category": "interest",
+                        "confidence": 0.95,
+                        "source_event_ids": [event_id],
+                    }
+                ]
+            }
+        elif prompt_id == "sleep_relational_pass":
+            payload = {"relational_tone": None}
+        else:
+            raise AssertionError(f"unexpected prompt_id: {prompt_id}")
+        responses.append(
+            {
+                "status": "ok",
+                "request_id": request["request_id"],
+                "text": json.dumps(payload, ensure_ascii=False),
+            }
+        )
+
+    step = json.loads(engine.submit_sleep_batch(json.dumps(run), json.dumps(responses)))
+    run = step["run"]
+    batch = step["batch"]
+    assert [request["prompt_id"] for request in batch["requests"]] == ["sleep_consolidator"]
+    assert batch["requests"][0]["expected_output_schema"] == "consolidator_text.v1"
+
+    consolidated = {
+        "schema_version": "sleep_compression_result.v1",
+        "archive_id": run["archive_id"],
+        "gist": "Користувач сказав, що любить космос.",
+        "narrative": "Користувач прямо повідомив стабільний інтерес до космосу.",
+        "compact_memory": "Космос -> користувач любить цю тему.",
+        "facts": [],
+        "quotes": [],
+        "tags": ["space_interest"],
+        "theme": "space_interest",
+        "weight": 0.95,
+        "links": [],
+        "emotional_markers": [],
+        "topic_thread": [],
+        "personal_signals": [
+            {
+                "text": "Користувач любить космос.",
+                "category": "interest",
+                "confidence": 0.95,
+                "source_event_ids": [event_id],
+            }
+        ],
+        "relational_tone": None,
+    }
+    step = json.loads(
+        engine.submit_sleep_batch(
+            json.dumps(run),
+            json.dumps(
+                [
+                    {
+                        "status": "ok",
+                        "request_id": batch["requests"][0]["request_id"],
+                        "text": (
+                            "GIST: РљРѕСЂРёСЃС‚СѓРІР°С‡ СЃРєР°Р·Р°РІ, "
+                            "С‰Рѕ Р»СЋР±РёС‚СЊ РєРѕСЃРјРѕСЃ.\n\n"
+                            "РљРѕСЂРёСЃС‚СѓРІР°С‡ РїСЂСЏРјРѕ РїРѕРІС–РґРѕРјРёРІ "
+                            "СЃС‚Р°Р±С–Р»СЊРЅРёР№ С–РЅС‚РµСЂРµСЃ РґРѕ РєРѕСЃРјРѕСЃСѓ."
+                        ),
+                    }
+                ]
+            ),
+        )
+    )
+    outcome = json.loads(engine.finish_sleep_run(json.dumps(step["run"])))
+
+    assert outcome["archive_entry"]["status"] == "complete"
+    assert outcome["completion_mode"] == "consolidated"
+    assert "consolidator_fallback" not in outcome["archive_entry"]["tags"]
+    assert outcome["core_summary"]["created"] == 1
+    assert json.loads(engine.pending_tasks()) == []
 
 
 def test_sleep_resume_persists_multi_track_fields(engine: memory_engine.MemoryEngine):
@@ -314,7 +481,6 @@ def test_core_context_package_combines_session_and_archive(engine: memory_engine
         "archive_id": sleep_result["archive_entry"]["archive_id"],
         "gist": "Розмова про МіГ-15.",
         "narrative": "Користувач питав про радянський винищувач МіГ-15.",
-        "compact_memory": "Обговорили МіГ-15 -> користувач цікавиться військовою авіацією.",
         "facts": [],
         "quotes": [],
         "tags": ["aircraft"],
@@ -325,6 +491,23 @@ def test_core_context_package_combines_session_and_archive(engine: memory_engine
     engine.resume_sleep_compression(
         sleep_result["pending_task"]["task_id"],
         json.dumps(llm_result),
+    )
+    engine.resume_memory_unit_pass(
+        sleep_result["memory_unit_task"]["task_id"],
+        json.dumps(
+            {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": sleep_result["archive_entry"]["archive_id"],
+                "memory_units": [
+                    {
+                        "thesis": "Обговорили МіГ-15 -> користувач цікавиться військовою авіацією.",
+                        "source_event_ids": sleep_result["archive_entry"]["source_event_ids"],
+                        "tags": ["aviation"],
+                        "weight": 0.9,
+                    }
+                ],
+            }
+        ),
     )
     _ingest(
         engine,

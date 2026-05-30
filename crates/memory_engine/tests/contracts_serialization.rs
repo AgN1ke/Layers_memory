@@ -90,6 +90,7 @@ fn archive_entry_serializes_reserved_embedding_fields() {
         compact_memory: Some(
             "Переїзд у Берлін — користувач повідомив стабільний особистий контекст.".to_string(),
         ),
+        memory_units: vec![],
         facts: vec![WeightedFact {
             text: "Користувач живе в Берліні.".to_string(),
             confidence: 0.8,

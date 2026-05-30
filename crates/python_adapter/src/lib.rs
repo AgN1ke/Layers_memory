@@ -6,8 +6,8 @@
 //! No LLM, no provider, no model selection lives here. The Python caller
 //! receives `PendingTask` objects in the returned JSON and is fully
 //! responsible for executing them with whatever provider it chooses, then
-//! submitting results back through `resume_sleep_compression` or
-//! `resume_compact_memory_pass`.
+//! submitting results back through `resume_sleep_compression`,
+//! `resume_memory_unit_pass`, or legacy `resume_compact_memory_pass`.
 
 // PyO3 0.22 `#[pymethods]` expansion produces an `Into<PyErr>` step that
 // clippy 1.95 flags as `useless_conversion`. Silencing this lint locally
@@ -23,8 +23,9 @@ use serde::Serialize;
 
 use ::memory_engine::core_store::{CoreContextRequest, CoreFactInput, CoreFactPatchInput};
 use ::memory_engine::event::IngestEvent;
+use ::memory_engine::llm::{LlmResponse, SleepRun};
 use ::memory_engine::recall::RecallQuery;
-use ::memory_engine::sleep::SleepCompressionResult;
+use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::storage::Storage;
 use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
 
@@ -57,6 +58,33 @@ impl PyMemoryEngine {
         dump_json(&result, "sleep result")
     }
 
+    fn begin_sleep_run(&mut self, session_id: &str) -> PyResult<String> {
+        let run = self.inner.begin_sleep_run(session_id).map_err(map_err)?;
+        dump_json(&run, "sleep run")
+    }
+
+    fn next_sleep_batch(&mut self, run_json: &str) -> PyResult<String> {
+        let run: SleepRun = parse_json(run_json, "sleep run")?;
+        let step = self.inner.next_sleep_batch(run).map_err(map_err)?;
+        dump_json(&step, "sleep run step")
+    }
+
+    fn submit_sleep_batch(&mut self, run_json: &str, responses_json: &str) -> PyResult<String> {
+        let run: SleepRun = parse_json(run_json, "sleep run")?;
+        let responses: Vec<LlmResponse> = parse_json(responses_json, "LLM responses")?;
+        let step = self
+            .inner
+            .submit_sleep_batch(run, responses)
+            .map_err(map_err)?;
+        dump_json(&step, "sleep run step")
+    }
+
+    fn finish_sleep_run(&mut self, run_json: &str) -> PyResult<String> {
+        let run: SleepRun = parse_json(run_json, "sleep run")?;
+        let outcome = self.inner.finish_sleep_run(run).map_err(map_err)?;
+        dump_json(&outcome, "sleep outcome")
+    }
+
     fn read_session(&self, session_id: &str) -> PyResult<String> {
         let session = self
             .inner
@@ -83,6 +111,15 @@ impl PyMemoryEngine {
         let updated = self
             .inner
             .resume_compact_memory_pass(task_id, compact_memory)
+            .map_err(map_err)?;
+        dump_json(&updated, "archive entry")
+    }
+
+    fn resume_memory_unit_pass(&mut self, task_id: &str, result_json: &str) -> PyResult<String> {
+        let result: MemoryUnitPassResult = parse_json(result_json, "memory unit pass result")?;
+        let updated = self
+            .inner
+            .resume_memory_unit_pass(task_id, result)
             .map_err(map_err)?;
         dump_json(&updated, "archive entry")
     }
@@ -114,6 +151,11 @@ impl PyMemoryEngine {
     fn pending_tasks(&self) -> PyResult<String> {
         let tasks = self.inner.pending_tasks().map_err(map_err)?;
         dump_json(&tasks, "pending tasks")
+    }
+
+    fn seed_core_from_archives(&mut self) -> PyResult<String> {
+        let summary = self.inner.seed_core_from_archives().map_err(map_err)?;
+        dump_json(&summary, "core archive seed summary")
     }
 }
 

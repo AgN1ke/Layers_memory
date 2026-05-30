@@ -12,6 +12,7 @@ pub mod error;
 pub mod event;
 pub mod file_storage;
 pub mod journal;
+pub mod llm;
 pub mod manifest;
 pub mod recall;
 pub mod session;
@@ -26,3 +27,7 @@ pub use engine::{
 };
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;
+pub use llm::{
+    CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmErrorKind, LlmRequest, LlmResponse,
+    SleepOutcome, SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
+};

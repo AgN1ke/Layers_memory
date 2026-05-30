@@ -3815,3 +3815,392 @@ Phase A тепер чітко обмежена MemoryUnit foundation: schema/sto
 
 **Перевірки:**
 `git diff --check` — пройшло.
+
+## Запис 67 — 2026-05-24 14:23 +03:00 — Реалізовано Phase A: MemoryUnit foundation і prompt geometry
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після docs-плану треба було перейти від plain-text `compact_memory_pass` до атомарних спогадів. Старий compact text був корисний для prompt, але він не давав окремо валідувати, забувати або просувати один конкретний спогад у Core. Також chat prompt досі не мав структурно видимих меж шарів у вигляді тегів.
+
+**Задум:**
+Зробити `MemoryUnit` базовою одиницею довгої памʼяті: LLM створює стільки units, скільки реально є змістових епізодів, engine присвоює короткий глобальний `mu_...` id, зберігає source ids, вагу, status і fidelity status. `compact_memory` має стати проекцією з `MemoryUnit.thesis`, а не окремим LLM-підсумком. Chat prompt має явно розділяти `state`, `core_memory`, `long_memory`, `short_memory`, `current_user_message` і `assistant_response_slot`.
+
+**Що робили:**
+- `crates/memory_engine/src/archive.rs`: додано `MemoryUnit`, `MemoryUnitStatus`, `FidelityStatus`, поле `ArchiveEntry.memory_units`.
+- `crates/memory_engine/src/sleep.rs`: додано `MemoryUnitPassResult` і `MemoryUnitDraft`.
+- `crates/memory_engine/src/engine.rs`: `sleep()` тепер створює `memory_unit_task`; додано `resume_memory_unit_pass`, projection `compact_memory` із units і legacy-сумісність зі старим `resume_compact_memory_pass`.
+- `crates/memory_engine/src/file_storage.rs`: додано `archive/units`, `archive/forgotten`, запис units і захист archive scanner від читання unit-файлів як `ArchiveEntry`.
+- `crates/python_adapter/src/lib.rs`: додано PyO3-метод `resume_memory_unit_pass`.
+- `prompts/memory_unit_pass.md`: додано новий промпт без fixed quotas.
+- `hosts/telegram_gemini_bot/bot.py`: підключено `memory_unit_pass`, projection із units, збереження units через engine і XML-подібну prompt geometry.
+- `prompts/telegram_chat_system.md`: оновлено інструкції під `<core_memory>`, `<long_memory>`, `<short_memory>`, `<current_user_message>`.
+- `docs/roadmap.md`: Phase A checklist позначено виконаним, live-test лишився відкритим.
+
+**Що зробили детально:**
+Новий sleep flow створює два завдання: повний enrichment (`sleep_compression`) і `memory_unit_pass`. Host виконує `memory_unit_pass`, нормалізує units, а engine зберігає їх як окремі записи в `memory/archive/units/` і одночасно збирає короткий `compact_memory` із тез. У prompt більше не тягнуться технічні ids memory units; `compact_memory` лишається людським текстом. Prompt для чату тепер має чіткі теги шарів, щоб модель не плутала довгу памʼять із поточною розмовою.
+
+**Проблеми чи виклики:**
+PyO3 rebuild спершу не зміг замінити старий `.pyd`, бо два локальні Python-процеси тримали модуль. Процеси зупинено, leftover `~emory_engine` у venv видалено, `maturin develop` повторено успішно. Evidence pack, fidelity validator, reflection candidates і live-test Phase A ще не зроблені.
+
+**Фідбек користувача:**
+Користувач погодив план із уточненнями Claude: prompt geometry має бути структурною; evidence pack має бути малим і програмно зібраним; дорога модель потрібна тільки на Core-критичному малому контексті. Також користувач наполіг не дублювати compact text і memory units.
+
+**Перевірки:**
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `.\.venv\Scripts\maturin.exe develop` у `crates/python_adapter` — пройшло після зупинки Python-процесів.
+- `.\.venv\Scripts\python.exe -m pytest tests` у `crates/python_adapter` — 11 passed.
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `git diff --check` — пройшло.
+
+## Запис 68 — 2026-05-24 16:30 +03:00 — Додано dev-only Telegram notices для sleep
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Під час live-test користувач не бачить, коли sleep поставлено в чергу, коли він почався і коли завершився. Логи це показують, але під час довгої Telegram-розмови треба тимчасовий видимий сигнал прямо в чаті. Водночас ці службові повідомлення не мають потрапляти в памʼять або prod-поведінку.
+
+**Задум:**
+Додати dev-only прапорець `MEMORY_BOT_DEV_SLEEP_NOTICES=1`. Коли він увімкнений, бот надсилає службові Telegram-повідомлення `[dev sleep] queued/started/completed/failed`. Коли прапорець вимкнений, prod-поведінка не змінюється.
+
+**Що робили:**
+- `hosts/telegram_gemini_bot/bot.py`: додано `sleep_notices_enabled`, `send_sleep_notice`, `chat_id_from_session_id`.
+- `SleepRunner`: додано dev-повідомлення про старт, завершення і failure sleep.
+- `queue_sleep_update`: додано dev-повідомлення про queued archive/task/events.
+- `maybe_queue_token_pressure_sleep` і scheduled idle sleep тепер можуть передавати Telegram/chat_id тільки коли dev notices увімкнені.
+
+**Що зробили детально:**
+Службові sleep notices відправляються напряму через `telegram.send_message` і не проходять через `ingest_chat_event`, тому не записуються в `events.jsonl`, не потрапляють у Core/Archive і не входять у prompt context. Для prod це вимкнено за замовчуванням.
+
+**Проблеми чи виклики:**
+Це тимчасовий live-test інструмент. Перед merge/release треба або лишити вимкненим за env-прапорцем, або прибрати, якщо перестане бути корисним.
+
+**Фідбек користувача:**
+Користувач попросив тимчасові системні повідомлення про sleep прямо в Telegram, але без введення цих повідомлень у контекст і без prod-поведінки.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `git diff --check` — пройшло.
+
+## Запис 69 — 2026-05-25 17:40 +03:00 — Виправлено фальшивий token-pressure sleep
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Під час live-test бот двічі запустив `token pressure sleep` після малих фрагментів розмови. У логах raw sleep chunks були приблизно 1091 і 1025 estimated tokens, але sleep тригерився через `current_memory_pressure`.
+
+**Задум:**
+Token-pressure має дивитись на LLM-facing prompt або raw unarchived session, а не на debug-estimate `core_context_package`, який рахує `session_recent + session_trace` як JSON і може завищувати або дублювати active context.
+
+**Що робили:**
+- `hosts/telegram_gemini_bot/bot.py`: `handle_update` тепер один раз формує `chat_prompt_telemetry` і передає її в token-pressure check.
+- `token_pressure_reasons`: прибрано `current_memory_pressure` на основі `estimated_current_memory_tokens`.
+- `token_pressure_reasons`: прибрано `dropped_session_trace` як причину sleep, бо trace trimming не означає втрату recent active dialogue.
+- Додано `prompt_budget_pressure` на основі `compact_prompt_estimated_tokens` і 11k total budget.
+- `unarchived_session_pressure` лишився на основі raw unarchived session проти 7k current memory budget.
+
+**Що зробили детально:**
+Тепер sleep від token pressure запускається, якщо:
+- `budget_exceeded`;
+- dropped саме `session_recent`;
+- LLM-facing prompt наблизився до total budget;
+- raw unarchived session наблизилась до current-memory budget.
+
+Debug package estimate більше не може самостійно покласти бота спати.
+
+**Проблеми чи виклики:**
+Нічний scheduled idle sleep о 4:00 лишається штатним режимом і не є багом. Якщо він заважає під час dev-test, його треба окремо вимикати env-конфігом або підняти threshold для idle sleep, але це інше рішення.
+
+**Фідбек користувача:**
+Користувач помітив, що sleep запускається надто часто при ~1000 токенів raw chat, і справедливо поставив під сумнів token-pressure logic.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `git diff --check` — пройшло.
+
+## Запис 70 — 2026-05-30 02:46 +03:00 — Дозаписано storage-safety сесію, яку пропустили в DEVLOG
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Перед переносом sleep-оркестрації в ядро було небезпечно будувати нову логіку поверх storage-шару з відомими ризиками: фіксований `.tmp` шлях для atomic write, переписування `session.md` цілком на кожен event, нескінченне накопичення completed tasks у гарячій теці `tasks/` і зайвий fsync на похідні файли.
+
+**Задум:**
+Спочатку зробити малу гілку `feature/storage-safety`, яка не змінює поведінку памʼяті, але прибирає ризики корупції, O(n²)-перезапису markdown-сесії і зростання task scan.
+
+**Що робили:**
+- Створено гілку `feature/storage-safety`.
+- У `file_storage.rs` замінено фіксований temporary path на унікальний temp-файл у тій самій директорії.
+- `session.md` переведено на append-only запис замість `read_to_string -> rewrite`.
+- Завершені tasks переносяться в `tasks/completed/`, а hot scan читає тільки активну теку `tasks/`.
+- Для похідних session-файлів зменшено fsync-навантаження; джерелом правди лишається `events.jsonl`.
+
+**Що зробили детально:**
+Коміт `34c34c1 Harden file storage writes and task layout` зафіксував storage-safety checkpoint перед великою B-гілкою. Це не змінило модель памʼяті, але зменшило ризик race/corruption і підготувало storage до майбутньої concurrency-гілки.
+
+**Проблеми чи виклики:**
+Це ще не робить систему multi-writer safe. Per-session locks, `&self`, PyO3 `unsendable` і 1000-session stress test лишаються для окремої `feature/concurrency`.
+
+**Фідбек користувача:**
+Користувач підтвердив стратегічний напрям: памʼять має бути бібліотекою, яку можна проганяти через багато чатів і адаптерів, а не Telegram-ботом із локальним storage-hack.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine` — пройшло.
+- Коміт: `34c34c1 Harden file storage writes and task layout`.
+
+## Запис 71 — 2026-05-30 02:46 +03:00 — Дозаписано core-orchestration сесію: sleep-driver перенесено в ядро
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Головна стратегічна загроза: інтелект памʼяті накопичувався в `hosts/telegram_gemini_bot/bot.py`, а не в Rust core. Sleep pass ordering, semantic retry, fail-soft, fallback, Archive→Core bridge і seeding жили в Telegram-хості. Для Godot або іншого адаптера це означало б повторне написання мозку замість тонкого adapter layer.
+
+**Задум:**
+Перенести оркестрацію sleep у core як pull-based LLM driver. Ядро не має ходити в мережу і не має знати provider/model/key/prompts_dir. Воно має віддавати `LlmRequest`, отримувати текст або помилку від хоста, саме керувати фазами, retry, fallback і складанням архіву.
+
+**Що робили:**
+- Створено гілку `feature/core-orchestration`.
+- Додано `crates/memory_engine/src/llm.rs` з `LlmRequest`, `LlmResponse`, `LlmBatch`, `SleepRun`, `SleepRunStep`, `SleepOutcome`.
+- Додано `begin_sleep_run`, `next_sleep_batch`, `submit_sleep_batch`, `finish_sleep_run`.
+- Archive→Core bridge і `seed_core_from_archives` перенесено в ядро.
+- PyO3 adapter отримав JSON-boundary методи для нового driver.
+- Telegram bot перейшов на цикл: отримати batch від ядра, виконати prompt через Gemini, повернути response в ядро.
+- Старі Python helper-и для sleep orchestration, JSON retry, fallback і Core seeding прибрано з `bot.py`.
+
+**Що зробили детально:**
+Коміт `19e1072 Move sleep orchestration into core driver` змінив межу відповідальності. Host лишився власником provider/model/key/prompt loading/network retry. Core став власником memory graph, semantic retry, fail-soft, task completion, memory-unit completion і Archive→Core bridge. `bot.py` схуд приблизно з 2650 до 1940 рядків.
+
+**Проблеми чи виклики:**
+Це ще не весь ідеальний B-план. `begin_resume` для in-flight driver state і канонічний `render_memory_view` у core лишаються follow-up. Також retry state поки живе в serialized `SleepRun`, а не як повністю durable mid-run attempt state в task files.
+
+**Фідбек користувача:**
+Користувач наполіг, що фундаментально ми будуємо бібліотеку-мозок: текст зайшов, core сформував memory/task/context, host тільки прогнав prompt через будь-яку модель і повернув результат. Цей запис фіксує, що напрям виконано не тільки в HISTORY, а й у DEVLOG.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `maturin develop` у `crates/python_adapter` — пройшло.
+- `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+
+## Запис 72 — 2026-05-30 02:46 +03:00 — Дозаписано live-тест B-гілки перед consolidator-фіксом
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після перенесення sleep-driver у core треба було перевірити не unit-тестами, а живою Telegram-розмовою: чи доходить driver до `finish_sleep_run`, чи sleep не зависає, чи fail-soft працює вже в ядрі, чи Archive→Core bridge реально поповнює Core.
+
+**Задум:**
+Запустити Telegram bot на `feature/core-orchestration` із чистою памʼяттю, дати користувачу провести довгу природну розмову, а потім перевірити `bot.log`, archive files, pending tasks і core store.
+
+**Що робили:**
+- Перебрано PyO3 adapter через `maturin develop`.
+- Запущено один `bot.py` process із ключами з `secrets.local.json`, переданими через env.
+- Памʼять перед тестом очищено в `hosts/telegram_gemini_bot/runtime/memory`, offset і secrets залишено.
+- Після розмови перевірено `bot.log`, `runtime/memory/archive`, `runtime/memory/tasks`, `runtime/memory/core/store`.
+
+**Що зробили детально:**
+Live-тест підтвердив головне: sleep тригерився по token pressure, driver виконував extraction passes, доходив до completion, archives ставали `complete`, pending tasks після завершення не лишались, Core поповнювався з ядра. У логах були приклади `Core signals: 8 new`, gist про кішку Іржу і записи `sleep_driver_completed`.
+
+**Проблеми чи виклики:**
+Виявлено реальний дефект: `sleep_consolidator` стабільно падав після трьох спроб, і sleep завершувався через `fallback_from_tracks`. Це підтвердило, що fail-soft у core працює, але також показало неправильний contract consolidator: модель не повинна повертати великий nested JSON. Цей дефект потім виправлено в Записі 70 і коміті `3474b52`.
+
+**Фідбек користувача:**
+Користувач спочатку справедливо помітив, що я не стер памʼять перед запуском. Памʼять була очищена, бот перезапущений, і тест проведений заново. Пізніше користувач помітив, що не було Telegram sleep notices; перевірка показала, що `dev_sleep_notices=False`, тому sleep ішов тільки в логах, не в чаті.
+
+**Перевірки:**
+- У `bot.log` знайдено `token_pressure_sleep_trigger`, `token pressure sleep queued`, `sleep_driver_completed`.
+- Перевірено, що останній sleep завершився, archive став `complete`, pending tasks очистились.
+- Підтверджено `Core signals` у live-логах.
+- Виявлено стабільний fallback саме на `sleep_consolidator`, що став підставою для prose-only контракту.
+
+## Запис 73 — 2026-05-30 02:44 +03:00 — Consolidator переведено з великого JSON на prose-only контракт
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після live-тесту гілки `feature/core-orchestration` стало видно, що головна межа B-гілки працює: sleep-driver у ядрі доходить до `finish_sleep_run`, fail-soft працює, Archive→Core bridge поповнює Core уже з Rust core. Але `sleep_consolidator` стабільно падав після трьох спроб і sleep завершувався через `fallback_from_tracks`. Причина була не в одиничному JSON parsing bug, а в неправильному контракті: LLM просили повернути повний вкладений `sleep_compression_result.v1`, хоча структурні треки вже були валідовані ядром.
+
+**Задум:**
+Забрати у consolidator структурну відповідальність. LLM має писати тільки людський `gist` і `narrative`, а ядро має детерміновано збирати `SleepCompressionResult` із валідованих треків. Це продовжує принцип "структура в ядрі, проза від LLM" і прибирає крихкість великого JSON на фінальному кроці sleep.
+
+**Що робили:**
+- Переписано `prompts/sleep_consolidator.md`: тепер очікується plain text формат `GIST: ...` + один narrative paragraph, без JSON.
+- Додано schema marker `consolidator_text.v1`.
+- У `SleepRun` замість `consolidated_result: Option<Value>` додано `consolidator_gist` і `consolidator_narrative`.
+- `finish_sleep_run` тепер завжди збирає `SleepCompressionResult` із наявних треків, а потім накладає gist/narrative від consolidator, якщо вони є.
+- Fallback більше не пише narrative типу "Consolidator не повернув валідний результат"; замість цього створюється нейтральний narrative із personal signals, emotional markers і topic thread.
+- Оновлено Rust і PyO3 тести під новий contract.
+- Додано HISTORY-запис `2026-05-30 — Consolidator now returns prose, not archive JSON`.
+
+**Що зробили детально:**
+Успішний consolidator path тепер не може впасти через кому або дужку в JSON, бо не парситься як JSON. Якщо consolidator повертає валідний prose, archive отримує LLM-gist і narrative без `consolidator_fallback`. Якщо consolidator повертає порожній або непридатний текст три рази, driver все одно завершує sleep, archive стає `complete`, треки зберігаються, а audit tags містять `consolidator_fallback` і `pass_failed:sleep_consolidator`.
+
+**Проблеми чи виклики:**
+Під час першого тестового прогону новий fallback-тест падав через невідповідність session id і надто довгий temp path на Windows. Це виправлено: тест використовує `live_session`, а назву тимчасової теки скорочено. Для PyO3 rebuild довелося зупинити запущений Telegram bot process, щоб Windows не тримав старий `.pyd`.
+
+**Фідбек користувача:**
+Користувач справедливо вказав, що DEVLOG не був оновлений після зміни. Це виправлено цим записом. Також користувач прийняв аналіз Claude: проблема consolidator була саме контрактною, а не просто "треба краще парсити JSON".
+
+**Перевірки:**
+- 2026-05-30 02:30–02:35 +03:00: `cargo fmt --check` — пройшло.
+- 2026-05-30 02:30–02:35 +03:00: `cargo test --workspace` — пройшло.
+- 2026-05-30 02:30–02:35 +03:00: `cargo clippy --workspace -- -D warnings` — пройшло.
+- 2026-05-30 02:36 +03:00: `maturin develop` у `crates/python_adapter` — пройшло після зупинки bot process.
+- 2026-05-30 02:36 +03:00: `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+- Коміт: `0201331 Make sleep consolidator prose-only`.
+
+## Запис 74 — 2026-05-30 03:30 +03:00 — Live sleep-check виявив JSON-shaped prose і додано unwrap-захист
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після prose-only consolidator фікса користувач провів кілька живих Telegram sleep-прогонів. Логи показали, що `sleep_driver_completed` тепер доходить до `completion_mode=consolidated` без `failed_passes`, тобто JSON-crash прибрано. Але два нові archive-записи мали `gist: "{"`, а `narrative` містив JSON-подібний об'єкт із полями `gist` і `narrative`. Тобто модель уже не ламала pipeline, але все одно порушувала plain-text формат, і parser занадто довірливо приймав перший рядок як gist.
+
+**Задум:**
+Не повертати великий JSON-контракт для consolidator. Структура архіву й надалі збирається ядром із валідованих треків. Але якщо модель всупереч промпту повернула малий JSON-shaped текст із `gist`/`narrative`, ядро має акуратно розпакувати ці два prose-поля, а не записувати `{` як зміст спогаду.
+
+**Що робили:**
+- Перевірили `bot.log` після live-тесту: нові sleep-и завершились `completion_mode=consolidated`, `failed_passes=none`, Core bridge створив нові сигнали.
+- Перевірили archive-файли і знайшли два записи з `gist: "{"`.
+- У `crates/memory_engine/src/engine.rs` додано unwrap для JSON-shaped consolidator text: якщо відповідь починається з `{` і містить строкові `gist`/`narrative`, ці поля витягуються як prose.
+- Додано нормальне зняття префікса `GIST:` і для plain text, і для JSON-shaped поля `gist`.
+- Додано тест `parse_consolidator_text_unwraps_json_shaped_response`.
+- У `prompts/sleep_consolidator.md` уточнено, що перший непорожній символ відповіді має бути `G` з `GIST:`, а не `{`.
+- Runtime-архіви, створені під час тесту з `gist: "{"`, разово відремонтовано з уже наявного `narrative` JSON-shaped тексту, щоб старий бракований запис не псував наступний recall.
+
+**Що зробили детально:**
+Consolidator лишається prose-only проходом: `expected_output_schema` не повертався до `sleep_compression_result.v1`, і LLM не отримує права будувати архівну структуру. Новий unwrap є fail-safe для реальної поведінки Gemini, який іноді продовжує відповідати об'єктом навіть після прямої інструкції. Це не змінює межу "структура в ядрі, проза від LLM": ядро тільки бере два текстові поля, а решту archive entry все одно збирає з валідованих `memory_units`, `emotional_markers`, `topic_thread`, `personal_signals` і `relational_tone`.
+
+**Проблеми чи виклики:**
+Живий тест показав, що одного промпта недостатньо: модель може виконати змістовну задачу, але порушити форму відповіді. Це не crash, але це semantic formatting defect, який потрапляє прямо в пам'ять. Також виявлено, що DEVLOG-блоки 70-73 були вставлені перед 63-69; після цього запису журнал треба механічно впорядкувати за номерами.
+
+**Фідбек користувача:**
+Користувач повідомив, що "поговорив, декілька сліпів пройшло", і очікував перевірки по логах, а не ручного переказу.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine parse_consolidator_text -- --nocapture` — 2 passed.
+- `cargo test --workspace` — 31 passed.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `maturin develop` у `crates/python_adapter` — пройшло.
+- `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+
+## Запис 75 — 2026-05-30 03:52 +03:00 — Consolidator parser навчився розгортати quoted prose
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після `6e1c3b5` користувач провів контрольний live sleep-check. Перший новий sleep пройшов чисто: `completion_mode=consolidated`, `failed_passes=none`, gist нормальний. Але ручний `/sleep` показав ще один форматний edge-case: Gemini повернув усю prose-відповідь як JSON string literal, тобто quoted `"GIST: ...\n\n..."`. Pipeline не впав, але archive отримав занадто довгий `gist`, що містив і gist, і narrative всередині лапок.
+
+**Задум:**
+Закрити ще один реальний форматний режим на LLM-межі без повернення до великого JSON-контракту. Якщо відповідь consolidator починається з лапки і є валідним JSON string, ядро має розкодувати рядок і повторно застосувати той самий `GIST:` parser.
+
+**Що робили:**
+- У `parse_consolidator_text` додано обробку JSON string literal перед JSON-object unwrap.
+- Додано тест `parse_consolidator_text_unwraps_json_string_response`.
+- `prompts/sleep_consolidator.md` уточнено: не загортати всю відповідь у лапки.
+- Runtime-архів `archive_1780101645326611700_23.json`, який уже отримав quoted gist, разово відремонтовано.
+
+**Що зробили детально:**
+Тепер consolidator boundary покриває п'ять режимів: чистий `GIST:` text; валідний `{ "gist", "narrative" }`; валідний JSON string із `GIST:` всередині; битий JSON/quoted text через retry і fail-soft; порожній текст через retry і fail-soft. Структура архіву лишається в ядрі, а parser лише дістає prose-поверхню з реальної відповіді моделі.
+
+**Проблеми чи виклики:**
+Це ще раз підтвердило, що LLM може порушувати навіть дуже просту форму відповіді. Для B-гілки важливо не продовжувати розширювати можливості consolidator, а саме закрити реальні format boundary failures, які вже проявились у live-тесті.
+
+**Фідбек користувача:**
+Користувач прогнав контрольний sleep-check і передав результат без ручного transcript; перевірка мала виконуватись по runtime logs і archive files.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine parse_consolidator_text -- --nocapture` — 3 passed.
+- `cargo test --workspace` — 32 passed.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `maturin develop` у `crates/python_adapter` — пройшло.
+- `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+
+## Запис 76 — 2026-05-30 12:12 +03:00 — Consolidator отримав output gate для gist
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після кількох live-раундів стало видно, що ми ловимо окремі форми відповіді Gemini на вході consolidator boundary: JSON-object, quoted prose, fences тощо. Це корисно, але не завершує клас проблеми, бо модель може вигадати нову форму і знову записати поганий `gist` у runtime archive. Потрібен gate за якістю виходу, а не ще один unwrap конкретної форми.
+
+**Задум:**
+Залишити каскад input-розпаковувачів для частих форм, але після отримання `(gist, narrative)` перевіряти, що `gist` справді схожий на короткий однорядковий summary. Якщо ні — parser повертає validation error, driver дає consolidator до трьох спроб самовиправлення, а потім переходить на детермінований fallback із треків без overlay. Так брак не потрапляє в сховище.
+
+**Що робили:**
+- Зупинили запущений Telegram bot, щоб не проводити live-check на `5ccbf58` без gate.
+- У `crates/memory_engine/src/engine.rs` додали `validate_consolidator_overlay`, `gist_looks_valid`, `narrative_looks_valid` і marker `consolidator_gist_rejected`.
+- `gist` тепер відхиляється, якщо він порожній, довший за 200 символів, містить newline, починається зі структурного wrapper-а (`{`, `[`, `"`, `` ` ``) або сам парситься як JSON.
+- `narrative` відхиляється, якщо виглядає як raw structured blob.
+- Якщо consolidator остаточно падає саме через поганий gist, archive tags отримують `consolidator_gist_rejected` разом із `consolidator_fallback` і `pass_failed:sleep_consolidator`.
+- Додали unit-тест `parse_consolidator_text_rejects_structural_gist`.
+- Додали сценарний тест `engine_sleep_run_falls_back_when_consolidator_gist_is_rejected`: три погані відповіді consolidator, sleep завершується, archive `complete`, gist береться з детермінованого personal signal, а tags містять `consolidator_gist_rejected`.
+
+**Що зробили детально:**
+Consolidator contract лишився prose-only. Ми не повернули великий JSON-контракт і не дали LLM право будувати archive structure. Output gate стоїть на вузькому місці: тільки текстовий overlay `gist/narrative` може бути прийнятий або відхилений. Якщо overlay відхилено, структура архіву все одно збирається ядром із уже валідованих memory units, emotional markers, topic thread, personal signals і relational tone.
+
+**Проблеми чи виклики:**
+Це свідомий backstop, а не заміна prompt-дисципліни. Якщо gate часто спрацьовуватиме в live logs, треба буде правити `sleep_consolidator.md`, але runtime archive більше не має псуватись новою невідомою формою відповіді.
+
+**Фідбек користувача:**
+Користувач погодився з зауваженням, що нескінченне додавання parser-unwrap-ів не закриває клас проблеми, і попросив зробити output validation до фінального live-check.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine parse_consolidator_text -- --nocapture` — 4 passed.
+- `cargo test -p memory_engine engine_sleep_run_falls_back_when_consolidator_gist_is_rejected -- --nocapture` — 1 passed.
+- `cargo test --workspace` — 34 passed.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `maturin develop` у `crates/python_adapter` — пройшло.
+- `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+
+## Запис 77 — 2026-05-30 12:40 +03:00 — Фінальний live-check B-гілки пройшов happy path
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після перенесення sleep orchestration у ядро і стабілізації consolidator boundary треба було підтвердити не лише unit-тестами, а живим Telegram-прогоном, що новий core-driver завершує sleep, не псує `gist`, не викидає кривий JSON/quoted blob у пам'ять і не ламає Archive→Core bridge.
+
+**Задум:**
+Провести короткий змістовний live-check із ручним `/sleep` після output gate. Міряти вже не виживання pipeline, а якість happy path: чи consolidator дає прийнятний prose-overlay, чи gate не мусить спрацьовувати, чи archive лишається complete.
+
+**Що робили:**
+- Користувач провів Telegram-діалог про наукову сингулярність, біологічне безсмертя, столицю Монголії й динозаврів, після чого викликав `/sleep`.
+- Перевірили `bot.log` і archive-файл `archive_1780133919730594500_15.json`.
+- Звірено completion mode, failed passes, tags, gist, narrative, compact memory, кількість треків і Core bridge summary.
+
+**Що зробили детально:**
+Live sleep завершився як `completion_mode=consolidated`, `failed_passes=none`, `compact_tokens=174`. Archive має `status=complete`, tags `["completion_mode:consolidated", "multi_pass_sleep"]`, без `consolidator_fallback`, без `consolidator_gist_rejected`, без `pass_failed:sleep_consolidator`. `Gist` — нормальний однорядковий текст: "Mykyta expressed his deep desire for biological immortality after a scientific singularity...". `Narrative` — нормальна проза, не JSON і не quoted blob. Core bridge створив 1 новий сигнал, 2 пропустив як дублі або неактивні.
+
+**Проблеми чи виклики:**
+Перед тестом у логах були мережеві збої Telegram polling (`ConnectionResetError`, `getaddrinfo failed`), але після рестарту бот піднявся і коректно прийняв live-повідомлення. Сам memory pipeline у цьому прогоні не показав помилок.
+
+**Фідбек користувача:**
+Користувач повідомив "готово" після тесту, очікуючи перевірки по логах і archive-файлах, а не ручного переказу transcript.
+
+**Перевірки:**
+- `bot.log`: `sleep_driver_completed archive=archive_1780133919730594500_15 completion_mode=consolidated failed_passes=none compact_tokens=174`.
+- `bot.log`: `manual sleep completed ... Core signals: 1 new, 0 updated, 2 skipped`.
+- Archive JSON: `status=complete`.
+- Archive JSON: tags без `consolidator_fallback`, `consolidator_gist_rejected`, `pass_failed:sleep_consolidator`.
+- Archive JSON: `emotional_markers=7`, `personal_signals=3`, `topic_thread=2`.
+
+**Висновок:**
+B-гілка `feature/core-orchestration` функціонально підтверджена: sleep orchestration і Archive→Core bridge працюють із ядра, consolidator boundary має happy path і output-gate fallback, а живий Telegram-прогін не зіпсував пам'ять.
+- Коміт: `19e1072 Move sleep orchestration into core driver`.
