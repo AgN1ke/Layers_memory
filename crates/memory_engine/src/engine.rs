@@ -969,11 +969,20 @@ impl<S: Storage> MemoryEngine<S> {
         let candidate_count = archive_entries.len();
         let mut scored_entries = archive_entries
             .drain(..)
-            .map(|entry| {
-                let scored = score_archive_entry(&entry, &query, &self.options.recall);
-                (entry, scored)
+            .filter_map(|entry| {
+                let scored = score_archive_entry(&entry, &query, &created_at, &self.options.recall);
+                if query
+                    .filters
+                    .min_freshness
+                    .is_some_and(|min_freshness| scored.effective_freshness < min_freshness)
+                {
+                    None
+                } else {
+                    Some((entry, scored))
+                }
             })
             .collect::<Vec<_>>();
+        let filtered_count = scored_entries.len();
 
         scored_entries.sort_by(|(left_entry, left_score), (right_entry, right_score)| {
             right_score
@@ -1008,7 +1017,7 @@ impl<S: Storage> MemoryEngine<S> {
             items,
             debug: query.explain.then_some(RecallDebug {
                 candidate_count,
-                filtered_count: candidate_count,
+                filtered_count,
             }),
         })
     }
@@ -1063,6 +1072,11 @@ pub struct RecallStage1Config {
     pub tag_overlap_bonus: f64,
     pub text_match_bonus: f64,
     pub no_text_match_factor: f64,
+    pub freshness_half_life_days: f64,
+    pub recall_count_log_bonus: f64,
+    pub recent_recall_bonus: f64,
+    pub recent_recall_half_life_days: f64,
+    pub max_recall_boost_factor: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1084,6 +1098,11 @@ impl Default for RecallStage1Config {
             tag_overlap_bonus: 0.1,
             text_match_bonus: 0.5,
             no_text_match_factor: 0.7,
+            freshness_half_life_days: 180.0,
+            recall_count_log_bonus: 0.04,
+            recent_recall_bonus: 0.10,
+            recent_recall_half_life_days: 30.0,
+            max_recall_boost_factor: 1.25,
         }
     }
 }
@@ -1896,12 +1915,14 @@ fn archive_filters_from_recall(filters: &RecallFilters) -> ArchiveFilters {
 #[derive(Debug, Clone, PartialEq)]
 struct ScoredArchiveEntry {
     score: f64,
+    effective_freshness: f64,
     explanation: String,
 }
 
 fn score_archive_entry(
     entry: &ArchiveEntry,
     query: &RecallQuery,
+    reference_at: &str,
     config: &RecallStage1Config,
 ) -> ScoredArchiveEntry {
     let theme_factor = if query.filters.theme.is_some() && query.filters.theme == entry.theme {
@@ -1932,16 +1953,84 @@ fn score_archive_entry(
         1.0 + ((text_overlap as f64 / query_tokens.len() as f64) * config.text_match_bonus)
     };
 
-    let score =
-        (entry.weight * entry.freshness * theme_factor * tag_factor * text_factor).clamp(0.0, 1.0);
+    let freshness_age_days = archive_age_days(entry, reference_at).unwrap_or(0.0);
+    let freshness_decay =
+        half_life_decay_factor(freshness_age_days, config.freshness_half_life_days);
+    let effective_freshness = (entry.freshness.clamp(0.0, 1.0) * freshness_decay).clamp(0.0, 1.0);
+    let recall_boost = recall_boost_factor(entry, reference_at, config);
+
+    let score = (entry.weight
+        * effective_freshness
+        * recall_boost
+        * theme_factor
+        * tag_factor
+        * text_factor)
+        .clamp(0.0, 1.0);
 
     ScoredArchiveEntry {
         score,
+        effective_freshness,
         explanation: format!(
-            "weight {:.2} * freshness {:.2} * theme {:.2} * tags {:.2} * text {:.2}",
-            entry.weight, entry.freshness, theme_factor, tag_factor, text_factor
+            "weight {:.2} * freshness {:.2} * decay {:.2} ({:.1}d) = effective {:.2} * recall {:.2} * theme {:.2} * tags {:.2} * text {:.2}",
+            entry.weight,
+            entry.freshness,
+            freshness_decay,
+            freshness_age_days,
+            effective_freshness,
+            recall_boost,
+            theme_factor,
+            tag_factor,
+            text_factor
         ),
     }
+}
+
+fn archive_age_days(entry: &ArchiveEntry, reference_at: &str) -> Option<f64> {
+    timestamp_age_days(&entry.time_range.end, reference_at)
+        .or_else(|| timestamp_age_days(&entry.updated_at, reference_at))
+        .or_else(|| timestamp_age_days(&entry.created_at, reference_at))
+}
+
+fn timestamp_age_days(older_timestamp: &str, newer_timestamp: &str) -> Option<f64> {
+    let older = parse_rfc3339(older_timestamp)?;
+    let newer = parse_rfc3339(newer_timestamp)?;
+    if newer <= older {
+        return Some(0.0);
+    }
+    Some((newer - older).whole_seconds() as f64 / 86_400.0)
+}
+
+fn parse_rfc3339(timestamp: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(timestamp, &Rfc3339).ok()
+}
+
+fn half_life_decay_factor(age_days: f64, half_life_days: f64) -> f64 {
+    if !age_days.is_finite() || age_days <= 0.0 {
+        return 1.0;
+    }
+    if !half_life_days.is_finite() || half_life_days <= 0.0 {
+        return 1.0;
+    }
+    0.5_f64.powf(age_days / half_life_days).clamp(0.0, 1.0)
+}
+
+fn recall_boost_factor(
+    entry: &ArchiveEntry,
+    reference_at: &str,
+    config: &RecallStage1Config,
+) -> f64 {
+    let count_boost =
+        (entry.recall_count as f64).ln_1p().max(0.0) * config.recall_count_log_bonus.max(0.0);
+    let recent_boost = entry
+        .last_recalled_at
+        .as_deref()
+        .and_then(|last_recalled_at| timestamp_age_days(last_recalled_at, reference_at))
+        .map(|age_days| {
+            config.recent_recall_bonus.max(0.0)
+                * half_life_decay_factor(age_days, config.recent_recall_half_life_days)
+        })
+        .unwrap_or(0.0);
+    (1.0 + count_boost + recent_boost).clamp(1.0, config.max_recall_boost_factor.max(1.0))
 }
 
 fn recall_item_from_archive(
@@ -1980,7 +2069,7 @@ fn recall_item_from_archive(
         tags: entry.tags,
         theme: entry.theme,
         weight: entry.weight,
-        freshness: entry.freshness,
+        freshness: scored.effective_freshness,
         relevance_score: scored.score,
         relevance_explanation: explain.then_some(scored.explanation),
     }

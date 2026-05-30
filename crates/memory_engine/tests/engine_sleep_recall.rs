@@ -321,6 +321,146 @@ fn engine_recall_finds_archived_memory_by_text() {
 }
 
 #[test]
+fn engine_recall_applies_time_decay_to_old_archive_memory() {
+    let root = unique_temp_dir("engine_recall_applies_time_decay_to_old_archive_memory");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut options = EngineOptions::default();
+    options.recall.freshness_half_life_days = 30.0;
+    let mut engine = MemoryEngine::with_options(storage, options);
+
+    ingest_text(
+        &mut engine,
+        "2026-01-01T10:00:00.000Z",
+        "garden memory: old orchid note",
+        vec!["garden"],
+    );
+    let old_sleep = engine.sleep("live_session").expect("old sleep");
+    resume_test_sleep(
+        &mut engine,
+        &old_sleep,
+        "garden memory: old orchid note",
+        "The user discussed an old orchid note.",
+    );
+
+    ingest_text(
+        &mut engine,
+        "2026-05-01T10:00:00.000Z",
+        "garden memory: new orchid note",
+        vec!["garden"],
+    );
+    let new_sleep = engine.sleep("live_session").expect("new sleep");
+    resume_test_sleep(
+        &mut engine,
+        &new_sleep,
+        "garden memory: new orchid note",
+        "The user discussed a new orchid note.",
+    );
+
+    let result = engine
+        .recall(RecallQuery {
+            schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+            query_id: Some("recall_decay".to_string()),
+            created_at: Some("2026-05-02T10:00:00.000Z".to_string()),
+            session_id: Some("live_session".to_string()),
+            context: json!({ "recent_text": "orchid" }),
+            query_text: Some("orchid garden".to_string()),
+            filters: RecallFilters::default(),
+            limit: 2,
+            include_core: false,
+            explain: true,
+        })
+        .expect("recall decay");
+
+    assert_eq!(result.items.len(), 2);
+    assert!(result.items[0].gist.contains("new orchid"));
+    assert!(result.items[1].gist.contains("old orchid"));
+    assert!(result.items[0].freshness > result.items[1].freshness);
+    assert!(result.items[1]
+        .relevance_explanation
+        .as_deref()
+        .unwrap_or("")
+        .contains("decay"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_recall_boosts_previously_recalled_archive_memory() {
+    let root = unique_temp_dir("engine_recall_boosts_previously_recalled_archive_memory");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let storage_probe = storage.clone();
+    let mut options = EngineOptions::default();
+    options.recall.text_match_bonus = 0.0;
+    options.recall.recall_count_log_bonus = 0.10;
+    options.recall.recent_recall_bonus = 0.15;
+    options.recall.max_recall_boost_factor = 1.50;
+    let mut engine = MemoryEngine::with_options(storage, options);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "calibration memory: quiet baseline",
+        vec!["calibration"],
+    );
+    let baseline_sleep = engine.sleep("live_session").expect("baseline sleep");
+    resume_test_sleep(
+        &mut engine,
+        &baseline_sleep,
+        "calibration memory: quiet baseline",
+        "The user discussed a baseline calibration memory.",
+    );
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "calibration memory: repeatedly useful",
+        vec!["calibration"],
+    );
+    let boosted_sleep = engine.sleep("live_session").expect("boosted sleep");
+    resume_test_sleep(
+        &mut engine,
+        &boosted_sleep,
+        "calibration memory: repeatedly useful",
+        "The user discussed a repeatedly useful calibration memory.",
+    );
+
+    let mut boosted_entry = storage_probe
+        .read_archive_entry_by_id(&boosted_sleep.archive_entry.archive_id)
+        .expect("read boosted archive");
+    boosted_entry.recall_count = 12;
+    boosted_entry.last_recalled_at = Some("2026-05-17T17:59:00.000Z".to_string());
+    storage_probe
+        .update_archive_entry(&boosted_entry.archive_id, &boosted_entry)
+        .expect("write boosted archive");
+
+    let result = engine
+        .recall(RecallQuery {
+            schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+            query_id: Some("recall_boost".to_string()),
+            created_at: Some("2026-05-17T18:00:00.000Z".to_string()),
+            session_id: Some("live_session".to_string()),
+            context: json!({ "recent_text": "calibration" }),
+            query_text: Some("calibration memory".to_string()),
+            filters: RecallFilters::default(),
+            limit: 2,
+            include_core: false,
+            explain: true,
+        })
+        .expect("recall boost");
+
+    assert_eq!(result.items.len(), 2);
+    assert_eq!(result.items[0].id, boosted_sleep.archive_entry.archive_id);
+    assert!(result.items[0].relevance_score > result.items[1].relevance_score);
+    assert!(result.items[0]
+        .relevance_explanation
+        .as_deref()
+        .unwrap_or("")
+        .contains("recall"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_recall_returns_complete_entry_after_resume_sleep_compression() {
     let root =
         unique_temp_dir("engine_recall_returns_complete_entry_after_resume_sleep_compression");

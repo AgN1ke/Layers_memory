@@ -4410,3 +4410,39 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Core budget тепер і релевантний, і чесний до реального prompt view. Це не намагається пхати сотні фактів у prompt; це прибирає зайві storage/debug поля з budget-мірки й лишає 1k Core budget для змісту.
+
+## Запис 83 — 2026-05-30 23:13 +03:00 — Stage 1 recall отримав decay і recall feedback
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Користувач прямо запитав, чи пам'ять взагалі вміє забувати старі й нецікаві факти. Перевірка коду показала: повного забування ще немає, а `recall_count` і `last_recalled_at` лише записувались після recall, але не впливали на наступний ранжинг. `freshness` теж не старіла: старий архівний спогад зі `freshness = 1.0` лишався таким самим актуальним через місяці.
+
+**Задум:**
+Не робити вигляд, що це повне забування. Додати маленький шар recall hygiene: ефективна свіжість рахується на момент запиту через time-decay, а часто або недавно згадані archive memories отримують обмежений recall boost. Фізичне перенесення у `forgotten/` лишається майбутнім `forget_review_pass`.
+
+**Що робили:**
+- Додали конфіг у `RecallStage1Config`: `freshness_half_life_days`, `recall_count_log_bonus`, `recent_recall_bonus`, `recent_recall_half_life_days`, `max_recall_boost_factor`.
+- У `score_archive_entry(...)` замінили використання сирого `entry.freshness` на `effective_freshness = stored_freshness * time_decay(age)`.
+- Вік спогаду рахується з `ArchiveEntry.time_range.end`, з fallback на `updated_at` і `created_at`.
+- `recall_count` і `last_recalled_at` тепер дають bounded recall boost, але не переписують фізичну `weight`.
+- `RecallResult.items[].freshness` показує ефективну prompt-time freshness, щоб debug не брехав про актуальність старого спогаду.
+- `min_freshness` у recall тепер додатково перевіряється після скорингу проти effective freshness.
+
+**Що зробили детально:**
+Додано два regression tests: старий архівний спогад із таким самим текстовим match програє новішому через decay; раніше згаданий спогад із `recall_count` і свіжим `last_recalled_at` отримує вищий score за рівний baseline. У поясненні relevance тепер видно decay, effective freshness і recall boost.
+
+**Проблеми чи виклики:**
+Перший варіант recall-boost тесту насичував score до `1.0` через текстовий match, тому різниця між baseline і boosted спогадом не проявлялась. У тесті прибрали text bonus, щоб перевіряти саме механіку recall feedback, а не saturation.
+
+**Фідбек користувача:**
+Користувач підкреслив, що відбір і забування мають бути реальними, а не нескінченним накопиченням із випадковим обрізанням prompt budget. Цей крок закриває ранжування старого/незатребуваного, але не підміняє майбутнє агентне забування.
+
+**Перевірки:**
+- `cargo test -p memory_engine --test engine_sleep_recall engine_recall_` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.

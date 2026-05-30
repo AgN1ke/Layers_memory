@@ -46,6 +46,28 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-30 — Recall uses time decay and recall feedback
+
+Archive recall now computes an effective freshness at query time instead of treating stored `freshness` as permanently current. Old archive memories sink in rank unless text/theme/tag relevance or recall feedback keeps them useful.
+
+**What changed:**
+- `RecallStage1Config` now has configurable freshness decay and recall feedback knobs: `freshness_half_life_days`, `recall_count_log_bonus`, `recent_recall_bonus`, `recent_recall_half_life_days`, and `max_recall_boost_factor`.
+- Stage 1 archive scoring uses `effective_freshness = stored_freshness * time_decay(age)` and a bounded recall boost from `recall_count` and `last_recalled_at`.
+- `RecallResult.items[].freshness` now reports effective prompt-time freshness for the recalled item.
+- Added regression tests for old-memory decay and recall-feedback boosting.
+
+**What is retracted (if applicable):**
+- The previous claim that `freshness` affected recall was incomplete: it was only a stored scalar and did not decay with time.
+- `recall_count` and `last_recalled_at` were recorded but did not influence ranking.
+
+**What is still true:**
+- This is not full forgetting. No archive entry is deleted or moved to `forgotten/`.
+- Full agentic forgetting (`forget_review_pass`) remains a later v0.2 step with audit trail and restore path.
+- The Rust core still uses deterministic Stage 1 scoring here; no provider, model, prompt, or network dependency is added.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_sleep_recall engine_recall_`
+
 ## 2026-05-30 — Context budget uses prompt-shaped memory estimates
 
 Context budgeting now estimates Core, Archive, and Session items by the compact prompt-facing lines produced by the core prompt-view renderer, not by their full storage/debug JSON structs. This removes storage-only overhead such as `core_fact_id`, `scope`, `tags`, JSON braces, and audit fields from prompt budget decisions.
