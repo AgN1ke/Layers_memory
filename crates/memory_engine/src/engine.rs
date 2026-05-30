@@ -2150,21 +2150,16 @@ fn parse_json_value_from_llm_text(text: &str) -> Result<Value> {
 }
 
 fn parse_consolidator_text(text: &str) -> Result<(String, String)> {
-    let mut candidate = text.trim();
-    if candidate.starts_with("```") {
-        candidate = candidate
-            .trim_start_matches("```text")
-            .trim_start_matches("```")
-            .trim();
-        if let Some(stripped) = candidate.strip_suffix("```") {
-            candidate = stripped.trim();
-        }
-    }
+    let candidate = strip_markdown_fence(text.trim()).trim();
 
     if candidate.is_empty() {
         return Err(MemoryEngineError::Validation(
             "consolidator returned empty text".to_string(),
         ));
+    }
+
+    if let Some(parsed) = parse_consolidator_json_object(candidate)? {
+        return Ok(parsed);
     }
 
     let mut lines = candidate.lines();
@@ -2176,13 +2171,7 @@ fn parse_consolidator_text(text: &str) -> Result<(String, String)> {
             MemoryEngineError::Validation("consolidator returned empty text".to_string())
         })?;
 
-    let gist = first_nonempty
-        .strip_prefix("GIST:")
-        .or_else(|| first_nonempty.strip_prefix("gist:"))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(first_nonempty)
-        .to_string();
+    let gist = strip_consolidator_gist_prefix(first_nonempty).to_string();
 
     let narrative = lines.collect::<Vec<_>>().join("\n").trim().to_string();
     let narrative = if narrative.is_empty() {
@@ -2192,6 +2181,61 @@ fn parse_consolidator_text(text: &str) -> Result<(String, String)> {
     };
 
     Ok((gist, narrative))
+}
+
+fn strip_markdown_fence(text: &str) -> &str {
+    let Some(stripped) = text.strip_prefix("```") else {
+        return text;
+    };
+
+    let body = stripped
+        .find('\n')
+        .map(|index| &stripped[index + 1..])
+        .unwrap_or("");
+    body.strip_suffix("```").unwrap_or(body).trim()
+}
+
+fn parse_consolidator_json_object(candidate: &str) -> Result<Option<(String, String)>> {
+    if !candidate.starts_with('{') {
+        return Ok(None);
+    }
+
+    let value = serde_json::from_str::<Value>(candidate).map_err(|err| {
+        MemoryEngineError::Validation(format!(
+            "consolidator returned JSON-shaped text that could not be parsed: {err}"
+        ))
+    })?;
+
+    let gist = value
+        .get("gist")
+        .and_then(Value::as_str)
+        .map(strip_consolidator_gist_prefix)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let narrative = value
+        .get("narrative")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    match (gist, narrative) {
+        (Some(gist), Some(narrative)) => Ok(Some((gist, narrative))),
+        (Some(gist), None) => Ok(Some((gist.clone(), gist))),
+        (None, Some(narrative)) => Ok(Some((narrative.clone(), narrative))),
+        (None, None) => Err(MemoryEngineError::Validation(
+            "consolidator returned JSON without gist or narrative strings".to_string(),
+        )),
+    }
+}
+
+fn strip_consolidator_gist_prefix(text: &str) -> &str {
+    text.trim()
+        .strip_prefix("GIST:")
+        .or_else(|| text.trim().strip_prefix("gist:"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| text.trim())
 }
 
 fn assign_sleep_track_result(run: &mut SleepRun, track: SleepTrack, value: Value) {
@@ -2603,5 +2647,41 @@ fn default_manifest(now: &str) -> Manifest {
             llm_recall_rerank_enabled: false,
             reflection_enabled: false,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_consolidator_text;
+
+    #[test]
+    fn parse_consolidator_text_accepts_plain_gist_and_narrative() {
+        let (gist, narrative) = parse_consolidator_text(
+            "GIST: User corrected the assistant about quasars.\n\nThe user stayed engaged and pushed back on an astronomy explanation.",
+        )
+        .expect("plain consolidator text should parse");
+
+        assert_eq!(gist, "User corrected the assistant about quasars.");
+        assert_eq!(
+            narrative,
+            "The user stayed engaged and pushed back on an astronomy explanation."
+        );
+    }
+
+    #[test]
+    fn parse_consolidator_text_unwraps_json_shaped_response() {
+        let (gist, narrative) = parse_consolidator_text(
+            r#"{
+  "gist": "GIST: User shared stable personal context.",
+  "narrative": "The user said they live in Kyiv and were born in 1989."
+}"#,
+        )
+        .expect("json-shaped consolidator text should be unwrapped");
+
+        assert_eq!(gist, "User shared stable personal context.");
+        assert_eq!(
+            narrative,
+            "The user said they live in Kyiv and were born in 1989."
+        );
     }
 }

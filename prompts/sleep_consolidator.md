@@ -14,6 +14,7 @@ and one dense narrative of what this fragment meant.
 
 Return plain text only. Do not return JSON, Markdown fences, YAML, comments, or
 field names other than `GIST:`.
+The first non-empty character of your answer must be `G` from `GIST:`, not `{`.
 
 Format:
 
