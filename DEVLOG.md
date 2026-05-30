@@ -3753,7 +3753,6 @@ DEVLOG ведеться українською. Для кожного зміст
 **Перевірки:**
 `git diff --check` — пройшло.
 
-
 ## Запис 65 — 2026-05-24 14:01 +03:00 — Уточнено prompt geometry і evidence pack для Core-тез
 
 **Правила:**
@@ -3991,7 +3990,6 @@ DEVLOG ведеться українською. Для кожного зміст
 - `cargo clippy --workspace -- -D warnings` — пройшло.
 - `maturin develop` у `crates/python_adapter` — пройшло.
 - `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
-- Коміт: `19e1072 Move sleep orchestration into core driver`.
 
 ## Запис 72 — 2026-05-30 02:46 +03:00 — Дозаписано live-тест B-гілки перед consolidator-фіксом
 
@@ -4099,6 +4097,40 @@ Consolidator лишається prose-only проходом: `expected_output_sc
 - `maturin develop` у `crates/python_adapter` — пройшло.
 - `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
 
+## Запис 75 — 2026-05-30 03:52 +03:00 — Consolidator parser навчився розгортати quoted prose
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після `6e1c3b5` користувач провів контрольний live sleep-check. Перший новий sleep пройшов чисто: `completion_mode=consolidated`, `failed_passes=none`, gist нормальний. Але ручний `/sleep` показав ще один форматний edge-case: Gemini повернув усю prose-відповідь як JSON string literal, тобто quoted `"GIST: ...\n\n..."`. Pipeline не впав, але archive отримав занадто довгий `gist`, що містив і gist, і narrative всередині лапок.
+
+**Задум:**
+Закрити ще один реальний форматний режим на LLM-межі без повернення до великого JSON-контракту. Якщо відповідь consolidator починається з лапки і є валідним JSON string, ядро має розкодувати рядок і повторно застосувати той самий `GIST:` parser.
+
+**Що робили:**
+- У `parse_consolidator_text` додано обробку JSON string literal перед JSON-object unwrap.
+- Додано тест `parse_consolidator_text_unwraps_json_string_response`.
+- `prompts/sleep_consolidator.md` уточнено: не загортати всю відповідь у лапки.
+- Runtime-архів `archive_1780101645326611700_23.json`, який уже отримав quoted gist, разово відремонтовано.
+
+**Що зробили детально:**
+Тепер consolidator boundary покриває п'ять режимів: чистий `GIST:` text; валідний `{ "gist", "narrative" }`; валідний JSON string із `GIST:` всередині; битий JSON/quoted text через retry і fail-soft; порожній текст через retry і fail-soft. Структура архіву лишається в ядрі, а parser лише дістає prose-поверхню з реальної відповіді моделі.
+
+**Проблеми чи виклики:**
+Це ще раз підтвердило, що LLM може порушувати навіть дуже просту форму відповіді. Для B-гілки важливо не продовжувати розширювати можливості consolidator, а саме закрити реальні format boundary failures, які вже проявились у live-тесті.
+
+**Фідбек користувача:**
+Користувач прогнав контрольний sleep-check і передав результат без ручного transcript; перевірка мала виконуватись по runtime logs і archive files.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine parse_consolidator_text -- --nocapture` — 3 passed.
+- `cargo test --workspace` — 32 passed.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `maturin develop` у `crates/python_adapter` — пройшло.
+- `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+
 ## Запис 76 — 2026-05-30 12:12 +03:00 — Consolidator отримав output gate для gist
 
 **Правила:**
@@ -4137,36 +4169,38 @@ Consolidator contract лишився prose-only. Ми не повернули в
 - `maturin develop` у `crates/python_adapter` — пройшло.
 - `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
 
-## Запис 75 — 2026-05-30 03:52 +03:00 — Consolidator parser навчився розгортати quoted prose
+## Запис 77 — 2026-05-30 12:40 +03:00 — Фінальний live-check B-гілки пройшов happy path
 
 **Правила:**
 DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
 
 **Проблематика:**
-Після `6e1c3b5` користувач провів контрольний live sleep-check. Перший новий sleep пройшов чисто: `completion_mode=consolidated`, `failed_passes=none`, gist нормальний. Але ручний `/sleep` показав ще один форматний edge-case: Gemini повернув усю prose-відповідь як JSON string literal, тобто quoted `"GIST: ...\n\n..."`. Pipeline не впав, але archive отримав занадто довгий `gist`, що містив і gist, і narrative всередині лапок.
+Після перенесення sleep orchestration у ядро і стабілізації consolidator boundary треба було підтвердити не лише unit-тестами, а живим Telegram-прогоном, що новий core-driver завершує sleep, не псує `gist`, не викидає кривий JSON/quoted blob у пам'ять і не ламає Archive→Core bridge.
 
 **Задум:**
-Закрити ще один реальний форматний режим на LLM-межі без повернення до великого JSON-контракту. Якщо відповідь consolidator починається з лапки і є валідним JSON string, ядро має розкодувати рядок і повторно застосувати той самий `GIST:` parser.
+Провести короткий змістовний live-check із ручним `/sleep` після output gate. Міряти вже не виживання pipeline, а якість happy path: чи consolidator дає прийнятний prose-overlay, чи gate не мусить спрацьовувати, чи archive лишається complete.
 
 **Що робили:**
-- У `parse_consolidator_text` додано обробку JSON string literal перед JSON-object unwrap.
-- Додано тест `parse_consolidator_text_unwraps_json_string_response`.
-- `prompts/sleep_consolidator.md` уточнено: не загортати всю відповідь у лапки.
-- Runtime-архів `archive_1780101645326611700_23.json`, який уже отримав quoted gist, разово відремонтовано.
+- Користувач провів Telegram-діалог про наукову сингулярність, біологічне безсмертя, столицю Монголії й динозаврів, після чого викликав `/sleep`.
+- Перевірили `bot.log` і archive-файл `archive_1780133919730594500_15.json`.
+- Звірено completion mode, failed passes, tags, gist, narrative, compact memory, кількість треків і Core bridge summary.
 
 **Що зробили детально:**
-Тепер consolidator boundary покриває п'ять режимів: чистий `GIST:` text; валідний `{ "gist", "narrative" }`; валідний JSON string із `GIST:` всередині; битий JSON/quoted text через retry і fail-soft; порожній текст через retry і fail-soft. Структура архіву лишається в ядрі, а parser лише дістає prose-поверхню з реальної відповіді моделі.
+Live sleep завершився як `completion_mode=consolidated`, `failed_passes=none`, `compact_tokens=174`. Archive має `status=complete`, tags `["completion_mode:consolidated", "multi_pass_sleep"]`, без `consolidator_fallback`, без `consolidator_gist_rejected`, без `pass_failed:sleep_consolidator`. `Gist` — нормальний однорядковий текст: "Mykyta expressed his deep desire for biological immortality after a scientific singularity...". `Narrative` — нормальна проза, не JSON і не quoted blob. Core bridge створив 1 новий сигнал, 2 пропустив як дублі або неактивні.
 
 **Проблеми чи виклики:**
-Це ще раз підтвердило, що LLM може порушувати навіть дуже просту форму відповіді. Для B-гілки важливо не продовжувати розширювати можливості consolidator, а саме закрити реальні format boundary failures, які вже проявились у live-тесті.
+Перед тестом у логах були мережеві збої Telegram polling (`ConnectionResetError`, `getaddrinfo failed`), але після рестарту бот піднявся і коректно прийняв live-повідомлення. Сам memory pipeline у цьому прогоні не показав помилок.
 
 **Фідбек користувача:**
-Користувач прогнав контрольний sleep-check і передав результат без ручного transcript; перевірка мала виконуватись по runtime logs і archive files.
+Користувач повідомив "готово" після тесту, очікуючи перевірки по логах і archive-файлах, а не ручного переказу transcript.
 
 **Перевірки:**
-- `cargo fmt --check` — пройшло.
-- `cargo test -p memory_engine parse_consolidator_text -- --nocapture` — 3 passed.
-- `cargo test --workspace` — 32 passed.
-- `cargo clippy --workspace -- -D warnings` — пройшло.
-- `maturin develop` у `crates/python_adapter` — пройшло.
-- `pytest tests/ -q` у `crates/python_adapter` — 12 passed.
+- `bot.log`: `sleep_driver_completed archive=archive_1780133919730594500_15 completion_mode=consolidated failed_passes=none compact_tokens=174`.
+- `bot.log`: `manual sleep completed ... Core signals: 1 new, 0 updated, 2 skipped`.
+- Archive JSON: `status=complete`.
+- Archive JSON: tags без `consolidator_fallback`, `consolidator_gist_rejected`, `pass_failed:sleep_consolidator`.
+- Archive JSON: `emotional_markers=7`, `personal_signals=3`, `topic_thread=2`.
+
+**Висновок:**
+B-гілка `feature/core-orchestration` функціонально підтверджена: sleep orchestration і Archive→Core bridge працюють із ядра, consolidator boundary має happy path і output-gate fallback, а живий Telegram-прогін не зіпсував пам'ять.
+- Коміт: `19e1072 Move sleep orchestration into core driver`.
