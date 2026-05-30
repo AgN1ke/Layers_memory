@@ -54,6 +54,8 @@ The ordinary chat prompt no longer relies on Telegram-specific Python code to de
 - Added `crates/memory_engine/src/prompt_view.rs` with canonical compact prompt rendering.
 - Exposed `memory_engine::render_memory_view` through the PyO3 adapter.
 - Changed the Telegram bot so `chat_prompt(...)` delegates to `engine.render_memory_view(...)` instead of owning memory projection helpers.
+- Changed token telemetry so sleep metrics estimate the core-rendered prompt memory view rather than the old Python compact projection.
+- Removed the old Telegram host compact projection helpers from the ordinary prompt/debug path.
 - Added Rust and Python adapter tests for the prompt-view boundary.
 
 **What is retracted (if applicable):**

@@ -4289,3 +4289,44 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Prompt-facing memory view тепер належить Rust core. Telegram bot став тоншим: він отримує context package, просить ядро зібрати memory view і віддає результат LLM разом зі своїм system prompt. Наступний великий блок після цього — повернення до Phase B reflection: evidence pack, fidelity validator і candidate review.
+
+## Запис 80 — 2026-05-30 18:40 +03:00 — Телеметрію prompt view переведено на реальний core render
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після перенесення `render_memory_view` у ядро в `bot.py` лишились старі `compact_*` helper-и. Вони вже не формували chat prompt, але sleep telemetry досі рахувала `prompt_archive_ratio` через стару Python-проекцію. Це псувало acceptance: логи міряли не той артефакт, який реально йде в модель.
+
+**Задум:**
+Зробити token telemetry чесною: рахувати реальний prompt-facing memory view, який повертає ядро, і прибрати стару host-side projection policy повністю.
+
+**Що робили:**
+- `log_sleep_compression_metrics(...)` тепер приймає engine і `SleepRun`, дістає raw sleep events із run-запитів і рахує raw chat tokens.
+- Для sleep metric будується мінімальний `core_context_package` з одним `archive_relevant` item і рендериться через `engine.render_memory_view(...)`.
+- У `token_usage.jsonl` додано `prompt_memory_view_estimated_tokens` і `prompt_memory_view_ratio`.
+- Старі поля `prompt_archive_estimated_tokens` / `prompt_archive_ratio` лишені як сумісні alias-и, але тепер вони теж базуються на core-rendered memory view, а не на Python compact projection.
+- Видалено `compact_context_package`, `compact_archive_for_prompt`, `compact_core_fact`, `compact_event`, `compact_emotional_marker`, `compact_topic_thread_item`, `compact_personal_signal`, `compact_relational_tone`, `compact_domain_state`, `chat_prompt_json_debug` і `truncate_text` із `bot.py`.
+
+**Що зробили детально:**
+Chat telemetry тепер має окреме поле `prompt_memory_view_estimated_tokens`, тобто розмір memory view без system prompt. Sleep telemetry порівнює raw transcript, повний stored archive payload, core-rendered prompt memory view і `compact_memory` theses. Це дає чесну картину: скільки коштує повний storage/audit запис, скільки коштує реальний prompt view і скільки лишається у власне тезовій стиснутій пам'яті.
+
+**Проблеми чи виклики:**
+`prompt_archive_estimated_tokens` тепер включає overhead мінімального `<memory_context>` render-а, бо ми свідомо міряємо реальний core render, а не ручно ізольований рядок архіву. Для точного layer-only breakdown пізніше можна додати core-level report, але зараз головне — прибрати мертвий Python artifact із telemetry.
+
+**Фідбек користувача:**
+Користувач передав зауваження Claude: merge передчасний без live-check, а telemetry має міряти реальний `render_memory_view`, інакше budget acceptance нечесний. Це зауваження прийнято.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `Select-String ... compact_* / render_chat_prompt / xml_escape` — старих projection helper-ів у `bot.py` не лишилось.
+- Синтетична перевірка `archive_memory_view_for_metrics(...)` через PyO3 — пройшла; виправлено `source_layer` на `archive`.
+- `git diff --check` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+
+**Висновок:**
+Тепер у Telegram host немає власної prompt projection policy. Залишився обов'язковий live-check: багатоходова розмова без привітань посеред діалогу, перевірка short/long/core memory і відсутність XML-тегів у відповіді.
