@@ -46,6 +46,32 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-30 — Core-owned prompt memory view
+
+The ordinary chat prompt no longer relies on Telegram-specific Python code to decide how memory layers should be rendered. The Rust core now exposes `render_memory_view(package, current_user_message)` and returns the compact LLM-facing memory block with explicit layer geometry: `core_memory`, `long_memory`, `short_memory`, `current_user_message`, and `assistant_response_slot`.
+
+**What changed:**
+- Added `crates/memory_engine/src/prompt_view.rs` with canonical compact prompt rendering.
+- Exposed `memory_engine::render_memory_view` through the PyO3 adapter.
+- Changed the Telegram bot so `chat_prompt(...)` delegates to `engine.render_memory_view(...)` instead of owning memory projection helpers.
+- Added Rust and Python adapter tests for the prompt-view boundary.
+
+**What is retracted (if applicable):**
+- The previous open debt that prompt-view policy lived in Telegram host code. That policy now belongs to the core. The host still owns provider/model/key, prompt files, network execution, and Telegram UX.
+
+**What is still true:**
+- `core_context_package` remains the full API/debug shape.
+- Debug/admin commands may still show IDs and audit metadata.
+- Ordinary chat prompt memory should stay compact and should not carry long technical IDs unless a user command needs them.
+
+**Reproducibility anchor:**
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --check`
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
 ## 2026-05-30 — Engine supports shared-reference calls and resource-scoped write locks
 
 After the pull-based sleep driver moved memory orchestration into the core, the next strategic risk was concurrency. The engine still exposed many public calls as `&mut self`, the Python class was marked `unsendable`, and the file-backed Core store had a real lost-update risk because `core/store/<category>.json` is shared by all scopes.

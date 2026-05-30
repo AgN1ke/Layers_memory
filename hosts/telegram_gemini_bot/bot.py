@@ -20,7 +20,6 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from html import escape as xml_escape
 from pathlib import Path
 from typing import Any
 
@@ -549,7 +548,7 @@ def handle_update(
 
     package = context_package(engine, session_id, chat_id, text)
     model = llm_config.chat_model().model
-    prompt = chat_prompt(package, text)
+    prompt = chat_prompt(engine, package, text)
     prompt_telemetry = chat_prompt_telemetry(package, session_id, prompt)
     answer_response = gemini.generate_text(
         model=model,
@@ -1540,174 +1539,8 @@ def chat_system_instruction() -> str:
     return CHAT_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
-def chat_prompt(package: dict[str, Any], user_text: str) -> str:
-    return render_chat_prompt(package, user_text)
-
-
-def render_chat_prompt(package: dict[str, Any], user_text: str) -> str:
-    recent_events = normalized_context_events(package.get("session_recent"))
-    trace_events = normalized_context_events(package.get("session_trace"))
-    prior_recent = drop_current_user_message(recent_events, user_text)
-    recent_ids = {event["event_id"] for event in recent_events if event.get("event_id")}
-    older_trace = [
-        event
-        for event in trace_events
-        if event.get("event_id") and event["event_id"] not in recent_ids
-    ][-20:]
-
-    lines = ["<memory_context>"]
-    lines.extend(
-        [
-            "<state>",
-            f"conversation_state: {'ongoing' if prior_recent else 'new_or_no_recent_context'}",
-        ]
-    )
-    if prior_recent:
-        lines.append(
-            "instruction: Continue the dialogue from the latest turn. Do not greet unless the current user message is a greeting."
-        )
-    else:
-        lines.append("instruction: No prior active dialogue is visible; a short greeting is allowed if natural.")
-    lines.append("</state>")
-
-    core_lines = render_core_facts_for_prompt(package.get("core_facts"))
-    lines.append("")
-    lines.append("<core_memory>")
-    if core_lines:
-        lines.extend(core_lines)
-    else:
-        lines.append("(empty)")
-    lines.append("</core_memory>")
-
-    archive_lines = render_archive_memories_for_prompt(package.get("archive_relevant"))
-    lines.append("")
-    lines.append("<long_memory>")
-    if archive_lines:
-        lines.extend(archive_lines)
-    else:
-        lines.append("(empty)")
-    lines.append("</long_memory>")
-
-    lines.append("")
-    lines.append("<short_memory>")
-    if older_trace:
-        lines.append("<older_active_dialogue>")
-        lines.extend(render_dialogue_lines(older_trace, max_text_chars=180))
-        lines.append("</older_active_dialogue>")
-
-    if prior_recent:
-        lines.append("<recent_dialogue>")
-        lines.extend(render_dialogue_lines(prior_recent, max_text_chars=900))
-        lines.append("</recent_dialogue>")
-    else:
-        lines.append("(empty)")
-    lines.append("</short_memory>")
-
-    lines.extend(
-        [
-            "",
-            "<current_user_message>",
-            xml_escape(clean_string(user_text), quote=False),
-            "</current_user_message>",
-            "",
-            "<assistant_response_slot>",
-            "Write only the assistant reply for the current user message.",
-            "</assistant_response_slot>",
-            "</memory_context>",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def normalized_context_events(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        return []
-    events = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        text = context_event_text(item)
-        if not text:
-            continue
-        events.append(
-            {
-                "event_id": clean_string(item.get("event_id")),
-                "role": context_event_role(item),
-                "text": text,
-            }
-        )
-    return events
-
-
-def context_event_text(event: dict[str, Any]) -> str:
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    return clean_string(event.get("text")) or clean_string(payload.get("text"))
-
-
-def context_event_role(event: dict[str, Any]) -> str:
-    event_type = clean_string(event.get("type")) or clean_string(event.get("event_type"))
-    return "assistant" if event_type == "assistant_message" else "user"
-
-
-def drop_current_user_message(events: list[dict[str, str]], user_text: str) -> list[dict[str, str]]:
-    if not events:
-        return []
-    current_text = clean_string(user_text)
-    last = events[-1]
-    if last.get("role") == "user" and last.get("text") == current_text:
-        return events[:-1]
-    return events
-
-
-def render_core_facts_for_prompt(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    lines = []
-    for fact in value:
-        if not isinstance(fact, dict):
-            continue
-        text = truncate_text(clean_string(fact.get("text")), 260)
-        if not text:
-            continue
-        text = xml_escape(text, quote=False)
-        category = clean_string(fact.get("category")) or "core"
-        confidence = fact.get("confidence")
-        if confidence is None:
-            lines.append(f"- {category}: {text}")
-        else:
-            lines.append(f"- {category} ({round(clamp_float(confidence, 0.0), 2)}): {text}")
-    return lines
-
-
-def render_archive_memories_for_prompt(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    lines = []
-    for archive in value[:5]:
-        if not isinstance(archive, dict):
-            continue
-        compact = compact_archive_for_prompt(archive)
-        memory = clean_string(compact.get("compact_memory")) or clean_string(compact.get("gist"))
-        if not memory:
-            continue
-        relevance = compact.get("relevance_score")
-        prefix = f"- [{relevance}] " if relevance is not None else "- "
-        for index, memory_line in enumerate(memory.splitlines()):
-            memory_line = memory_line.strip()
-            if not memory_line:
-                continue
-            memory_line = xml_escape(memory_line, quote=False)
-            lines.append((prefix if index == 0 else "  ") + memory_line)
-    return lines
-
-
-def render_dialogue_lines(events: list[dict[str, str]], max_text_chars: int) -> list[str]:
-    lines = []
-    for event in events:
-        text = truncate_text(event.get("text", ""), max_text_chars)
-        if text:
-            lines.append(f"{event.get('role', 'user')}: {xml_escape(text, quote=False)}")
-    return lines
+def chat_prompt(engine: memory_engine.MemoryEngine, package: dict[str, Any], user_text: str) -> str:
+    return engine.render_memory_view(json.dumps(package, ensure_ascii=False), user_text)
 
 
 def truncate_text(text: str, max_chars: int) -> str:

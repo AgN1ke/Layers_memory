@@ -14,6 +14,7 @@ pub mod file_storage;
 pub mod journal;
 pub mod llm;
 pub mod manifest;
+pub mod prompt_view;
 pub mod recall;
 pub mod session;
 pub mod sleep;
@@ -31,3 +32,4 @@ pub use llm::{
     CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmErrorKind, LlmRequest, LlmResponse,
     SleepOutcome, SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
 };
+pub use prompt_view::render_memory_view;

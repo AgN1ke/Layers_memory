@@ -21,7 +21,9 @@ use pyo3::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use ::memory_engine::core_store::{CoreContextRequest, CoreFactInput, CoreFactPatchInput};
+use ::memory_engine::core_store::{
+    CoreContextPackage, CoreContextRequest, CoreFactInput, CoreFactPatchInput,
+};
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::llm::{LlmResponse, SleepRun};
 use ::memory_engine::recall::RecallQuery;
@@ -137,6 +139,21 @@ impl PyMemoryEngine {
         let request: CoreContextRequest = parse_json(request_json, "core context request")?;
         let package = run_without_gil(py, || self.inner.core_context_package(request))?;
         dump_json(&package, "core context package")
+    }
+
+    fn render_memory_view(
+        &self,
+        py: Python<'_>,
+        package_json: &str,
+        current_user_message: &str,
+    ) -> PyResult<String> {
+        let package: CoreContextPackage = parse_json(package_json, "core context package")?;
+        run_without_gil(py, || {
+            Ok(::memory_engine::render_memory_view(
+                &package,
+                current_user_message,
+            ))
+        })
     }
 
     fn upsert_core_fact(&self, py: Python<'_>, fact_json: &str) -> PyResult<String> {

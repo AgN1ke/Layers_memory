@@ -620,6 +620,54 @@ def test_core_context_package_does_not_leak_facts_between_scopes(
     ]
 
 
+def test_render_memory_view_is_available_through_adapter(engine: memory_engine.MemoryEngine):
+    _ingest(
+        engine,
+        "prompt_view_session",
+        "Do you remember Irzha?",
+        tags=["test"],
+        theme="prompt_view",
+    )
+    engine.upsert_core_fact(
+        json.dumps(
+            {
+                "schema_version": "core_fact_input.v1",
+                "category": "profile",
+                "scope": "telegram_prompt_view",
+                "text": "User name is Mykyta.",
+                "confidence": 0.95,
+                "tags": ["test"],
+            }
+        )
+    )
+    package = json.loads(
+        engine.core_context_package(
+            json.dumps(
+                {
+                    "schema_version": "core_context_request.v1",
+                    "session_id": "prompt_view_session",
+                    "domain_state": {"current_text": "Do you remember Irzha?"},
+                    "core_scope": "telegram_prompt_view",
+                    "query_text": "Irzha",
+                    "recall_limit": 5,
+                    "session_recent_limit": 5,
+                    "session_trace_event_limit": 10,
+                    "include_core": True,
+                }
+            )
+        )
+    )
+
+    view = engine.render_memory_view(json.dumps(package), "Do you remember Irzha?")
+
+    assert "<memory_context>" in view
+    assert "<core_memory>" in view
+    assert "- profile (0.95): User name is Mykyta." in view
+    assert "<short_memory>" in view
+    assert "user: Do you remember Irzha?" not in view
+    assert "<current_user_message>\nDo you remember Irzha?\n</current_user_message>" in view
+
+
 def test_patch_core_fact_updates_and_deprecates_fact(engine: memory_engine.MemoryEngine):
     _ingest(engine, "patch_core_session", "Початок тесту.")
     upsert = json.loads(

@@ -4250,3 +4250,42 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Головний concurrency hazard цієї гілки закритий: API більше не потребує mutable engine, Python adapter не прив'язаний до одного OS-потоку через `unsendable`, а паралельні записи в спільну core-категорію більше не гублять scope-факти. Наступний крок — переглянути diff, зафіксувати коміт і вирішити, чи переносити prompt-view/rendering із хоста в ядро окремою малою гілкою, чи йти далі до Phase B reflection.
+
+## Запис 79 — 2026-05-30 13:49 +03:00 — Prompt-facing memory view перенесено з Telegram host у ядро
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після core-orchestration і concurrency у `bot.py` лишався останній важливий шмат логіки пам'яті: збір LLM-facing prompt geometry. Telegram host сам вирішував, як перетворити `core_context_package` на `<core_memory>`, `<long_memory>`, `<short_memory>` і поточну репліку. Для Godot або іншого майбутнього адаптера це означало б дублювання projection policy.
+
+**Задум:**
+Зробити prompt-facing memory view функцією ядра. Хост має лишатися власником provider/model/key, network call, system prompt file і UX-команд, але не має знати, як компонувати шари пам'яті в compact prompt block.
+
+**Що робили:**
+- Додали `crates/memory_engine/src/prompt_view.rs`.
+- Експортували `memory_engine::render_memory_view`.
+- Додали PyO3 метод `engine.render_memory_view(package_json, current_user_message)`.
+- Перевели `hosts/telegram_gemini_bot/bot.py` на делегування prompt view у ядро.
+- Прибрали з `bot.py` старі helper-и `render_chat_prompt`, `normalized_context_events`, `render_core_facts_for_prompt`, `render_archive_memories_for_prompt`, `render_dialogue_lines` і `xml_escape`.
+- Додали Rust unit-test і Python adapter test для нового boundary.
+
+**Що зробили детально:**
+Новий renderer у ядрі будує той самий compact XML-like memory block: `state`, `core_memory`, `long_memory`, `short_memory`, `current_user_message`, `assistant_response_slot`. Він прибирає дубль поточного user message з recent dialogue, лишає active transcript ролями `user:` / `assistant:`, бере archive prompt memory з `compact_memory` або `gist`, не тягне довгі технічні ID у звичайний chat prompt і XML-escape-ить текстові значення.
+
+**Проблеми чи виклики:**
+Повний `core_context_package` лишається API/debug формою. Debug-команди Telegram і token telemetry усе ще можуть будувати компактні JSON-проекції для логів і audit; це не chat prompt path. Тому `compact_archive_for_prompt` у боті лишився для telemetry/debug, але не для формування відповіді моделі.
+
+**Фідбек користувача:**
+Користувач попросив після concurrency дивитися не тільки на моментні задачі, а на загальну стратегічну лінію. Цей крок закриває попередній фундаментальний борг: другий адаптер не повинен заново реалізовувати геометрію пам'яті.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло, 36 passed, 1 ignored.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+
+**Висновок:**
+Prompt-facing memory view тепер належить Rust core. Telegram bot став тоншим: він отримує context package, просить ядро зібрати memory view і віддає результат LLM разом зі своїм system prompt. Наступний великий блок після цього — повернення до Phase B reflection: evidence pack, fidelity validator і candidate review.
