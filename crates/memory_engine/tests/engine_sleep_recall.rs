@@ -816,6 +816,148 @@ fn engine_core_context_package_enforces_token_budget_by_layer() {
 }
 
 #[test]
+fn engine_core_context_package_keeps_query_relevant_core_fact_under_budget() {
+    let root =
+        unique_temp_dir("engine_core_context_package_keeps_query_relevant_core_fact_under_budget");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Поточна розмова для query-aware core ranking.",
+        vec!["test"],
+    );
+
+    for (category, text) in [
+        ("aspiration", "Користувач хоче біологічного безсмертя."),
+        ("budget", "Користувач має бюджет 200 тис. грн."),
+        ("future_plans", "Користувач планує купити Prius."),
+        ("pet", "У користувача є кішка Іржа."),
+    ] {
+        engine
+            .upsert_core_fact(CoreFactInput {
+                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                category: category.to_string(),
+                scope: Some("telegram_1".to_string()),
+                text: text.to_string(),
+                confidence: 0.95,
+                tags: vec![category.to_string()],
+                source_archive_ids: vec![],
+                source_candidate_id: None,
+            })
+            .expect("upsert core fact");
+    }
+    for index in 0..12 {
+        engine
+            .upsert_core_fact(CoreFactInput {
+                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                category: format!("zzz_unrelated_{index}"),
+                scope: Some("telegram_1".to_string()),
+                text: format!("Нерелевантний стабільний факт номер {index}."),
+                confidence: 0.95,
+                tags: vec!["unrelated".to_string()],
+                source_archive_ids: vec![],
+                source_candidate_id: None,
+            })
+            .expect("upsert unrelated core fact");
+    }
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "А кішка?" }),
+            core_scope: Some("telegram_1".to_string()),
+            query_text: Some("А кішка?".to_string()),
+            recall_limit: 0,
+            session_recent_limit: 1,
+            session_trace_event_limit: 0,
+            include_core: true,
+            token_budget: Some(CoreContextTokenBudget {
+                total_tokens: 760,
+                current_memory_tokens: 300,
+                compressed_memory_tokens: 100,
+                core_tokens: 120,
+            }),
+        })
+        .expect("core context package");
+
+    let report = package.budget.as_ref().expect("budget report");
+    assert!(report.dropped_core_facts > 0);
+    assert!(
+        package
+            .core_facts
+            .iter()
+            .any(|fact| fact.category == "pet" && fact.text.contains("Іржа")),
+        "query-relevant pet fact should survive core budget trimming: {:#?}",
+        package.core_facts
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_core_budget_uses_prompt_shape_not_storage_json() {
+    let root = unique_temp_dir("engine_core_budget_uses_prompt_shape_not_storage_json");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Поточна розмова для compact core budget test.",
+        vec!["test"],
+    );
+
+    let long_tag = "storage_only_tag_".repeat(20);
+    for index in 0..8 {
+        engine
+            .upsert_core_fact(CoreFactInput {
+                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                category: format!("short_{index}"),
+                scope: Some("telegram_1".to_string()),
+                text: format!("Короткий стабільний факт номер {index}."),
+                confidence: 0.95,
+                tags: vec![long_tag.clone(), format!("debug_tag_{index}")],
+                source_archive_ids: vec![],
+                source_candidate_id: None,
+            })
+            .expect("upsert core fact");
+    }
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "Що ти памʼятаєш?" }),
+            core_scope: Some("telegram_1".to_string()),
+            query_text: Some("Що ти памʼятаєш?".to_string()),
+            recall_limit: 0,
+            session_recent_limit: 0,
+            session_trace_event_limit: 0,
+            include_core: true,
+            token_budget: Some(CoreContextTokenBudget {
+                total_tokens: 900,
+                current_memory_tokens: 200,
+                compressed_memory_tokens: 100,
+                core_tokens: 500,
+            }),
+        })
+        .expect("core context package");
+
+    let report = package.budget.as_ref().expect("budget report");
+    assert_eq!(package.core_facts.len(), 8);
+    assert_eq!(report.dropped_core_facts, 0);
+    assert!(
+        report.estimated_core_tokens < 500,
+        "core estimate should use compact prompt lines, not storage JSON with long tags: {report:#?}"
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_patch_core_fact_updates_text_and_deprecates_fact() {
     let root = unique_temp_dir("engine_patch_core_fact_updates_text_and_deprecates_fact");
     let storage = FileStorage::with_host_id(&root, "terminal");

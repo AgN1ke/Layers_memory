@@ -46,6 +46,81 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-30 — Context budget uses prompt-shaped memory estimates
+
+Context budgeting now estimates Core, Archive, and Session items by the compact prompt-facing lines produced by the core prompt-view renderer, not by their full storage/debug JSON structs. This removes storage-only overhead such as `core_fact_id`, `scope`, `tags`, JSON braces, and audit fields from prompt budget decisions.
+
+**What changed:**
+- `apply_context_token_budget` now uses prompt-shaped estimators for Core facts, archive memories, recent dialogue, and trace dialogue.
+- Archive budget is aligned with the prompt-view archive display limit.
+- Added a regression test proving short Core facts with very large storage-only tags are kept because those tags are not part of the rendered prompt memory.
+
+**What is retracted (if applicable):**
+- The previous budget estimate over-counted prompt memory by measuring storage JSON. That made Core appear much more expensive than the model-facing prompt actually was.
+
+**What is still true:**
+- The estimator remains deliberately conservative (`unicode_chars_div_2_ceil_json_v1` / rendered text chars divided by two).
+- The 11k/7k/3k/1k budget split remains unchanged.
+- Query-aware ranking from the previous entry still decides which facts should be kept first when the compact Core budget is still full.
+
+**Reproducibility anchor:**
+- Runtime check for query `А кішка?`: Core facts kept increased from 7 to 23, dropped Core facts decreased from 22 to 6, and the `pet` fact for Іржа remained first.
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
+## 2026-05-30 — Query-aware Core fact budgeting
+
+Core Store facts are now ranked against the current query before the 1k Core memory budget is applied. Previously, active Core facts were sorted mostly by confidence and category, so when many facts had the same confidence, a directly relevant fact could be dropped only because its category sorted later.
+
+**What changed:**
+- `core_context_package` now preserves query-relevant Core facts ahead of unrelated same-confidence facts before token-budget trimming.
+- Added a regression test proving that a relevant `pet` Core fact survives a tight Core budget for the query `А кішка?`.
+
+**What is retracted (if applicable):**
+- The implicit assumption that confidence-only Core ranking was enough for prompt budgeting. It is not enough once Core contains many equally confident facts.
+
+**What is still true:**
+- Core admission rules are unchanged.
+- Core token budget remains 1k by default.
+- This is not a hardcoded pet/cat rule; it is a general query-token relevance ranking for Core facts.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_sleep_recall engine_core_context_package_keeps_query_relevant_core_fact_under_budget`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
+## 2026-05-30 — Core-owned prompt memory view
+
+The ordinary chat prompt no longer relies on Telegram-specific Python code to decide how memory layers should be rendered. The Rust core now exposes `render_memory_view(package, current_user_message)` and returns the compact LLM-facing memory block with explicit layer geometry: `core_memory`, `long_memory`, `short_memory`, `current_user_message`, and `assistant_response_slot`.
+
+**What changed:**
+- Added `crates/memory_engine/src/prompt_view.rs` with canonical compact prompt rendering.
+- Exposed `memory_engine::render_memory_view` through the PyO3 adapter.
+- Changed the Telegram bot so `chat_prompt(...)` delegates to `engine.render_memory_view(...)` instead of owning memory projection helpers.
+- Changed token telemetry so sleep metrics estimate the core-rendered prompt memory view rather than the old Python compact projection.
+- Removed the old Telegram host compact projection helpers from the ordinary prompt/debug path.
+- Added Rust and Python adapter tests for the prompt-view boundary.
+
+**What is retracted (if applicable):**
+- The previous open debt that prompt-view policy lived in Telegram host code. That policy now belongs to the core. The host still owns provider/model/key, prompt files, network execution, and Telegram UX.
+
+**What is still true:**
+- `core_context_package` remains the full API/debug shape.
+- Debug/admin commands may still show IDs and audit metadata.
+- Ordinary chat prompt memory should stay compact and should not carry long technical IDs unless a user command needs them.
+
+**Reproducibility anchor:**
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --check`
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
 ## 2026-05-30 — Engine supports shared-reference calls and resource-scoped write locks
 
 After the pull-based sleep driver moved memory orchestration into the core, the next strategic risk was concurrency. The engine still exposed many public calls as `&mut self`, the Python class was marked `unsendable`, and the file-backed Core store had a real lost-update risk because `core/store/<category>.json` is shared by all scopes.

@@ -20,7 +20,6 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from html import escape as xml_escape
 from pathlib import Path
 from typing import Any
 
@@ -549,7 +548,7 @@ def handle_update(
 
     package = context_package(engine, session_id, chat_id, text)
     model = llm_config.chat_model().model
-    prompt = chat_prompt(package, text)
+    prompt = chat_prompt(engine, package, text)
     prompt_telemetry = chat_prompt_telemetry(package, session_id, prompt)
     answer_response = gemini.generate_text(
         model=model,
@@ -904,6 +903,7 @@ def complete_sleep_result(
     updated = outcome["archive_entry"]
     core_summary = outcome.get("core_summary", {})
     compact_tokens = estimate_tokens(clean_string(updated.get("compact_memory")))
+    log_sleep_compression_metrics(engine, sleep_run, updated)
     log_line(
         "sleep_driver_completed "
         f"archive={updated.get('archive_id')} "
@@ -1479,9 +1479,14 @@ def log_context_budget(package: dict[str, Any], session_id: str) -> None:
     )
 
 
-def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) -> None:
+def log_sleep_compression_metrics(
+    engine: memory_engine.MemoryEngine,
+    sleep_run: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    events = task.get("inputs", {}).get("events", [])
+    sleep_task = sleep_task_inputs_from_run(sleep_run)
+    events = sleep_task.get("events", [])
     transcript = sleep_events_transcript(events if isinstance(events, list) else [])
     raw_tokens = estimate_tokens(transcript)
     stored_archive_payload = {
@@ -1495,24 +1500,26 @@ def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) 
         "personal_signals": result.get("personal_signals", []),
         "relational_tone": result.get("relational_tone"),
     }
-    prompt_archive_payload = compact_archive_for_prompt(stored_archive_payload)
+    prompt_memory_view = archive_memory_view_for_metrics(engine, result)
     stored_archive_tokens = estimate_tokens(json.dumps(stored_archive_payload, ensure_ascii=False))
-    prompt_archive_tokens = estimate_tokens(json.dumps(prompt_archive_payload, ensure_ascii=False))
+    prompt_memory_view_tokens = estimate_tokens(prompt_memory_view)
     compact_memory_tokens = estimate_tokens(clean_string(result.get("compact_memory")))
     stored_ratio = stored_archive_tokens / raw_tokens if raw_tokens else 0.0
-    prompt_ratio = prompt_archive_tokens / raw_tokens if raw_tokens else 0.0
+    prompt_ratio = prompt_memory_view_tokens / raw_tokens if raw_tokens else 0.0
     compact_ratio = compact_memory_tokens / raw_tokens if raw_tokens else 0.0
     record = {
         "timestamp": now_rfc3339(),
         "kind": "sleep_compression_metric",
-        "task_id": task.get("task_id"),
-        "archive_id": task.get("inputs", {}).get("preliminary_archive_id"),
+        "task_id": sleep_run.get("sleep_task_id"),
+        "archive_id": result.get("archive_id") or sleep_task.get("preliminary_archive_id"),
         "raw_event_count": len(events) if isinstance(events, list) else 0,
         "raw_chat_estimated_tokens": raw_tokens,
         "stored_archive_estimated_tokens": stored_archive_tokens,
         "stored_archive_ratio": round(stored_ratio, 4),
-        "prompt_archive_estimated_tokens": prompt_archive_tokens,
+        "prompt_archive_estimated_tokens": prompt_memory_view_tokens,
         "prompt_archive_ratio": round(prompt_ratio, 4),
+        "prompt_memory_view_estimated_tokens": prompt_memory_view_tokens,
+        "prompt_memory_view_ratio": round(prompt_ratio, 4),
         "compact_memory_estimated_tokens": compact_memory_tokens,
         "compact_memory_ratio": round(compact_ratio, 4),
         "compressed_estimated_tokens": compact_memory_tokens,
@@ -1530,200 +1537,62 @@ def log_sleep_compression_metrics(task: dict[str, Any], result: dict[str, Any]) 
         f"task={record['task_id']} archive={record['archive_id']} "
         f"events={record['raw_event_count']} raw_est={raw_tokens} "
         f"stored_est={stored_archive_tokens} stored_ratio={record['stored_archive_ratio']} "
-        f"prompt_est={prompt_archive_tokens} prompt_ratio={record['prompt_archive_ratio']} "
+        f"prompt_view_est={prompt_memory_view_tokens} prompt_view_ratio={record['prompt_memory_view_ratio']} "
         f"compact_est={compact_memory_tokens} compact_ratio={record['compact_memory_ratio']} "
         f"memory_units={record['memory_units']}"
     )
+
+
+def sleep_task_inputs_from_run(sleep_run: dict[str, Any]) -> dict[str, Any]:
+    for state in sleep_run.get("requests", []):
+        if not isinstance(state, dict):
+            continue
+        request = state.get("request") if isinstance(state.get("request"), dict) else {}
+        prompt_inputs = request.get("prompt_inputs") if isinstance(request.get("prompt_inputs"), dict) else {}
+        sleep_task = prompt_inputs.get("sleep_task")
+        if isinstance(sleep_task, dict):
+            return sleep_task
+    return {}
+
+
+def archive_memory_view_for_metrics(engine: memory_engine.MemoryEngine, archive: dict[str, Any]) -> str:
+    archive_id = clean_string(archive.get("archive_id")) or "archive_metric"
+    recall_item = {
+        "source_layer": "archive",
+        "id": archive_id,
+        "gist": clean_string(archive.get("gist")) or "Archived memory.",
+        "compact_memory": clean_string(archive.get("compact_memory")) or None,
+        "narrative": None,
+        "facts": [],
+        "quotes": [],
+        "source_session_id": clean_string(archive.get("source_session_id")) or None,
+        "time_range": archive.get("time_range") if isinstance(archive.get("time_range"), dict) else None,
+        "tags": normalize_string_list(archive.get("tags")),
+        "theme": clean_string(archive.get("theme")) or None,
+        "weight": archive.get("weight") if isinstance(archive.get("weight"), (int, float)) else 0.0,
+        "freshness": archive.get("freshness") if isinstance(archive.get("freshness"), (int, float)) else 1.0,
+        "relevance_score": 1.0,
+        "relevance_explanation": None,
+    }
+    package = {
+        "schema_version": "core_context_package.v1",
+        "created_at": now_rfc3339(),
+        "core_facts": [],
+        "session_recent": [],
+        "session_trace": [],
+        "archive_relevant": [recall_item],
+        "domain_state": {},
+        "notes": ["metric-only prompt memory view for archived sleep output"],
+    }
+    return engine.render_memory_view(json.dumps(package, ensure_ascii=False), "")
 
 
 def chat_system_instruction() -> str:
     return CHAT_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
-def chat_prompt(package: dict[str, Any], user_text: str) -> str:
-    return render_chat_prompt(package, user_text)
-
-
-def render_chat_prompt(package: dict[str, Any], user_text: str) -> str:
-    recent_events = normalized_context_events(package.get("session_recent"))
-    trace_events = normalized_context_events(package.get("session_trace"))
-    prior_recent = drop_current_user_message(recent_events, user_text)
-    recent_ids = {event["event_id"] for event in recent_events if event.get("event_id")}
-    older_trace = [
-        event
-        for event in trace_events
-        if event.get("event_id") and event["event_id"] not in recent_ids
-    ][-20:]
-
-    lines = ["<memory_context>"]
-    lines.extend(
-        [
-            "<state>",
-            f"conversation_state: {'ongoing' if prior_recent else 'new_or_no_recent_context'}",
-        ]
-    )
-    if prior_recent:
-        lines.append(
-            "instruction: Continue the dialogue from the latest turn. Do not greet unless the current user message is a greeting."
-        )
-    else:
-        lines.append("instruction: No prior active dialogue is visible; a short greeting is allowed if natural.")
-    lines.append("</state>")
-
-    core_lines = render_core_facts_for_prompt(package.get("core_facts"))
-    lines.append("")
-    lines.append("<core_memory>")
-    if core_lines:
-        lines.extend(core_lines)
-    else:
-        lines.append("(empty)")
-    lines.append("</core_memory>")
-
-    archive_lines = render_archive_memories_for_prompt(package.get("archive_relevant"))
-    lines.append("")
-    lines.append("<long_memory>")
-    if archive_lines:
-        lines.extend(archive_lines)
-    else:
-        lines.append("(empty)")
-    lines.append("</long_memory>")
-
-    lines.append("")
-    lines.append("<short_memory>")
-    if older_trace:
-        lines.append("<older_active_dialogue>")
-        lines.extend(render_dialogue_lines(older_trace, max_text_chars=180))
-        lines.append("</older_active_dialogue>")
-
-    if prior_recent:
-        lines.append("<recent_dialogue>")
-        lines.extend(render_dialogue_lines(prior_recent, max_text_chars=900))
-        lines.append("</recent_dialogue>")
-    else:
-        lines.append("(empty)")
-    lines.append("</short_memory>")
-
-    lines.extend(
-        [
-            "",
-            "<current_user_message>",
-            xml_escape(clean_string(user_text), quote=False),
-            "</current_user_message>",
-            "",
-            "<assistant_response_slot>",
-            "Write only the assistant reply for the current user message.",
-            "</assistant_response_slot>",
-            "</memory_context>",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def normalized_context_events(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        return []
-    events = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        text = context_event_text(item)
-        if not text:
-            continue
-        events.append(
-            {
-                "event_id": clean_string(item.get("event_id")),
-                "role": context_event_role(item),
-                "text": text,
-            }
-        )
-    return events
-
-
-def context_event_text(event: dict[str, Any]) -> str:
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    return clean_string(event.get("text")) or clean_string(payload.get("text"))
-
-
-def context_event_role(event: dict[str, Any]) -> str:
-    event_type = clean_string(event.get("type")) or clean_string(event.get("event_type"))
-    return "assistant" if event_type == "assistant_message" else "user"
-
-
-def drop_current_user_message(events: list[dict[str, str]], user_text: str) -> list[dict[str, str]]:
-    if not events:
-        return []
-    current_text = clean_string(user_text)
-    last = events[-1]
-    if last.get("role") == "user" and last.get("text") == current_text:
-        return events[:-1]
-    return events
-
-
-def render_core_facts_for_prompt(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    lines = []
-    for fact in value:
-        if not isinstance(fact, dict):
-            continue
-        text = truncate_text(clean_string(fact.get("text")), 260)
-        if not text:
-            continue
-        text = xml_escape(text, quote=False)
-        category = clean_string(fact.get("category")) or "core"
-        confidence = fact.get("confidence")
-        if confidence is None:
-            lines.append(f"- {category}: {text}")
-        else:
-            lines.append(f"- {category} ({round(clamp_float(confidence, 0.0), 2)}): {text}")
-    return lines
-
-
-def render_archive_memories_for_prompt(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    lines = []
-    for archive in value[:5]:
-        if not isinstance(archive, dict):
-            continue
-        compact = compact_archive_for_prompt(archive)
-        memory = clean_string(compact.get("compact_memory")) or clean_string(compact.get("gist"))
-        if not memory:
-            continue
-        relevance = compact.get("relevance_score")
-        prefix = f"- [{relevance}] " if relevance is not None else "- "
-        for index, memory_line in enumerate(memory.splitlines()):
-            memory_line = memory_line.strip()
-            if not memory_line:
-                continue
-            memory_line = xml_escape(memory_line, quote=False)
-            lines.append((prefix if index == 0 else "  ") + memory_line)
-    return lines
-
-
-def render_dialogue_lines(events: list[dict[str, str]], max_text_chars: int) -> list[str]:
-    lines = []
-    for event in events:
-        text = truncate_text(event.get("text", ""), max_text_chars)
-        if text:
-            lines.append(f"{event.get('role', 'user')}: {xml_escape(text, quote=False)}")
-    return lines
-
-
-def truncate_text(text: str, max_chars: int) -> str:
-    cleaned = clean_string(text)
-    if len(cleaned) <= max_chars:
-        return cleaned
-    return cleaned[: max_chars - 3].rstrip() + "..."
-
-
-def chat_prompt_json_debug(package: dict[str, Any]) -> str:
-    compact = compact_context_package(package)
-    return (
-        "Memory Engine compact context JSON:\n"
-        f"{json.dumps(compact, ensure_ascii=False, indent=2)}\n\n"
-        "This view is for debug only."
-    )
+def chat_prompt(engine: memory_engine.MemoryEngine, package: dict[str, Any], user_text: str) -> str:
+    return engine.render_memory_view(json.dumps(package, ensure_ascii=False), user_text)
 
 
 def chat_prompt_telemetry(package: dict[str, Any], session_id: str, prompt: str) -> dict[str, Any]:
@@ -1737,6 +1606,7 @@ def chat_prompt_telemetry(package: dict[str, Any], session_id: str, prompt: str)
         "session_id": session_id,
         "system_instruction_estimated_tokens": system_tokens,
         "compact_prompt_estimated_tokens": prompt_estimate,
+        "prompt_memory_view_estimated_tokens": prompt_estimate - system_tokens,
         "debug_package_estimated_tokens": debug_package_tokens,
         "baseline_without_compression_estimated_tokens": baseline_without_compression,
         "estimated_savings_vs_baseline_tokens": baseline_without_compression - prompt_estimate,
@@ -1747,135 +1617,6 @@ def chat_prompt_telemetry(package: dict[str, Any], session_id: str, prompt: str)
         "context_budget_dropped_archive_relevant": budget.get("dropped_archive_relevant"),
         "context_budget_dropped_core_facts": budget.get("dropped_core_facts"),
     }
-
-
-def compact_context_package(package: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "core_facts": [compact_core_fact(fact) for fact in package.get("core_facts", [])],
-        "session_recent": [compact_event(event) for event in package.get("session_recent", [])],
-        "session_trace": [compact_event(event) for event in package.get("session_trace", [])],
-        "archive_relevant": [
-            compact_archive_for_prompt(archive) for archive in package.get("archive_relevant", [])
-        ],
-        "domain_state": compact_domain_state(package.get("domain_state")),
-    }
-
-
-def compact_core_fact(fact: Any) -> dict[str, Any]:
-    if not isinstance(fact, dict):
-        return {}
-    compact = {
-        "category": clean_string(fact.get("category")) or "core",
-        "text": clean_string(fact.get("text")),
-    }
-    if fact.get("confidence") is not None:
-        compact["confidence"] = round(clamp_float(fact.get("confidence"), 0.0), 2)
-    return compact
-
-
-def compact_event(event: Any) -> dict[str, Any]:
-    if not isinstance(event, dict):
-        return {}
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    text = clean_string(event.get("text")) or clean_string(payload.get("text"))
-    event_type = clean_string(event.get("type")) or clean_string(event.get("event_type"))
-    compact: dict[str, Any] = {"type": event_type or "event", "text": text}
-    theme = clean_string(event.get("theme"))
-    if theme:
-        compact["theme"] = theme
-    return compact
-
-
-def compact_archive_for_prompt(archive: Any) -> dict[str, Any]:
-    if not isinstance(archive, dict):
-        return {}
-    compact: dict[str, Any] = {}
-    archive_id = clean_string(archive.get("id")) or clean_string(archive.get("archive_id"))
-    compact_memory = clean_string(archive.get("compact_memory"))
-    if archive_id:
-        compact["archive_id"] = archive_id
-    if compact_memory:
-        compact["compact_memory"] = compact_memory
-        if archive.get("relevance_score") is not None:
-            compact["relevance_score"] = round(clamp_float(archive.get("relevance_score"), 0.0), 2)
-        return compact
-
-    gist = clean_string(archive.get("gist"))
-    theme = clean_string(archive.get("theme"))
-    if gist:
-        compact["gist"] = gist
-    if theme:
-        compact["theme"] = theme
-    if archive.get("relevance_score") is not None:
-        compact["relevance_score"] = round(clamp_float(archive.get("relevance_score"), 0.0), 2)
-    return {key: value for key, value in compact.items() if value not in ("", [], None)}
-
-
-def compact_emotional_marker(marker: dict[str, Any]) -> dict[str, Any]:
-    compact = {
-        "target": truncate_text(clean_string(marker.get("target")), 80),
-        "affect": truncate_text(clean_string(marker.get("affect")), 80),
-        "strength": round(clamp_float(marker.get("strength"), 0.0), 2),
-    }
-    evidence = truncate_text(clean_string(marker.get("evidence")), 160)
-    quote = truncate_text(clean_string(marker.get("quote")), 160)
-    if evidence:
-        compact["evidence"] = evidence
-    if quote:
-        compact["quote"] = quote
-    return compact
-
-
-def compact_topic_thread_item(item: dict[str, Any]) -> dict[str, Any]:
-    compact = {"topic": truncate_text(clean_string(item.get("topic")), 100)}
-    subtopics = normalize_string_list(item.get("subtopics"))
-    summary = truncate_text(clean_string(item.get("summary")), 160)
-    energy = clean_string(item.get("energy"))
-    if subtopics:
-        compact["subtopics"] = [truncate_text(item, 60) for item in subtopics[:4]]
-    if summary:
-        compact["summary"] = summary
-    if energy:
-        compact["energy"] = energy
-    return compact
-
-
-def compact_personal_signal(signal: dict[str, Any]) -> dict[str, Any]:
-    compact = {
-        "category": normalize_category(signal.get("category")),
-        "text": truncate_text(clean_string(signal.get("text")), 180),
-        "confidence": round(clamp_float(signal.get("confidence"), 0.0), 2),
-    }
-    evidence = truncate_text(clean_string(signal.get("evidence")), 160)
-    if evidence:
-        compact["evidence"] = evidence
-    return compact
-
-
-def compact_relational_tone(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    compact = {}
-    for key in ("warmth", "intellectual_engagement", "intimacy", "trust", "playfulness", "tension"):
-        if value.get(key) is not None:
-            compact[key] = round(clamp_float(value.get(key), 0.0), 2)
-    summary = truncate_text(clean_string(value.get("summary")), 180)
-    if summary:
-        compact["summary"] = summary
-    return compact
-
-
-def compact_domain_state(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    compact = {}
-    current_text = clean_string(value.get("current_text"))
-    active_topic = clean_string(value.get("active_topic"))
-    if current_text:
-        compact["current_text"] = current_text
-    if active_topic:
-        compact["active_topic"] = active_topic
-    return compact
 
 
 def raw_chat_history_baseline_text(session_id: str) -> str:

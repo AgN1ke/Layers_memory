@@ -4250,3 +4250,163 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Головний concurrency hazard цієї гілки закритий: API більше не потребує mutable engine, Python adapter не прив'язаний до одного OS-потоку через `unsendable`, а паралельні записи в спільну core-категорію більше не гублять scope-факти. Наступний крок — переглянути diff, зафіксувати коміт і вирішити, чи переносити prompt-view/rendering із хоста в ядро окремою малою гілкою, чи йти далі до Phase B reflection.
+
+## Запис 79 — 2026-05-30 13:49 +03:00 — Prompt-facing memory view перенесено з Telegram host у ядро
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після core-orchestration і concurrency у `bot.py` лишався останній важливий шмат логіки пам'яті: збір LLM-facing prompt geometry. Telegram host сам вирішував, як перетворити `core_context_package` на `<core_memory>`, `<long_memory>`, `<short_memory>` і поточну репліку. Для Godot або іншого майбутнього адаптера це означало б дублювання projection policy.
+
+**Задум:**
+Зробити prompt-facing memory view функцією ядра. Хост має лишатися власником provider/model/key, network call, system prompt file і UX-команд, але не має знати, як компонувати шари пам'яті в compact prompt block.
+
+**Що робили:**
+- Додали `crates/memory_engine/src/prompt_view.rs`.
+- Експортували `memory_engine::render_memory_view`.
+- Додали PyO3 метод `engine.render_memory_view(package_json, current_user_message)`.
+- Перевели `hosts/telegram_gemini_bot/bot.py` на делегування prompt view у ядро.
+- Прибрали з `bot.py` старі helper-и `render_chat_prompt`, `normalized_context_events`, `render_core_facts_for_prompt`, `render_archive_memories_for_prompt`, `render_dialogue_lines` і `xml_escape`.
+- Додали Rust unit-test і Python adapter test для нового boundary.
+
+**Що зробили детально:**
+Новий renderer у ядрі будує той самий compact XML-like memory block: `state`, `core_memory`, `long_memory`, `short_memory`, `current_user_message`, `assistant_response_slot`. Він прибирає дубль поточного user message з recent dialogue, лишає active transcript ролями `user:` / `assistant:`, бере archive prompt memory з `compact_memory` або `gist`, не тягне довгі технічні ID у звичайний chat prompt і XML-escape-ить текстові значення.
+
+**Проблеми чи виклики:**
+Повний `core_context_package` лишається API/debug формою. Debug-команди Telegram і token telemetry усе ще можуть будувати компактні JSON-проекції для логів і audit; це не chat prompt path. Тому `compact_archive_for_prompt` у боті лишився для telemetry/debug, але не для формування відповіді моделі.
+
+**Фідбек користувача:**
+Користувач попросив після concurrency дивитися не тільки на моментні задачі, а на загальну стратегічну лінію. Цей крок закриває попередній фундаментальний борг: другий адаптер не повинен заново реалізовувати геометрію пам'яті.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло, 36 passed, 1 ignored.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+
+**Висновок:**
+Prompt-facing memory view тепер належить Rust core. Telegram bot став тоншим: він отримує context package, просить ядро зібрати memory view і віддає результат LLM разом зі своїм system prompt. Наступний великий блок після цього — повернення до Phase B reflection: evidence pack, fidelity validator і candidate review.
+
+## Запис 80 — 2026-05-30 18:40 +03:00 — Телеметрію prompt view переведено на реальний core render
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після перенесення `render_memory_view` у ядро в `bot.py` лишились старі `compact_*` helper-и. Вони вже не формували chat prompt, але sleep telemetry досі рахувала `prompt_archive_ratio` через стару Python-проекцію. Це псувало acceptance: логи міряли не той артефакт, який реально йде в модель.
+
+**Задум:**
+Зробити token telemetry чесною: рахувати реальний prompt-facing memory view, який повертає ядро, і прибрати стару host-side projection policy повністю.
+
+**Що робили:**
+- `log_sleep_compression_metrics(...)` тепер приймає engine і `SleepRun`, дістає raw sleep events із run-запитів і рахує raw chat tokens.
+- Для sleep metric будується мінімальний `core_context_package` з одним `archive_relevant` item і рендериться через `engine.render_memory_view(...)`.
+- У `token_usage.jsonl` додано `prompt_memory_view_estimated_tokens` і `prompt_memory_view_ratio`.
+- Старі поля `prompt_archive_estimated_tokens` / `prompt_archive_ratio` лишені як сумісні alias-и, але тепер вони теж базуються на core-rendered memory view, а не на Python compact projection.
+- Видалено `compact_context_package`, `compact_archive_for_prompt`, `compact_core_fact`, `compact_event`, `compact_emotional_marker`, `compact_topic_thread_item`, `compact_personal_signal`, `compact_relational_tone`, `compact_domain_state`, `chat_prompt_json_debug` і `truncate_text` із `bot.py`.
+
+**Що зробили детально:**
+Chat telemetry тепер має окреме поле `prompt_memory_view_estimated_tokens`, тобто розмір memory view без system prompt. Sleep telemetry порівнює raw transcript, повний stored archive payload, core-rendered prompt memory view і `compact_memory` theses. Це дає чесну картину: скільки коштує повний storage/audit запис, скільки коштує реальний prompt view і скільки лишається у власне тезовій стиснутій пам'яті.
+
+**Проблеми чи виклики:**
+`prompt_archive_estimated_tokens` тепер включає overhead мінімального `<memory_context>` render-а, бо ми свідомо міряємо реальний core render, а не ручно ізольований рядок архіву. Для точного layer-only breakdown пізніше можна додати core-level report, але зараз головне — прибрати мертвий Python artifact із telemetry.
+
+**Фідбек користувача:**
+Користувач передав зауваження Claude: merge передчасний без live-check, а telemetry має міряти реальний `render_memory_view`, інакше budget acceptance нечесний. Це зауваження прийнято.
+
+**Перевірки:**
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `Select-String ... compact_* / render_chat_prompt / xml_escape` — старих projection helper-ів у `bot.py` не лишилось.
+- Синтетична перевірка `archive_memory_view_for_metrics(...)` через PyO3 — пройшла; виправлено `source_layer` на `archive`.
+- `git diff --check` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+
+**Висновок:**
+Тепер у Telegram host немає власної prompt projection policy. Залишився обов'язковий live-check: багатоходова розмова без привітань посеред діалогу, перевірка short/long/core memory і відсутність XML-тегів у відповіді.
+
+## Запис 81 — 2026-05-30 22:42 +03:00 — Core budget став query-aware після провалу з Іржею
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Під час live-check користувач запитав "А кішка?", але бот не дістав факт про Іржу, хоча розмова про кішку вже була заархівована і перенесена в Core. Перевірка файлів показала: факт не втрачений. Він є в `runtime/memory/core/store/pet.json` і в archive/memory units. Проблема була в prompt selection: `core_context_package` мав бюджет Core 1k і відкинув 22 Core-факти. Оскільки майже всі факти мали confidence `0.95`, сортування фактично йшло за категорією, і `pet` програв алфавітному порядку.
+
+**Задум:**
+Не збільшувати Core budget і не хардкодити кішку. Замість цього зробити Core selection контекстним: якщо користувач питає про конкретну тему, Core-факти з цією темою мають пріоритет перед нерелевантними фактами з тією самою confidence.
+
+**Що робили:**
+- Додали query-aware ranking для Core facts перед `apply_context_token_budget`.
+- Ранжування використовує токени поточного query/current_text і порівнює їх із текстом, категорією та тегами Core-факту.
+- Якщо query порожній або не має змістовних токенів, старий порядок confidence/category/id зберігається.
+- Додали regression test `engine_core_context_package_keeps_query_relevant_core_fact_under_budget`.
+
+**Що зробили детально:**
+Для запиту `А кішка?` факт `У користувача є триколірна кішка на ім'я Іржа...` тепер стає першим у `core_memory` і виживає при тому самому бюджеті, де раніше його відкидало. Це загальне правило релевантності, не спеціальний код для кішок чи Іржі.
+
+**Проблеми чи виклики:**
+Перша ручна Python-перевірка через PowerShell pipe зіпсувала Unicode, тому query доходив у ядро як `? ??????`. Повторна перевірка через Unicode escape підтвердила, що виправлений core ranking працює коректно: `pet` потрапляє в rendered memory view.
+
+**Фідбек користувача:**
+Користувач показав конкретний live-транскрипт: бот мав знати про кішку Іржу, але не використав цю пам'ять. Це виявило реальний дефект budgeting/ranking, а не дефект sleep чи Core bridge.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine --test engine_sleep_recall engine_core_context_package_keeps_query_relevant_core_fact_under_budget` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+- Ручна перевірка `engine.render_memory_view(...)` для query `А кішка?` — у `<core_memory>` є `pet (0.95)` з Іржею.
+
+**Висновок:**
+Core memory тепер не лише стабільна, а й контекстно корисна під бюджетом. Наступний live-check має повторити питання про кішку після перезапуску бота на оновленому PyO3 adapter.
+
+## Запис 82 — 2026-05-30 22:56 +03:00 — Context budget рахує prompt-facing форму, а не storage JSON
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після query-aware фікса Claude справедливо вказав на другий дефект: бюджет рахував `CoreContextFact` як повний JSON-об'єкт, хоча в prompt модель бачить тільки компактний рядок типу `- pet (0.95): ...`. Через це `core_fact_id`, `scope`, `tags`, JSON-скоби й audit-метадані штучно з'їдали Core budget, хоча в LLM prompt їх немає.
+
+**Задум:**
+Зробити budget estimator чесним відносно фактичного prompt view. Якщо ядро тепер володіє `render_memory_view`, то й бюджет має оцінювати ті самі компактні рядки, які renderer віддає моделі.
+
+**Що робили:**
+- У `prompt_view.rs` винесли prompt-line render helpers для Core facts, Archive memories і dialogue events.
+- `apply_context_token_budget` тепер використовує prompt-shaped estimators:
+  - Core: рядок `- category (confidence): text`.
+  - Archive: ті самі compact/gist рядки, що й `<long_memory>`.
+  - Session recent/trace: ті самі `user:` / `assistant:` рядки з truncation, що й `<short_memory>`.
+- Archive budget узгоджено з prompt-view limit: у prompt іде максимум 5 archive memories, тому budget теж не рахує невидимі archive items як prompt cost.
+- Додано regression test `engine_core_budget_uses_prompt_shape_not_storage_json`.
+
+**Що зробили детально:**
+На реальній runtime-пам'яті для query `А кішка?` до цього фікса в Core проходило 7 фактів і відкидало 22. Після переходу на prompt-shaped estimate проходить 23 Core-факти, відкидає 6, а `pet`-факт про Іржу лишається першим. Це прибирає марнотратство без збільшення 1k Core budget.
+
+**Проблеми чи виклики:**
+Треба було не розійтись із фактичним renderer-ом. Тому estimate helpers не пишуть окремий формат, а використовують ті самі prompt-line функції, що й `render_memory_view`. Це зменшує ризик, що бюджет знову почне міряти не той артефакт.
+
+**Фідбек користувача:**
+Користувач передав зауваження Claude: попередній фікс релевантності правильний, але неповний, бо budget усе ще марнував токени на storage-only поля. Зауваження підтвердилось по коду і по live runtime-пам'яті.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine --test engine_sleep_recall engine_core_context_package_keeps_query_relevant_core_fact_under_budget` — пройшло.
+- `cargo test -p memory_engine --test engine_sleep_recall engine_core_budget_uses_prompt_shape_not_storage_json` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+- Runtime check через `context_package(..., "А кішка?")`: `core_count=23`, `estimated_core_tokens=988`, `dropped_core_facts=6`, `VIEW_HAS_IRZHA=True`.
+
+**Висновок:**
+Core budget тепер і релевантний, і чесний до реального prompt view. Це не намагається пхати сотні фактів у prompt; це прибирає зайві storage/debug поля з budget-мірки й лишає 1k Core budget для змісту.
