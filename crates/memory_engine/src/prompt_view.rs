@@ -1,10 +1,11 @@
 use crate::core_store::{CoreContextEvent, CoreContextFact, CoreContextPackage};
 use crate::recall::RecallItem;
 
-const OLDER_TRACE_LIMIT: usize = 20;
-const OLDER_TRACE_MAX_TEXT_CHARS: usize = 180;
-const RECENT_MAX_TEXT_CHARS: usize = 900;
-const CORE_FACT_MAX_TEXT_CHARS: usize = 260;
+pub const ARCHIVE_MEMORY_PROMPT_LIMIT: usize = 5;
+pub const OLDER_TRACE_LIMIT: usize = 20;
+pub const OLDER_TRACE_MAX_TEXT_CHARS: usize = 180;
+pub const RECENT_MAX_TEXT_CHARS: usize = 900;
+pub const CORE_FACT_MAX_TEXT_CHARS: usize = 260;
 
 pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &str) -> String {
     let recent_events = normalized_context_events(&package.session_recent);
@@ -138,47 +139,16 @@ fn drop_current_user_message(
 fn render_core_facts(facts: &[CoreContextFact]) -> Vec<String> {
     facts
         .iter()
-        .filter_map(|fact| {
-            let text = truncate_text(clean_string(&fact.text), CORE_FACT_MAX_TEXT_CHARS);
-            if text.is_empty() {
-                return None;
-            }
-            let category = if clean_string(&fact.category).is_empty() {
-                "core"
-            } else {
-                clean_string(&fact.category)
-            };
-            let confidence = format_score(fact.confidence);
-            Some(format!(
-                "- {category} ({confidence}): {}",
-                xml_escape(&text)
-            ))
-        })
+        .filter_map(render_core_fact_prompt_line)
         .collect()
 }
 
 fn render_archive_memories(archives: &[RecallItem]) -> Vec<String> {
-    let mut lines = Vec::new();
-    for archive in archives.iter().take(5) {
-        let memory = archive
-            .compact_memory
-            .as_deref()
-            .map(clean_string)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| clean_string(&archive.gist));
-        if memory.is_empty() {
-            continue;
-        }
-        let prefix = format!("- [{}] ", format_score(archive.relevance_score));
-        for (index, memory_line) in memory.lines().map(str::trim).enumerate() {
-            if memory_line.is_empty() {
-                continue;
-            }
-            let line_prefix = if index == 0 { prefix.as_str() } else { "  " };
-            lines.push(format!("{line_prefix}{}", xml_escape(memory_line)));
-        }
-    }
-    lines
+    archives
+        .iter()
+        .take(ARCHIVE_MEMORY_PROMPT_LIMIT)
+        .flat_map(render_archive_memory_prompt_lines)
+        .collect()
 }
 
 fn render_dialogue_lines(events: &[DialogueEvent], max_text_chars: usize) -> Vec<String> {
@@ -189,6 +159,65 @@ fn render_dialogue_lines(events: &[DialogueEvent], max_text_chars: usize) -> Vec
             (!text.is_empty()).then(|| format!("{}: {}", event.role, xml_escape(&text)))
         })
         .collect()
+}
+
+pub fn render_core_fact_prompt_line(fact: &CoreContextFact) -> Option<String> {
+    let text = truncate_text(clean_string(&fact.text), CORE_FACT_MAX_TEXT_CHARS);
+    if text.is_empty() {
+        return None;
+    }
+    let category = if clean_string(&fact.category).is_empty() {
+        "core"
+    } else {
+        clean_string(&fact.category)
+    };
+    let confidence = format_score(fact.confidence);
+    Some(format!(
+        "- {category} ({confidence}): {}",
+        xml_escape(&text)
+    ))
+}
+
+pub fn render_archive_memory_prompt_lines(archive: &RecallItem) -> Vec<String> {
+    let memory = archive
+        .compact_memory
+        .as_deref()
+        .map(clean_string)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| clean_string(&archive.gist));
+    if memory.is_empty() {
+        return Vec::new();
+    }
+
+    let prefix = format!("- [{}] ", format_score(archive.relevance_score));
+    let mut lines = Vec::new();
+    for (index, memory_line) in memory.lines().map(str::trim).enumerate() {
+        if memory_line.is_empty() {
+            continue;
+        }
+        let line_prefix = if index == 0 { prefix.as_str() } else { "  " };
+        lines.push(format!("{line_prefix}{}", xml_escape(memory_line)));
+    }
+    lines
+}
+
+pub fn render_context_event_prompt_line(
+    event: &CoreContextEvent,
+    max_text_chars: usize,
+) -> Option<String> {
+    let text = clean_string(event.text.as_deref()?);
+    if text.is_empty() {
+        return None;
+    }
+    let role = if event.event_type == "assistant_message" {
+        "assistant"
+    } else {
+        "user"
+    };
+    Some(format!(
+        "{role}: {}",
+        xml_escape(&truncate_text(text, max_text_chars))
+    ))
 }
 
 fn tail<T>(mut items: Vec<T>, limit: usize) -> Vec<T> {

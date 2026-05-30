@@ -4368,3 +4368,45 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Core memory тепер не лише стабільна, а й контекстно корисна під бюджетом. Наступний live-check має повторити питання про кішку після перезапуску бота на оновленому PyO3 adapter.
+
+## Запис 82 — 2026-05-30 22:56 +03:00 — Context budget рахує prompt-facing форму, а не storage JSON
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після query-aware фікса Claude справедливо вказав на другий дефект: бюджет рахував `CoreContextFact` як повний JSON-об'єкт, хоча в prompt модель бачить тільки компактний рядок типу `- pet (0.95): ...`. Через це `core_fact_id`, `scope`, `tags`, JSON-скоби й audit-метадані штучно з'їдали Core budget, хоча в LLM prompt їх немає.
+
+**Задум:**
+Зробити budget estimator чесним відносно фактичного prompt view. Якщо ядро тепер володіє `render_memory_view`, то й бюджет має оцінювати ті самі компактні рядки, які renderer віддає моделі.
+
+**Що робили:**
+- У `prompt_view.rs` винесли prompt-line render helpers для Core facts, Archive memories і dialogue events.
+- `apply_context_token_budget` тепер використовує prompt-shaped estimators:
+  - Core: рядок `- category (confidence): text`.
+  - Archive: ті самі compact/gist рядки, що й `<long_memory>`.
+  - Session recent/trace: ті самі `user:` / `assistant:` рядки з truncation, що й `<short_memory>`.
+- Archive budget узгоджено з prompt-view limit: у prompt іде максимум 5 archive memories, тому budget теж не рахує невидимі archive items як prompt cost.
+- Додано regression test `engine_core_budget_uses_prompt_shape_not_storage_json`.
+
+**Що зробили детально:**
+На реальній runtime-пам'яті для query `А кішка?` до цього фікса в Core проходило 7 фактів і відкидало 22. Після переходу на prompt-shaped estimate проходить 23 Core-факти, відкидає 6, а `pet`-факт про Іржу лишається першим. Це прибирає марнотратство без збільшення 1k Core budget.
+
+**Проблеми чи виклики:**
+Треба було не розійтись із фактичним renderer-ом. Тому estimate helpers не пишуть окремий формат, а використовують ті самі prompt-line функції, що й `render_memory_view`. Це зменшує ризик, що бюджет знову почне міряти не той артефакт.
+
+**Фідбек користувача:**
+Користувач передав зауваження Claude: попередній фікс релевантності правильний, але неповний, бо budget усе ще марнував токени на storage-only поля. Зауваження підтвердилось по коду і по live runtime-пам'яті.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test -p memory_engine --test engine_sleep_recall engine_core_context_package_keeps_query_relevant_core_fact_under_budget` — пройшло.
+- `cargo test -p memory_engine --test engine_sleep_recall engine_core_budget_uses_prompt_shape_not_storage_json` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace -- -D warnings` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+- Runtime check через `context_package(..., "А кішка?")`: `core_count=23`, `estimated_core_tokens=988`, `dropped_core_facts=6`, `VIEW_HAS_IRZHA=True`.
+
+**Висновок:**
+Core budget тепер і релевантний, і чесний до реального prompt view. Це не намагається пхати сотні фактів у prompt; це прибирає зайві storage/debug поля з budget-мірки й лишає 1k Core budget для змісту.

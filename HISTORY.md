@@ -46,6 +46,30 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-30 — Context budget uses prompt-shaped memory estimates
+
+Context budgeting now estimates Core, Archive, and Session items by the compact prompt-facing lines produced by the core prompt-view renderer, not by their full storage/debug JSON structs. This removes storage-only overhead such as `core_fact_id`, `scope`, `tags`, JSON braces, and audit fields from prompt budget decisions.
+
+**What changed:**
+- `apply_context_token_budget` now uses prompt-shaped estimators for Core facts, archive memories, recent dialogue, and trace dialogue.
+- Archive budget is aligned with the prompt-view archive display limit.
+- Added a regression test proving short Core facts with very large storage-only tags are kept because those tags are not part of the rendered prompt memory.
+
+**What is retracted (if applicable):**
+- The previous budget estimate over-counted prompt memory by measuring storage JSON. That made Core appear much more expensive than the model-facing prompt actually was.
+
+**What is still true:**
+- The estimator remains deliberately conservative (`unicode_chars_div_2_ceil_json_v1` / rendered text chars divided by two).
+- The 11k/7k/3k/1k budget split remains unchanged.
+- Query-aware ranking from the previous entry still decides which facts should be kept first when the compact Core budget is still full.
+
+**Reproducibility anchor:**
+- Runtime check for query `А кішка?`: Core facts kept increased from 7 to 23, dropped Core facts decreased from 22 to 6, and the `pet` fact for Іржа remained first.
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
 ## 2026-05-30 — Query-aware Core fact budgeting
 
 Core Store facts are now ranked against the current query before the 1k Core memory budget is applied. Previously, active Core facts were sorted mostly by confidence and category, so when many facts had the same confidence, a directly relevant fact could be dropped only because its category sorted later.
