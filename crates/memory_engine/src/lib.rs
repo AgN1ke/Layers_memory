@@ -17,6 +17,7 @@ pub mod llm;
 pub mod manifest;
 pub mod prompt_view;
 pub mod recall;
+pub mod reflection;
 pub mod session;
 pub mod sleep;
 pub mod storage;

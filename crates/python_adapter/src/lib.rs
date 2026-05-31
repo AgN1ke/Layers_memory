@@ -23,11 +23,12 @@ use serde::Serialize;
 
 use ::memory_engine::archive::FidelityReview;
 use ::memory_engine::core_store::{
-    CoreContextPackage, CoreContextRequest, CoreFactInput, CoreFactPatchInput,
+    CandidateReviewInput, CoreContextPackage, CoreContextRequest, CoreFactInput, CoreFactPatchInput,
 };
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::llm::{LlmResponse, SleepRun};
 use ::memory_engine::recall::RecallQuery;
+use ::memory_engine::reflection::ReflectionAnalyzeResult;
 use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::storage::Storage;
 use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
@@ -112,6 +113,56 @@ impl PyMemoryEngine {
                 .submit_memory_fidelity_response(task_id, response)
         })?;
         dump_json(&unit, "memory unit")
+    }
+
+    #[pyo3(signature = (session_id, core_scope=None))]
+    fn begin_reflection_analysis(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        core_scope: Option<String>,
+    ) -> PyResult<String> {
+        let start = run_without_gil(py, || {
+            self.inner.begin_reflection_analysis(session_id, core_scope)
+        })?;
+        dump_json(&start, "reflection pass")
+    }
+
+    fn submit_reflection_response(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        response_json: &str,
+    ) -> PyResult<String> {
+        let response: LlmResponse = parse_json(response_json, "LLM response")?;
+        let result = run_without_gil(py, || {
+            self.inner.submit_reflection_response(task_id, response)
+        })?;
+        dump_json(&result, "reflection candidates")
+    }
+
+    fn resume_reflection_analysis(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        result_json: &str,
+    ) -> PyResult<String> {
+        let result: ReflectionAnalyzeResult = parse_json(result_json, "reflection result")?;
+        let candidates = run_without_gil(py, || {
+            self.inner.resume_reflection_analysis(task_id, result)
+        })?;
+        dump_json(&candidates, "reflection candidates")
+    }
+
+    fn list_candidates(&self, py: Python<'_>) -> PyResult<String> {
+        let candidates = run_without_gil(py, || self.inner.list_candidates())?;
+        dump_json(&candidates, "candidate beliefs")
+    }
+
+    fn review_candidate(&self, py: Python<'_>, review_json: &str) -> PyResult<String> {
+        let input: CandidateReviewInput = parse_json(review_json, "candidate review input")?;
+        let result = run_without_gil(py, || self.inner.review_candidate(input))?;
+        dump_json(&result, "candidate review result")
     }
 
     fn resume_memory_fidelity_pass(

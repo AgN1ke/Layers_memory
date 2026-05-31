@@ -347,6 +347,35 @@ impl Storage for FileStorage {
         atomic_write_json(&self.candidate_path(&candidate.candidate_id), candidate)
     }
 
+    fn read_candidate_belief(&self, candidate_id: &str) -> Result<CandidateBelief> {
+        self.ensure_layout()?;
+        let path = self.candidate_path(candidate_id);
+        if !path.exists() {
+            return Err(MemoryEngineError::Storage(format!(
+                "candidate belief not found: {candidate_id}"
+            )));
+        }
+        read_json(&path)
+    }
+
+    fn read_candidate_beliefs(&self) -> Result<Vec<CandidateBelief>> {
+        self.ensure_layout()?;
+        let mut files = Vec::new();
+        collect_json_files(&self.root.join("core").join("candidates"), &mut files)?;
+
+        let mut candidates = Vec::new();
+        for path in files {
+            candidates.push(read_json(&path)?);
+        }
+        candidates.sort_by(|left: &CandidateBelief, right: &CandidateBelief| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.candidate_id.cmp(&right.candidate_id))
+        });
+        Ok(candidates)
+    }
+
     fn save_task(&self, task: &crate::tasks::PendingTask) -> Result<()> {
         self.ensure_layout()?;
         let active_path = self.task_path(&task.task_id);

@@ -8,6 +8,7 @@ use crate::types::{Id, Link, Timestamp};
 #[serde(rename_all = "snake_case")]
 pub enum CoreFactStatus {
     Active,
+    Contested,
     Deprecated,
     Contradicted,
     NeedsReview,
@@ -240,6 +241,10 @@ pub enum CandidateStatus {
 pub struct CandidateBelief {
     pub schema_version: String,
     pub candidate_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_scope: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub text: String,
@@ -252,8 +257,34 @@ pub struct CandidateBelief {
     pub contradicting_archive_ids: Vec<Id>,
     pub evidence_summary: String,
     pub promotion_checks: PromotionChecks,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_memory_unit_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promoted_core_fact_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CandidateReviewInput {
+    pub schema_version: String,
+    pub candidate_id: Id,
+    pub reviewed_by: String,
+    pub decision: ReviewDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_scope: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CandidateReviewResult {
+    pub schema_version: String,
+    pub candidate: CandidateBelief,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promoted_fact: Option<CoreFact>,
 }

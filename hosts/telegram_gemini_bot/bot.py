@@ -367,7 +367,8 @@ def main() -> None:
     print(
         "Commands: /help, /sleep, /archives, /archive_last, /recall text, "
         "/core, /core_seed, /remember text, /core_update id text, "
-        "/core_forget id, /evidence unit_id, /fidelity unit_id, /tasks, /models"
+        "/core_forget id, /evidence unit_id, /fidelity unit_id, /reflect, "
+        "/candidates, /confirm id, /reject id, /tasks, /models"
     )
     offset = read_saved_offset()
     log_line(
@@ -544,6 +545,52 @@ def handle_update(
             return
         result = run_memory_fidelity(engine, gemini, llm_config, unit_id)
         telegram.send_message(chat_id, format_fidelity_result(result))
+        return
+
+    if text == "/reflect":
+        result = run_reflection_analysis(
+            engine,
+            gemini,
+            llm_config,
+            session_id,
+            core_scope(session_id),
+        )
+        telegram.send_message(chat_id, format_reflection_result(result))
+        return
+
+    if text == "/candidates":
+        candidates = json.loads(engine.list_candidates())
+        telegram.send_message(chat_id, format_candidates(candidates, scope=core_scope(session_id)))
+        return
+
+    if text.startswith("/confirm"):
+        candidate_id = text.removeprefix("/confirm").strip()
+        if not candidate_id:
+            telegram.send_message(chat_id, "Usage: /confirm candidate_id")
+            return
+        result = review_candidate(
+            engine=engine,
+            candidate_id=candidate_id,
+            reviewed_by=f"telegram_user_{user.get('id', 'unknown')}",
+            decision="approved",
+            scope=core_scope(session_id),
+        )
+        telegram.send_message(chat_id, format_candidate_review(result))
+        return
+
+    if text.startswith("/reject"):
+        candidate_id = text.removeprefix("/reject").strip()
+        if not candidate_id:
+            telegram.send_message(chat_id, "Usage: /reject candidate_id")
+            return
+        result = review_candidate(
+            engine=engine,
+            candidate_id=candidate_id,
+            reviewed_by=f"telegram_user_{user.get('id', 'unknown')}",
+            decision="rejected",
+            scope=core_scope(session_id),
+        )
+        telegram.send_message(chat_id, format_candidate_review(result))
         return
 
     if text.startswith("/"):
@@ -1024,6 +1071,28 @@ def run_memory_fidelity(
     }
 
 
+def run_reflection_analysis(
+    engine: memory_engine.MemoryEngine,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    session_id: str,
+    scope: str,
+) -> dict[str, Any]:
+    start = json.loads(engine.begin_reflection_analysis(session_id, scope))
+    response = execute_llm_request(start["request"], gemini, llm_config)
+    task_id = start["pending_task"]["task_id"]
+    result = json.loads(
+        engine.submit_reflection_response(
+            task_id,
+            json.dumps(response, ensure_ascii=False),
+        )
+    )
+    return {
+        "start": start,
+        "result": result,
+    }
+
+
 def run_auto_fidelity_requests(
     engine: memory_engine.MemoryEngine,
     gemini: GeminiClient,
@@ -1226,6 +1295,26 @@ def patch_core_fact(
         payload["tags"] = tags
 
     return json.loads(engine.patch_core_fact(json.dumps(payload, ensure_ascii=False)))
+
+
+def review_candidate(
+    engine: memory_engine.MemoryEngine,
+    candidate_id: str,
+    reviewed_by: str,
+    decision: str,
+    scope: str,
+    note: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "candidate_review_input.v1",
+        "candidate_id": candidate_id,
+        "reviewed_by": reviewed_by,
+        "decision": decision,
+        "core_scope": scope,
+    }
+    if note:
+        payload["note"] = note
+    return json.loads(engine.review_candidate(json.dumps(payload, ensure_ascii=False)))
 
 
 def core_scope(session_id: str) -> str:
@@ -2011,6 +2100,69 @@ def format_fidelity_result(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_candidate(candidate: dict[str, Any], index: int | None = None) -> str:
+    prefix = f"{index}. " if index is not None else ""
+    candidate_id = clean_string(candidate.get("candidate_id"))
+    category = clean_string(candidate.get("category")) or "core"
+    status = clean_string(candidate.get("status")) or "candidate"
+    confidence = clamp_float(candidate.get("confidence"), 0.0)
+    text = clean_string(candidate.get("text"))
+    return f"{prefix}{candidate_id} [{status} {category} {confidence:.2f}] {text}"
+
+
+def format_reflection_result(result: dict[str, Any]) -> str:
+    start = result.get("start", {})
+    reflection = result.get("result", {})
+    candidates = [item for item in reflection.get("candidates", []) if isinstance(item, dict)]
+    lines = [
+        "Reflection finished.",
+        f"Memory units scanned: {start.get('memory_unit_count', 0)}",
+        f"Core facts in view: {start.get('core_fact_count', 0)}",
+        f"Candidates: {len(candidates)}",
+    ]
+    if candidates:
+        lines.append("")
+        lines.append("Candidate beliefs:")
+        for index, candidate in enumerate(candidates, start=1):
+            lines.append(format_candidate(candidate, index))
+            evidence = clean_string(candidate.get("evidence_summary"))
+            if evidence:
+                lines.append(f"   evidence: {truncate_chars(evidence, 180)}")
+        lines.append("")
+        lines.append("Use /confirm candidate_id or /reject candidate_id.")
+    return "\n".join(lines)
+
+
+def format_candidates(candidates: list[dict[str, Any]], scope: str) -> str:
+    visible = [
+        candidate
+        for candidate in candidates
+        if not candidate.get("core_scope") or candidate.get("core_scope") == scope
+    ]
+    if not visible:
+        return "No candidate beliefs for this chat."
+    lines = ["Candidate beliefs:"]
+    for index, candidate in enumerate(visible[:20], start=1):
+        lines.append(format_candidate(candidate, index))
+    if len(visible) > 20:
+        lines.append(f"... and {len(visible) - 20} more")
+    lines.append("Use /confirm candidate_id or /reject candidate_id.")
+    return "\n".join(lines)
+
+
+def format_candidate_review(result: dict[str, Any]) -> str:
+    candidate = result.get("candidate", {})
+    promoted = result.get("promoted_fact")
+    lines = [
+        f"Candidate: {candidate.get('candidate_id', '')}",
+        f"Status: {candidate.get('status', '')}",
+        f"Text: {candidate.get('text', '')}",
+    ]
+    if isinstance(promoted, dict):
+        lines.append(f"Promoted Core fact: {promoted.get('core_fact_id', '')}")
+    return "\n".join(lines)
+
+
 def format_core_facts(package: dict[str, Any]) -> str:
     facts = package.get("core_facts", [])
     if not facts:
@@ -2070,6 +2222,10 @@ def help_text() -> str:
         "/core_forget id - deprecate a Core fact in this chat\n"
         "/evidence memory_unit_id - inspect the source evidence pack for one memory unit\n"
         "/fidelity memory_unit_id - run the reasoning fidelity validator for one memory unit\n"
+        "/reflect - analyze validated memory units and create Core candidates\n"
+        "/candidates - list candidate beliefs for this chat\n"
+        "/confirm candidate_id - promote a reviewed candidate into Core\n"
+        "/reject candidate_id - reject a candidate belief\n"
         "/tasks - show pending tasks\n"
         "/models - show model role mapping\n"
         "\n"

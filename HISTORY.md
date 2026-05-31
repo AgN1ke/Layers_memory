@@ -46,6 +46,31 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-01 — Reflection candidates require manual review before Core promotion
+
+Reflection Phase C starts the controlled path from validated memory units to Core. The core can now ask a host to run `reflection_analyze`, store candidate beliefs, list them, and promote or reject them by explicit owner review. Agents still cannot write Core directly.
+
+**What changed:**
+- Added `reflection_result.v1`, `candidate_review_input.v1`, and `candidate_review_result.v1`.
+- Added `TaskType::ReflectionAnalyze` execution path through `begin_reflection_analysis` and `submit_reflection_response`.
+- Added candidate storage read/list methods for `memory/core/candidates/<candidate_id>.json`.
+- `CandidateBelief` now records `source_session_id`, `core_scope`, `source_memory_unit_ids`, `tags`, and optional `promoted_core_fact_id`.
+- Added manual candidate review via `review_candidate`: approved candidates are promoted to Core with `source_candidate_id`; rejected candidates stay rejected.
+- Telegram host exposes `/reflect`, `/candidates`, `/confirm <id>`, and `/reject <id>`.
+
+**What is retracted (if applicable):**
+- The prior HISTORY notes that candidate beliefs and `/reflect` remained future work are now superseded for the first manual-review iteration. Core candidate reviewer/formulation pass, contested logic, auto-confirm, and forgetting remain future work.
+
+**What is still true:**
+- The core still has no provider, model, key, prompt directory, or network dependency.
+- Reflection reads only validated `MemoryUnit` material for candidate generation.
+- Core changes still require explicit review in this iteration; no LLM response directly mutates Core.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_reflection`
+- `cargo test -p memory_engine --test engine_sleep_recall`
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+
 ## 2026-05-31 — Fidelity validation is auto-routed after sleep
 
 The first manual fidelity validator proved useful, but it still required a human/debug command. This change makes the core route only selected memory units to validation after sleep: high-weight units, configured high-risk tag classes, and units whose source events also feed Archive-to-Core personal signals.

@@ -4559,3 +4559,40 @@ PowerShell вимагає, щоб `param(...)` був першою executable-і
 
 **Висновок:**
 Dev-harness не змінює пам'ять і не додає нової архітектури. Це робочий інструмент для стабільного локального циклу: rebuild+run без ручного введення ключів, без stale bot процесів і з видимими dev sleep notices.
+
+## Запис 87 — 2026-06-01 02:34 +03:00 — Phase C: reflection candidates і manual Core promotion
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після fidelity-routing validated memory units уже існують, але Core досі ріс або через explicit `/remember`, або через Archive→Core bridge із direct personal signals. Не було reflection-шляху, де система сама пропонує стабільні висновки з валідованих спогадів, але не має права записувати їх у Core без review.
+
+**Задум:**
+Реалізувати перший ручний зріз Phase C: `reflection_analyze` створює candidate beliefs із validated memory units і активного Core; кандидат зберігається в `memory/core/candidates/`; власник переглядає `/candidates` і явно робить `/confirm` або `/reject`. Auto-confirm, contested logic і окремий core candidate reviewer не входять у цей зріз.
+
+**Що робили:**
+- Додали `prompts/reflection_analyze.md`.
+- Додали типи `ReflectionPassStart`, `ReflectionAnalyzeResult`, `ReflectionCandidateDraft`, `ReflectionCandidatesResult`.
+- Розширили `CandidateBelief` полями `source_session_id`, `core_scope`, `source_memory_unit_ids`, `tags`, `promoted_core_fact_id`.
+- Додали `CandidateReviewInput` і `CandidateReviewResult`.
+- Додали storage read/list для candidate beliefs.
+- Додали engine methods `begin_reflection_analysis`, `submit_reflection_response`, `resume_reflection_analysis`, `list_candidates`, `review_candidate`.
+- Додали PyO3 methods і Telegram-команди `/reflect`, `/candidates`, `/confirm <id>`, `/reject <id>`.
+
+**Що зробили детально:**
+Reflection input будується ядром: тільки complete archives поточної сесії, тільки `MemoryUnit` зі статусом `active_archive` і `fidelity_status=valid`, compact archive summaries і активні Core facts поточного scope. LLM повертає candidates, але engine відкидає draft без підтриманого `source_memory_unit_id`. `/confirm` викликає `review_candidate` з рішенням `approved`, і тільки тоді engine робить `upsert_core_fact` із `source_candidate_id`; `/reject` ставить candidate status `rejected`.
+
+**Проблеми чи виклики:**
+Перший lifecycle зроблено як `ready_for_review` → `rejected`/`promoted`. Окремий стан `confirmed` і автоматичний reviewer/formulator не реалізовані, щоб не змішувати ручний контроль із наступним reasoning-pass. `Contested` статус додано до `CoreFactStatus`, але автоматична contested logic лишається відкритою roadmap-задачею.
+
+**Фідбек користувача:**
+Користувач просив продовжувати по плану після dev-harness і не давати агентам "правити істину" напряму. Цей зріз залишає Core stable: агент лише пропонує, власник підтверджує.
+
+**Перевірки:**
+- `cargo test -p memory_engine --test engine_reflection` — 1 passed.
+- `cargo test -p memory_engine --test engine_sleep_recall` — 28 passed.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+
+**Висновок:**
+Phase C має перший робочий шлях: validated memory units можуть стати Core candidates, а Core росте тільки після manual review. Наступний підкрок — live-test `/reflect` на реальному Telegram runtime, після цього core candidate reviewer/formulation pass і contested logic.

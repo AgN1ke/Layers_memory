@@ -27,6 +27,8 @@ pub trait Storage {
     fn read_core_store_categories(&self) -> Result<Vec<CoreStoreCategory>>;
     fn write_core_store_category(&self, category: &CoreStoreCategory) -> Result<()>;
     fn write_candidate_belief(&self, candidate: &CandidateBelief) -> Result<()>;
+    fn read_candidate_belief(&self, candidate_id: &str) -> Result<CandidateBelief>;
+    fn read_candidate_beliefs(&self) -> Result<Vec<CandidateBelief>>;
 
     fn save_task(&self, task: &PendingTask) -> Result<()>;
     fn load_task(&self, task_id: &str) -> Result<PendingTask>;
