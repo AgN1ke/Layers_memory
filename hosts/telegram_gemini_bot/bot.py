@@ -367,7 +367,7 @@ def main() -> None:
     print(
         "Commands: /help, /sleep, /archives, /archive_last, /recall text, "
         "/core, /core_seed, /remember text, /core_update id text, "
-        "/core_forget id, /tasks, /models"
+        "/core_forget id, /evidence unit_id, /fidelity unit_id, /tasks, /models"
     )
     offset = read_saved_offset()
     log_line(
@@ -526,6 +526,24 @@ def handle_update(
     if text.startswith("/recall"):
         query = text.removeprefix("/recall").strip() or text
         telegram.send_message(chat_id, format_recall(recall(engine, session_id, query, explain=True)))
+        return
+
+    if text.startswith("/evidence"):
+        unit_id = text.removeprefix("/evidence").strip()
+        if not unit_id:
+            telegram.send_message(chat_id, "Usage: /evidence memory_unit_id")
+            return
+        pack = json.loads(engine.build_evidence_pack(unit_id))
+        telegram.send_message(chat_id, format_evidence_pack(pack))
+        return
+
+    if text.startswith("/fidelity"):
+        unit_id = text.removeprefix("/fidelity").strip()
+        if not unit_id:
+            telegram.send_message(chat_id, "Usage: /fidelity memory_unit_id")
+            return
+        result = run_memory_fidelity(engine, gemini, llm_config, unit_id)
+        telegram.send_message(chat_id, format_fidelity_result(result))
         return
 
     if text.startswith("/"):
@@ -974,6 +992,28 @@ def execute_llm_request(
             "kind": "other",
             "detail": f"{type(err).__name__}: {err}",
         }
+
+
+def run_memory_fidelity(
+    engine: memory_engine.MemoryEngine,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    memory_unit_id: str,
+) -> dict[str, Any]:
+    start = json.loads(engine.begin_memory_fidelity_pass(memory_unit_id))
+    response = execute_llm_request(start["request"], gemini, llm_config)
+    task_id = start["pending_task"]["task_id"]
+    updated = json.loads(
+        engine.submit_memory_fidelity_response(
+            task_id,
+            json.dumps(response, ensure_ascii=False),
+        )
+    )
+    return {
+        "evidence_pack": start["evidence_pack"],
+        "pending_task": start["pending_task"],
+        "memory_unit": updated,
+    }
 
 
 def promote_existing_archives(engine: memory_engine.MemoryEngine) -> dict[str, int]:
@@ -1772,6 +1812,15 @@ def format_archive_detail(archive: dict[str, Any] | None) -> str:
     if compact_memory:
         lines.append("Compact memory:")
         lines.extend(f"- {line}" for line in compact_memory.splitlines() if line.strip())
+    memory_units = [item for item in archive.get("memory_units", []) if isinstance(item, dict)]
+    if memory_units:
+        lines.append("Memory units:")
+        for unit in memory_units[:ARCHIVE_DETAIL_LIMIT]:
+            unit_id = clean_string(unit.get("memory_unit_id"))
+            status = clean_string(unit.get("status"))
+            fidelity_status = clean_string(unit.get("fidelity_status"))
+            thesis = clean_string(unit.get("thesis"))
+            lines.append(f"- {unit_id} [{status}/{fidelity_status}] {thesis}")
     if gist:
         lines.append(f"Gist: {gist}")
     if narrative:
@@ -1820,6 +1869,57 @@ def format_archive_detail(archive: dict[str, Any] | None) -> str:
             if tone_summary:
                 lines.append(f"- {tone_summary}")
 
+    return "\n".join(lines)
+
+
+def format_evidence_pack(pack: dict[str, Any]) -> str:
+    lines = [
+        f"Evidence pack: {pack.get('evidence_pack_id', '')}",
+        f"Memory unit: {pack.get('memory_unit_id', '')}",
+        f"Archive: {pack.get('archive_id', '')}",
+        f"Estimated tokens: {pack.get('estimated_tokens', 0)}/{pack.get('max_estimated_tokens', 0)}",
+        f"Truncated: {bool(pack.get('truncated'))}",
+    ]
+    thesis = clean_string(pack.get("target_thesis"))
+    if thesis:
+        lines.append(f"Thesis: {thesis}")
+    evidence = clean_string(pack.get("unit_evidence"))
+    if evidence:
+        lines.append(f"Unit evidence: {truncate_chars(evidence, 260)}")
+    events = [item for item in pack.get("events", []) if isinstance(item, dict)]
+    if events:
+        lines.append("Events:")
+        for event in events[:ARCHIVE_DETAIL_LIMIT]:
+            role = clean_string(event.get("role"))
+            event_type = clean_string(event.get("type"))
+            event_id = clean_string(event.get("event_id"))
+            text = truncate_chars(clean_string(event.get("text")), 220)
+            lines.append(f"- {role} {event_type} {event_id}: {text}")
+    return "\n".join(lines)
+
+
+def format_fidelity_result(result: dict[str, Any]) -> str:
+    unit = result.get("memory_unit", {})
+    review = unit.get("fidelity_review") if isinstance(unit, dict) else None
+    if not isinstance(review, dict):
+        review = {}
+    lines = [
+        f"Memory unit: {unit.get('memory_unit_id', '')}",
+        f"Unit status: {unit.get('status', '')}",
+        f"Fidelity: {unit.get('fidelity_status', '')}",
+    ]
+    confidence = review.get("confidence")
+    explanation = clean_string(review.get("explanation"))
+    if confidence is not None:
+        lines.append(f"Confidence: {clamp_float(confidence, 0.0):.2f}")
+    if explanation:
+        lines.append(f"Explanation: {explanation}")
+    revised = clean_string(review.get("revised_thesis"))
+    missing = clean_string(review.get("missing_detail"))
+    if revised:
+        lines.append(f"Suggested thesis: {revised}")
+    if missing:
+        lines.append(f"Missing detail: {missing}")
     return "\n".join(lines)
 
 
@@ -1880,6 +1980,8 @@ def help_text() -> str:
         "/remember text - save a stable Core fact manually\n"
         "/core_update id text - update a Core fact in this chat\n"
         "/core_forget id - deprecate a Core fact in this chat\n"
+        "/evidence memory_unit_id - inspect the source evidence pack for one memory unit\n"
+        "/fidelity memory_unit_id - run the reasoning fidelity validator for one memory unit\n"
         "/tasks - show pending tasks\n"
         "/models - show model role mapping\n"
         "\n"

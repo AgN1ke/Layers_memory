@@ -10,6 +10,7 @@ pub mod core_store;
 pub mod engine;
 pub mod error;
 pub mod event;
+pub mod fidelity;
 pub mod file_storage;
 pub mod journal;
 pub mod llm;

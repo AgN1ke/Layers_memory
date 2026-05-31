@@ -1,19 +1,22 @@
 use memory_engine::archive::{
-    ArchiveStatus, EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem,
+    ArchiveStatus, EmotionalMarker, FidelityReview, FidelityStatus, MemoryUnitStatus,
+    PersonalSignal, RelationalTone, TopicThreadItem,
 };
 use memory_engine::core_store::{
     CoreContextRequest, CoreContextTokenBudget, CoreFactInput, CoreFactPatchInput, CoreFactStatus,
 };
 use memory_engine::event::IngestEvent;
+use memory_engine::fidelity::EvidenceEventRole;
 use memory_engine::llm::{LlmResponse, SleepRunStage};
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::storage::Storage;
-use memory_engine::tasks::TaskType;
+use memory_engine::tasks::{TaskState, TaskType};
 use memory_engine::types::{
     CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
-    CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION,
-    RECALL_QUERY_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, FIDELITY_REVIEW_SCHEMA_VERSION,
+    MEMORY_UNITS_RESULT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
+    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{EngineOptions, FileStorage, MemoryEngine, SleepStage1Result};
 use serde_json::json;
@@ -456,6 +459,237 @@ fn engine_recall_boosts_previously_recalled_archive_memory() {
         .as_deref()
         .unwrap_or("")
         .contains("recall"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_evidence_pack_uses_source_events_and_configured_neighbors() {
+    let root = unique_temp_dir("engine_evidence_pack_uses_source_events_and_configured_neighbors");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let storage_probe = storage.clone();
+    let mut options = EngineOptions::default();
+    options.fidelity.neighbor_events = 1;
+    let mut engine = MemoryEngine::with_options(storage, options);
+
+    for index in 0..5 {
+        ingest_text(
+            &mut engine,
+            &format!("2026-05-17T16:0{index}:00.000Z"),
+            &format!("evidence event {index}"),
+            vec!["evidence_test"],
+        );
+    }
+    let session = storage_probe
+        .read_session("live_session")
+        .expect("read session");
+    let source_event_id = session.events[2].event_id.clone();
+    let left_neighbor_id = session.events[1].event_id.clone();
+    let right_neighbor_id = session.events[3].event_id.clone();
+    let excluded_event_id = session.events[0].event_id.clone();
+
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    engine
+        .resume_memory_unit_pass(
+            &sleep_result
+                .memory_unit_task
+                .as_ref()
+                .expect("memory unit task")
+                .task_id,
+            MemoryUnitPassResult {
+                schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                memory_units: vec![MemoryUnitDraft {
+                    thesis: "Source event 2 should be checked against local context.".to_string(),
+                    source_event_ids: vec![source_event_id.clone()],
+                    evidence: Some("The source was event 2.".to_string()),
+                    tags: vec!["evidence_test".to_string()],
+                    weight: 0.9,
+                }],
+            },
+        )
+        .expect("resume memory unit pass");
+    let archive = storage_probe
+        .read_archive_entry_by_id(&sleep_result.archive_entry.archive_id)
+        .expect("read archive");
+    let unit_id = archive.memory_units[0].memory_unit_id.clone();
+
+    let pack = engine.build_evidence_pack(&unit_id).expect("evidence pack");
+    assert_eq!(pack.memory_unit_id, unit_id);
+    assert_eq!(pack.events.len(), 3);
+    assert!(pack
+        .events
+        .iter()
+        .any(|event| event.event_id == source_event_id && event.role == EvidenceEventRole::Source));
+    assert!(pack
+        .events
+        .iter()
+        .any(|event| event.event_id == left_neighbor_id));
+    assert!(pack
+        .events
+        .iter()
+        .any(|event| event.event_id == right_neighbor_id));
+    assert!(!pack
+        .events
+        .iter()
+        .any(|event| event.event_id == excluded_event_id));
+    assert!(pack.estimated_tokens <= pack.max_estimated_tokens);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_memory_fidelity_review_marks_distorted_unit_for_revision() {
+    let root = unique_temp_dir("engine_memory_fidelity_review_marks_distorted_unit_for_revision");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let storage_probe = storage.clone();
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said they like astronomy documentaries.",
+        vec!["preference"],
+    );
+    let session = storage_probe
+        .read_session("live_session")
+        .expect("read session");
+    let source_event_id = session.events[0].event_id.clone();
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    let archive = engine
+        .resume_memory_unit_pass(
+            &sleep_result
+                .memory_unit_task
+                .as_ref()
+                .expect("memory unit task")
+                .task_id,
+            MemoryUnitPassResult {
+                schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                memory_units: vec![MemoryUnitDraft {
+                    thesis: "The user is a professional astronomer.".to_string(),
+                    source_event_ids: vec![source_event_id],
+                    evidence: Some(
+                        "The user only said they like astronomy documentaries.".to_string(),
+                    ),
+                    tags: vec!["preference".to_string()],
+                    weight: 0.9,
+                }],
+            },
+        )
+        .expect("resume memory unit pass");
+    let unit_id = archive.memory_units[0].memory_unit_id.clone();
+
+    let start = engine
+        .begin_memory_fidelity_pass(&unit_id)
+        .expect("begin fidelity pass");
+    assert_eq!(
+        start.request.role_hint,
+        memory_engine::types::ModelRole::Reasoning
+    );
+    assert_eq!(start.request.prompt_id, "memory_fidelity_pass");
+    assert_eq!(
+        start.request.expected_output_schema,
+        FIDELITY_REVIEW_SCHEMA_VERSION
+    );
+    assert_eq!(start.evidence_pack.memory_unit_id, unit_id);
+
+    let updated = engine
+        .resume_memory_fidelity_pass(
+            &start.pending_task.task_id,
+            FidelityReview {
+                schema_version: FIDELITY_REVIEW_SCHEMA_VERSION.to_string(),
+                memory_unit_id: unit_id.clone(),
+                archive_id: archive.archive_id.clone(),
+                status: FidelityStatus::Distorted,
+                confidence: 0.96,
+                explanation: "The evidence supports interest, not profession.".to_string(),
+                revised_thesis: Some("The user likes astronomy documentaries.".to_string()),
+                missing_detail: None,
+            },
+        )
+        .expect("resume fidelity pass");
+
+    assert_eq!(updated.fidelity_status, FidelityStatus::Distorted);
+    assert_eq!(updated.status, MemoryUnitStatus::Rejected);
+    assert!(updated.fidelity_review.is_some());
+    let reread_archive = storage_probe
+        .read_archive_entry_by_id(&archive.archive_id)
+        .expect("read archive after review");
+    assert!(reread_archive.compact_memory.is_none());
+    assert_eq!(
+        reread_archive.memory_units[0].fidelity_status,
+        FidelityStatus::Distorted
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_memory_fidelity_marks_task_failed_on_invalid_validator_json() {
+    let root =
+        unique_temp_dir("engine_memory_fidelity_marks_task_failed_on_invalid_validator_json");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let storage_probe = storage.clone();
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said they like astronomy documentaries.",
+        vec!["preference"],
+    );
+    let session = storage_probe
+        .read_session("live_session")
+        .expect("read session");
+    let source_event_id = session.events[0].event_id.clone();
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    let archive = engine
+        .resume_memory_unit_pass(
+            &sleep_result
+                .memory_unit_task
+                .as_ref()
+                .expect("memory unit task")
+                .task_id,
+            MemoryUnitPassResult {
+                schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep_result.archive_entry.archive_id.clone(),
+                memory_units: vec![MemoryUnitDraft {
+                    thesis: "The user likes astronomy documentaries.".to_string(),
+                    source_event_ids: vec![source_event_id],
+                    evidence: Some("The user said they like astronomy documentaries.".to_string()),
+                    tags: vec!["preference".to_string()],
+                    weight: 0.9,
+                }],
+            },
+        )
+        .expect("resume memory unit pass");
+    let unit_id = archive.memory_units[0].memory_unit_id.clone();
+
+    let start = engine
+        .begin_memory_fidelity_pass(&unit_id)
+        .expect("begin fidelity pass");
+    let err = engine
+        .submit_memory_fidelity_response(
+            &start.pending_task.task_id,
+            LlmResponse::Ok {
+                request_id: start.request.request_id.clone(),
+                text: "not valid json".to_string(),
+            },
+        )
+        .expect_err("invalid validator JSON must fail");
+    assert!(
+        err.to_string().contains("json error"),
+        "unexpected error: {err}"
+    );
+    let task = storage_probe
+        .load_task(&start.pending_task.task_id)
+        .expect("read failed task");
+    assert_eq!(task.state, TaskState::Failed);
+    assert!(task
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("semantic error")));
 
     fs::remove_dir_all(root).ok();
 }
