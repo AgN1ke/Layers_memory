@@ -183,6 +183,14 @@ hosts/telegram_gemini_bot/
 
 Він відкриває маленьке вікно з полями для Telegram token, Gemini API key і model mapping. Для локальної зручності GUI може кешувати ці значення у `hosts/telegram_gemini_bot/runtime/state/secrets.local.json`; файл gitignored і має кнопку очищення.
 
+Для щоденного dev-циклу після одного GUI-запуску з кешованими ключами краще використовувати:
+
+```powershell
+.\hosts\telegram_gemini_bot\run_dev_bot.ps1
+```
+
+`run_dev_bot.ps1` зупиняє старі `bot.py` процеси, збирає PyO3 adapter через `maturin develop`, читає кешовані ключі з `runtime/state/secrets.local.json`, запускає bot non-interactive з UTF-8 і вмикає dev sleep notices. Корисні режими: `-ClearMemory` стерти runtime memory перед запуском, `-NoBuild` пропустити збірку, `-Visible` запустити видиме вікно, `-TailLog` одразу читати `bot.log`, `-NoDevSleepNotices` вимкнути тимчасові Telegram-повідомлення про sleep.
+
 Скрипт:
 
 - вмикає UTF-8 у Windows console;

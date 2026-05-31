@@ -4527,3 +4527,35 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Phase B тепер не лише manual/debug: sleep сам повертає validation work для критичних memory units. Host лишається тонким виконавцем LLM-запитів, а агенти все ще не пишуть Core напряму.
+
+## Запис 86 — 2026-06-01 02:19 +03:00 — Dev harness для Telegram bot lifecycle
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після Phase B стало видно, що реальна розробка витрачає багато часу не на пам'ять, а на повторюваний dev-loop: старий bot тримає `.pyd`, `maturin develop` падає, іноді лишається два `bot.py` процеси, headless запуск може чекати `getpass`, dev sleep notices легко вимкнути випадково, а Windows console часто ламає кирилицю.
+
+**Задум:**
+Зробити один dev-runner, який прибирає цей операційний шум перед Phase C: зупиняє старі bot-процеси, збирає adapter, бере ключі з локального gitignored cache, запускає bot non-interactive з UTF-8 і вмикає тимчасові sleep notices для локальної перевірки.
+
+**Що робили:**
+- Змерджено `feature/fidelity-routing` у `develop` і запушено `develop`.
+- Створено гілку `feature/dev-harness`.
+- Додано `hosts/telegram_gemini_bot/run_dev_bot.ps1`.
+- Оновлено `docs/local-development.md` із коротким описом dev-runner.
+
+**Що зробили детально:**
+`run_dev_bot.ps1` має режими `-NoBuild`, `-NoStart`, `-NoStop`, `-Visible`, `-NoDevSleepNotices`, `-ClearMemory`, `-TailLog`. За замовчуванням він зупиняє старі `bot.py` процеси, перевіряє adapter venv, читає `runtime/state/secrets.local.json`, виставляє `MEMORY_BOT_NONINTERACTIVE=1`, вмикає `MEMORY_BOT_DEV_SLEEP_NOTICES=1`, запускає `maturin develop` і стартує bot у hidden window. `-ClearMemory` видаляє тільки `hosts/telegram_gemini_bot/runtime/memory` після перевірки, що шлях лишається всередині runtime.
+
+**Проблеми чи виклики:**
+PowerShell вимагає, щоб `param(...)` був першою executable-інструкцією у script-файлі; початковий варіант із `$ErrorActionPreference` перед `param` падав на dry-run і був виправлений. Secrets не логуються; перевіряється лише наявність потрібних env/cache fields.
+
+**Фідбек користувача:**
+Користувач погодився з діагнозом, що Phase B закрита, але dev-loop створює шум і відчуття спінінгу. Перед Phase C треба прибрати цей податок.
+
+**Перевірки:**
+- `powershell -NoProfile -ExecutionPolicy Bypass -File .\hosts\telegram_gemini_bot\run_dev_bot.ps1 -NoStop -NoBuild -NoStart` — пройшло.
+
+**Висновок:**
+Dev-harness не змінює пам'ять і не додає нової архітектури. Це робочий інструмент для стабільного локального циклу: rebuild+run без ручного введення ключів, без stale bot процесів і з видимими dev sleep notices.
