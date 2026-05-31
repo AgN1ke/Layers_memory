@@ -4488,3 +4488,42 @@ Evidence pack збирається програмно, без LLM: source events
 
 **Висновок:**
 Phase B має перший робочий шар: atomic memory units тепер можна перевіряти проти компактного evidence pack дорогою/reasoning-моделлю на малому контексті. Manual live-check підтвердив, що pack не роздувається до всієї розмови, validator пропускає чесну тезу й відхиляє викривлену. Наступний підкрок — автоматична маршрутизація fidelity для high-risk/high-weight/Core-path units.
+
+## Запис 85 — 2026-05-31 14:20 +03:00 — Автоматична маршрутизація memory fidelity після sleep
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після ручного `/fidelity` validator був корисним, але не був частиною реального циклу пам'яті. Це означало, що важливі memory units могли залишатись `unchecked`, доки власник вручну не знайде їх через `/archive_last` і не запустить перевірку. При цьому не можна просто перевіряти все: reasoning-модель дорога, а рутина не має проходити критичний шлях.
+
+**Задум:**
+Маршрутизацію має вирішувати ядро, не Telegram host. Після `finish_sleep_run` ядро вибирає тільки units, які мають структурну причину для перевірки: висока вага, належність до конфігурованих high-risk тегів або Core-path через personal_signal. Host отримує готові `LlmRequest` і виконує їх тим самим примітивом `prompt -> text`.
+
+**Що робили:**
+- Додали `SleepOutcome.fidelity_requests`.
+- Додали `FidelityConfig.auto_validate_after_sleep`, `auto_validate_weight_threshold` і `auto_validate_tags`.
+- У `finish_sleep_run` після memory-unit pass і Archive→Core bridge додали `auto_route_memory_fidelity_requests`.
+- Винесли `begin_memory_fidelity_pass_unlocked`, щоб auto-routing міг створювати fidelity tasks під уже взятим session-lock без re-entrant deadlock.
+- Telegram bot після sleep виконує повернуті `fidelity_requests`, submit-ить відповіді назад у core і логує summary.
+
+**Що зробили детально:**
+Низьковагова рутина не маршрутизується. Низьковаговий unit, який лежить на Core-path через high-confidence `personal_signal` із user-source, маршрутизується. High-weight units маршрутизуються незалежно від конкретної теми. Це не hardcode під кішку чи інший домен: правила дивляться на вагу, теги-ризики і структурний Core-path.
+
+**Проблеми чи виклики:**
+Треба було не зламати lock-модель після `feature/concurrency`: `finish_sleep_run` уже тримає `session:<id>`, тому публічний `begin_memory_fidelity_pass` викликати не можна. Для цього додано unlocked helper, а bridge/auto-routing лишають порядок `session -> core` без нових циклів.
+
+**Фідбек користувача:**
+Користувач сказав "роби далі" після Phase B manual live-check. Наступним логічним кроком було не Phase C, а саме автоматичне включення validator-а в sleep-cycle для важливих units.
+
+**Перевірки:**
+- `cargo test -p memory_engine --test engine_sleep_recall` — 28 passed.
+- `cargo test --workspace` — пройшло.
+- `cargo fmt --check` — пройшло.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло після зупинки stale bot-процесу і видалення `~emory_engine`.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+
+**Висновок:**
+Phase B тепер не лише manual/debug: sleep сам повертає validation work для критичних memory units. Host лишається тонким виконавцем LLM-запитів, а агенти все ще не пишуть Core напряму.

@@ -1080,6 +1080,8 @@ PendingTask - спосіб, яким ядро системи просить хо
 
 `EvidencePack` — малий пакет доказів для validator-а. Його збирає ядро програмно: source events із `MemoryUnit.source_event_ids`, конфігуровані сусідні події для локального контексту, thesis/evidence самого unit і token budget. Хост не збирає ці дані сам; він тільки рендерить `prompt_id = memory_fidelity_pass`, виконує LLM-запит і повертає відповідь.
 
+Після `finish_sleep_run` ядро може повернути `SleepOutcome.fidelity_requests`: готові `LlmRequest` для memory units, які варто перевірити автоматично. Правила маршрутизації залишаються в ядрі: high-weight units, конфігуровані high-risk tags і Core-path units через personal signals. Хост не вирішує, які units перевіряти; він тільки виконує повернуті запити і submit-ить відповіді через `submit_memory_fidelity_response`.
+
 ```json
 {
   "schema_version": "evidence_pack.v1",
