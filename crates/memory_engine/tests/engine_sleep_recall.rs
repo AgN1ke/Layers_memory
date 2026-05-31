@@ -1700,7 +1700,12 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
         .iter()
         .any(|tag| tag == "consolidator_fallback"));
     assert_eq!(outcome.core_summary.created, 1);
-    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+    assert_eq!(outcome.fidelity_requests.len(), 1);
+    assert_eq!(
+        outcome.fidelity_requests[0].role_hint,
+        memory_engine::types::ModelRole::Reasoning
+    );
+    assert_only_pending_fidelity_task(&engine);
 
     let package = engine
         .core_context_package(CoreContextRequest {
@@ -1720,6 +1725,171 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
         .core_facts
         .iter()
         .any(|fact| fact.text == "Користувач любить космос."));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_run_does_not_auto_route_low_weight_routine_unit() {
+    let root = unique_temp_dir("sleep_run_low_weight_no_fidelity_route");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "We briefly discussed a generic trivia item.",
+        vec!["routine"],
+    );
+
+    let mut run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let step = engine.next_sleep_batch(run).expect("first batch");
+    run = step.run;
+    let batch = step.batch.expect("extraction batch");
+    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+
+    let responses = batch
+        .requests
+        .into_iter()
+        .map(|request| {
+            let text = match request.prompt_id.as_str() {
+                "memory_unit_pass" => json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": run.archive_id,
+                    "memory_units": [{
+                        "thesis": "Generic trivia -> routine discussion without stable personal meaning.",
+                        "source_event_ids": [event_id.clone()],
+                        "tags": ["routine"],
+                        "weight": 0.2
+                    }]
+                }),
+                "sleep_emotional_pass" => json!({"emotional_markers": []}),
+                "sleep_topic_thread_pass" => json!({"topic_thread": []}),
+                "sleep_personal_signal_pass" => json!({"personal_signals": []}),
+                "sleep_relational_pass" => json!({"relational_tone": null}),
+                other => panic!("unexpected request: {other}"),
+            };
+            LlmResponse::Ok {
+                request_id: request.request_id,
+                text: text.to_string(),
+            }
+        })
+        .collect();
+
+    let step = engine
+        .submit_sleep_batch(run, responses)
+        .expect("submit extraction");
+    run = step.run;
+    let step = engine.next_sleep_batch(run).expect("consolidator batch");
+    run = step.run;
+    let batch = step.batch.expect("consolidator request");
+    let step = engine
+        .submit_sleep_batch(
+            run,
+            vec![LlmResponse::Ok {
+                request_id: batch.requests[0].request_id.clone(),
+                text: "GIST: Routine trivia.\n\nThe exchange was brief and did not establish a durable personal signal."
+                    .to_string(),
+            }],
+        )
+        .expect("submit consolidator");
+    run = step.run;
+
+    let outcome = engine.finish_sleep_run(run).expect("finish sleep run");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert!(outcome.fidelity_requests.is_empty());
+    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_run_auto_routes_low_weight_core_path_unit() {
+    let root = unique_temp_dir("sleep_run_low_weight_core_path_fidelity_route");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said their cat is named Irzha.",
+        vec!["personal_fact", "pet"],
+    );
+
+    let mut run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let step = engine.next_sleep_batch(run).expect("first batch");
+    run = step.run;
+    let batch = step.batch.expect("extraction batch");
+    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+
+    let responses = batch
+        .requests
+        .into_iter()
+        .map(|request| {
+            let text = match request.prompt_id.as_str() {
+                "memory_unit_pass" => json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": run.archive_id,
+                    "memory_units": [{
+                        "thesis": "Cat name -> the user has a cat named Irzha.",
+                        "source_event_ids": [event_id.clone()],
+                        "tags": ["routine"],
+                        "weight": 0.2
+                    }]
+                }),
+                "sleep_emotional_pass" => json!({"emotional_markers": []}),
+                "sleep_topic_thread_pass" => json!({"topic_thread": []}),
+                "sleep_personal_signal_pass" => json!({
+                    "personal_signals": [{
+                        "text": "The user has a cat named Irzha.",
+                        "category": "pet",
+                        "confidence": 0.95,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_relational_pass" => json!({"relational_tone": null}),
+                other => panic!("unexpected request: {other}"),
+            };
+            LlmResponse::Ok {
+                request_id: request.request_id,
+                text: text.to_string(),
+            }
+        })
+        .collect();
+
+    let step = engine
+        .submit_sleep_batch(run, responses)
+        .expect("submit extraction");
+    run = step.run;
+    let step = engine.next_sleep_batch(run).expect("consolidator batch");
+    run = step.run;
+    let batch = step.batch.expect("consolidator request");
+    let step = engine
+        .submit_sleep_batch(
+            run,
+            vec![LlmResponse::Ok {
+                request_id: batch.requests[0].request_id.clone(),
+                text: "GIST: The user mentioned their cat.\n\nThe user shared a stable personal detail about a cat named Irzha."
+                    .to_string(),
+            }],
+        )
+        .expect("submit consolidator");
+    run = step.run;
+
+    let outcome = engine.finish_sleep_run(run).expect("finish sleep run");
+    assert_eq!(outcome.core_summary.created, 1);
+    assert_eq!(outcome.fidelity_requests.len(), 1);
+    assert_only_pending_fidelity_task(&engine);
 
     fs::remove_dir_all(root).ok();
 }
@@ -1835,7 +2005,8 @@ fn engine_sleep_run_falls_back_when_consolidator_returns_empty_text() {
         .iter()
         .any(|tag| tag == "pass_failed:sleep_consolidator"));
     assert_eq!(outcome.core_summary.created, 1);
-    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+    assert_eq!(outcome.fidelity_requests.len(), 1);
+    assert_only_pending_fidelity_task(&engine);
 
     fs::remove_dir_all(root).ok();
 }
@@ -1959,7 +2130,8 @@ fn engine_sleep_run_falls_back_when_consolidator_gist_is_rejected() {
         .iter()
         .any(|tag| tag == "pass_failed:sleep_consolidator"));
     assert_eq!(outcome.core_summary.created, 1);
-    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+    assert_eq!(outcome.fidelity_requests.len(), 1);
+    assert_only_pending_fidelity_task(&engine);
 
     fs::remove_dir_all(root).ok();
 }
@@ -2087,4 +2259,10 @@ fn unique_temp_dir(name: &str) -> std::path::PathBuf {
         .expect("system time")
         .as_nanos();
     std::env::temp_dir().join(format!("memory_engine_{name}_{nanos}"))
+}
+
+fn assert_only_pending_fidelity_task(engine: &MemoryEngine<FileStorage>) {
+    let tasks = engine.pending_tasks().expect("pending tasks");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_type, TaskType::MemoryFidelityPass);
 }

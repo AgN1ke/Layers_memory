@@ -118,6 +118,8 @@ pub struct SleepRunStep {
 pub struct SleepOutcome {
     pub archive_entry: ArchiveEntry,
     pub core_summary: CoreSignalSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fidelity_requests: Vec<LlmRequest>,
     #[serde(default)]
     pub failed_passes: Vec<String>,
     pub completion_mode: String,

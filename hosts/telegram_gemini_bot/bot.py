@@ -920,6 +920,12 @@ def complete_sleep_result(
     outcome = json.loads(engine.finish_sleep_run(json.dumps(run, ensure_ascii=False)))
     updated = outcome["archive_entry"]
     core_summary = outcome.get("core_summary", {})
+    fidelity_summary = run_auto_fidelity_requests(
+        engine,
+        gemini,
+        llm_config,
+        outcome.get("fidelity_requests", []),
+    )
     compact_tokens = estimate_tokens(clean_string(updated.get("compact_memory")))
     log_sleep_compression_metrics(engine, sleep_run, updated)
     log_line(
@@ -927,6 +933,7 @@ def complete_sleep_result(
         f"archive={updated.get('archive_id')} "
         f"completion_mode={outcome.get('completion_mode')} "
         f"failed_passes={','.join(outcome.get('failed_passes', [])) or 'none'} "
+        f"fidelity={format_fidelity_summary_for_log(fidelity_summary)} "
         f"compact_tokens={compact_tokens}"
     )
     return (
@@ -938,6 +945,7 @@ def complete_sleep_result(
         f"Emotional markers: {len(updated.get('emotional_markers', []))}\n"
         f"Personal signals: {len(updated.get('personal_signals', []))}\n"
         f"Core signals: {format_core_signal_counts(core_summary)}\n"
+        f"Fidelity: {format_fidelity_summary_for_user(fidelity_summary)}\n"
         f"Gist: {updated['gist']}"
     )
 
@@ -1014,6 +1022,86 @@ def run_memory_fidelity(
         "pending_task": start["pending_task"],
         "memory_unit": updated,
     }
+
+
+def run_auto_fidelity_requests(
+    engine: memory_engine.MemoryEngine,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    requests: list[dict[str, Any]],
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "requested": len(requests),
+        "completed": 0,
+        "valid": 0,
+        "rejected": 0,
+        "needs_revision": 0,
+        "failed": 0,
+    }
+    for request in requests:
+        task_id = clean_string(request.get("task_id"))
+        unit_id = clean_string(
+            request.get("prompt_inputs", {})
+            .get("evidence_pack", {})
+            .get("memory_unit_id")
+        )
+        response = execute_llm_request(request, gemini, llm_config)
+        try:
+            updated = json.loads(
+                engine.submit_memory_fidelity_response(
+                    task_id,
+                    json.dumps(response, ensure_ascii=False),
+                )
+            )
+        except Exception as err:
+            summary["failed"] += 1
+            log_line(
+                "auto_fidelity_failed "
+                f"task={task_id or 'unknown'} "
+                f"unit={unit_id or 'unknown'} "
+                f"error={type(err).__name__}: {err}"
+            )
+            continue
+
+        summary["completed"] += 1
+        fidelity_status = clean_string(updated.get("fidelity_status"))
+        unit_status = clean_string(updated.get("status"))
+        if fidelity_status == "valid":
+            summary["valid"] += 1
+        elif unit_status == "rejected":
+            summary["rejected"] += 1
+        elif unit_status == "needs_revision":
+            summary["needs_revision"] += 1
+        log_line(
+            "auto_fidelity_completed "
+            f"task={task_id or 'unknown'} "
+            f"unit={updated.get('memory_unit_id') or unit_id or 'unknown'} "
+            f"fidelity_status={fidelity_status or 'unknown'} "
+            f"unit_status={unit_status or 'unknown'}"
+        )
+    return summary
+
+
+def format_fidelity_summary_for_log(summary: dict[str, Any]) -> str:
+    return (
+        f"requested:{summary.get('requested', 0)},"
+        f"completed:{summary.get('completed', 0)},"
+        f"valid:{summary.get('valid', 0)},"
+        f"rejected:{summary.get('rejected', 0)},"
+        f"needs_revision:{summary.get('needs_revision', 0)},"
+        f"failed:{summary.get('failed', 0)}"
+    )
+
+
+def format_fidelity_summary_for_user(summary: dict[str, Any]) -> str:
+    requested = int(summary.get("requested", 0) or 0)
+    if requested == 0:
+        return "0 auto-routed"
+    return (
+        f"{requested} auto-routed, "
+        f"{summary.get('completed', 0)} completed, "
+        f"{summary.get('failed', 0)} failed"
+    )
 
 
 def promote_existing_archives(engine: memory_engine.MemoryEngine) -> dict[str, int]:

@@ -615,11 +615,13 @@ impl<S: Storage> MemoryEngine<S> {
             }
 
             let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
+            let fidelity_requests = self.auto_route_memory_fidelity_requests(&archive_entry)?;
             run.stage = SleepRunStage::Finished;
 
             Ok(SleepOutcome {
                 archive_entry,
                 core_summary,
+                fidelity_requests,
                 failed_passes: run.failed_passes,
                 completion_mode: run
                     .completion_mode
@@ -719,6 +721,112 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         Ok(summary)
+    }
+
+    fn auto_route_memory_fidelity_requests(
+        &self,
+        archive: &ArchiveEntry,
+    ) -> Result<Vec<LlmRequest>> {
+        if !self.options.fidelity.auto_validate_after_sleep
+            || archive.status != ArchiveStatus::Complete
+            || archive.memory_units.is_empty()
+        {
+            return Ok(Vec::new());
+        }
+
+        let core_path_event_ids = self.core_path_signal_event_ids(archive)?;
+        let mut requests = Vec::new();
+        for unit in &archive.memory_units {
+            if !self.should_auto_validate_memory_unit(unit, &core_path_event_ids) {
+                continue;
+            }
+            if self.pending_fidelity_task_exists_unlocked(&unit.memory_unit_id)? {
+                continue;
+            }
+            let start = self.begin_memory_fidelity_pass_unlocked(&unit.memory_unit_id)?;
+            requests.push(start.request);
+        }
+        Ok(requests)
+    }
+
+    fn should_auto_validate_memory_unit(
+        &self,
+        unit: &MemoryUnit,
+        core_path_event_ids: &HashSet<String>,
+    ) -> bool {
+        if unit.status != MemoryUnitStatus::ActiveArchive
+            || unit.fidelity_status != FidelityStatus::Unchecked
+        {
+            return false;
+        }
+
+        if unit.weight >= self.options.fidelity.auto_validate_weight_threshold {
+            return true;
+        }
+
+        if unit
+            .source_event_ids
+            .iter()
+            .any(|id| core_path_event_ids.contains(id))
+        {
+            return true;
+        }
+
+        unit.tags.iter().any(|tag| {
+            let tag = normalize_category_name(tag);
+            self.options
+                .fidelity
+                .auto_validate_tags
+                .iter()
+                .any(|configured| configured == &tag)
+        })
+    }
+
+    fn core_path_signal_event_ids(&self, archive: &ArchiveEntry) -> Result<HashSet<String>> {
+        if archive.personal_signals.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let session = self.storage.read_session(&archive.source_session_id)?;
+        let user_event_ids = session
+            .events
+            .iter()
+            .filter(|event| event.event_type == "user_message")
+            .map(|event| event.event_id.clone())
+            .collect::<HashSet<_>>();
+        if user_event_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let mut ids = HashSet::new();
+        for signal in &archive.personal_signals {
+            let text = normalize_whitespace(&signal.text);
+            let category = normalize_category_name(&signal.category);
+            let has_user_source = signal
+                .source_event_ids
+                .iter()
+                .any(|event_id| user_event_ids.contains(event_id));
+            if text.is_empty()
+                || category.is_empty()
+                || signal.confidence < 0.85
+                || !has_user_source
+            {
+                continue;
+            }
+            ids.extend(signal.source_event_ids.iter().cloned());
+        }
+        Ok(ids)
+    }
+
+    fn pending_fidelity_task_exists_unlocked(&self, memory_unit_id: &str) -> Result<bool> {
+        let tasks = self.storage.load_tasks()?;
+        Ok(tasks.into_iter().any(|task| {
+            task.task_type == TaskType::MemoryFidelityPass
+                && task
+                    .inputs
+                    .get("memory_unit_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id == memory_unit_id)
+        }))
     }
 
     fn is_near_duplicate_core_fact(
@@ -958,34 +1066,41 @@ impl<S: Storage> MemoryEngine<S> {
         let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
         let session_id = unit.source_session_id.clone();
         self.with_resource_lock(session_lock_key(&session_id), || {
-            let evidence_pack = self.build_evidence_pack_unlocked(memory_unit_id)?;
-            let now = now_rfc3339()?;
-            let task = PendingTask {
-                schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
-                task_id: new_id("task")?,
-                task_type: TaskType::MemoryFidelityPass,
-                state: TaskState::Pending,
-                created_at: now.clone(),
-                updated_at: now,
-                prompt_id: self.options.fidelity.prompt_id.clone(),
-                prompt_version: self.options.fidelity.prompt_version,
-                role_hint: ModelRole::Reasoning,
-                expected_output_schema: FIDELITY_REVIEW_SCHEMA_VERSION.to_string(),
-                inputs: serde_json::to_value(&evidence_pack)?,
-                attempts: Vec::new(),
-                last_error: None,
-            };
-            self.storage.save_task(&task)?;
-            let request = llm_request_from_task(
-                &task,
-                &self.options.fidelity.prompt_id,
-                json!({ "evidence_pack": evidence_pack.clone() }),
-            )?;
-            Ok(MemoryFidelityPassStart {
-                evidence_pack,
-                pending_task: task,
-                request,
-            })
+            self.begin_memory_fidelity_pass_unlocked(memory_unit_id)
+        })
+    }
+
+    fn begin_memory_fidelity_pass_unlocked(
+        &self,
+        memory_unit_id: &str,
+    ) -> Result<MemoryFidelityPassStart> {
+        let evidence_pack = self.build_evidence_pack_unlocked(memory_unit_id)?;
+        let now = now_rfc3339()?;
+        let task = PendingTask {
+            schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
+            task_id: new_id("task")?,
+            task_type: TaskType::MemoryFidelityPass,
+            state: TaskState::Pending,
+            created_at: now.clone(),
+            updated_at: now,
+            prompt_id: self.options.fidelity.prompt_id.clone(),
+            prompt_version: self.options.fidelity.prompt_version,
+            role_hint: ModelRole::Reasoning,
+            expected_output_schema: FIDELITY_REVIEW_SCHEMA_VERSION.to_string(),
+            inputs: serde_json::to_value(&evidence_pack)?,
+            attempts: Vec::new(),
+            last_error: None,
+        };
+        self.storage.save_task(&task)?;
+        let request = llm_request_from_task(
+            &task,
+            &self.options.fidelity.prompt_id,
+            json!({ "evidence_pack": evidence_pack.clone() }),
+        )?;
+        Ok(MemoryFidelityPassStart {
+            evidence_pack,
+            pending_task: task,
+            request,
         })
     }
 
@@ -1365,6 +1480,9 @@ pub struct FidelityConfig {
     pub max_event_text_chars: usize,
     pub prompt_id: String,
     pub prompt_version: u32,
+    pub auto_validate_after_sleep: bool,
+    pub auto_validate_weight_threshold: f64,
+    pub auto_validate_tags: Vec<String>,
 }
 
 impl Default for RecallStage1Config {
@@ -1407,6 +1525,26 @@ impl Default for FidelityConfig {
             max_event_text_chars: 800,
             prompt_id: "memory_fidelity_pass".to_string(),
             prompt_version: 1,
+            auto_validate_after_sleep: true,
+            auto_validate_weight_threshold: 0.85,
+            auto_validate_tags: [
+                "identity",
+                "profile",
+                "personal",
+                "personal_fact",
+                "relationship",
+                "preference",
+                "pet",
+                "family",
+                "health",
+                "location",
+                "biography",
+                "values",
+                "core_candidate",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         }
     }
 }

@@ -46,6 +46,33 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-31 — Fidelity validation is auto-routed after sleep
+
+The first manual fidelity validator proved useful, but it still required a human/debug command. This change makes the core route only selected memory units to validation after sleep: high-weight units, configured high-risk tag classes, and units whose source events also feed Archive-to-Core personal signals.
+
+**What changed:**
+- `SleepOutcome` now includes `fidelity_requests: Vec<LlmRequest>`.
+- `finish_sleep_run` creates `MemoryFidelityPass` tasks for selected memory units after memory-unit creation and Archive-to-Core bridge.
+- `FidelityConfig` now has `auto_validate_after_sleep`, `auto_validate_weight_threshold`, and `auto_validate_tags`.
+- Telegram host executes returned `fidelity_requests` through the same prompt -> text primitive and submits responses back to the core. It does not decide which units need validation.
+- Tests cover both sides of the routing policy: low-weight routine units are not validated, while low-weight Core-path units are validated.
+
+**What is retracted (if applicable):**
+- The 2026-05-31 note that automatic high-risk/high-weight routing remained a later step is now superseded. Candidate beliefs and Core promotion are still not implemented.
+
+**What is still true:**
+- Reviewer agents still do not write truth directly into Core.
+- The core still has no provider, model, key, prompt directory, or network dependency.
+- Fidelity validation updates `MemoryUnit` status only; candidate beliefs, `/reflect`, `/confirm`, `/reject`, and forgetting remain future v0.2 work.
+
+**Reproducibility anchor:**
+- `cargo test --workspace`
+- `cargo fmt --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
 ## 2026-05-31 — Memory fidelity validation uses evidence packs
 
 Reflection Phase B begins with an explicit validation boundary: compressed memory units can now be checked against a small evidence pack before they are trusted for critical paths.

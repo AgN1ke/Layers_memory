@@ -395,7 +395,11 @@ def test_sleep_driver_cycle_finishes_archive_and_seeds_core(engine: memory_engin
     assert outcome["completion_mode"] == "consolidated"
     assert "consolidator_fallback" not in outcome["archive_entry"]["tags"]
     assert outcome["core_summary"]["created"] == 1
-    assert json.loads(engine.pending_tasks()) == []
+    assert len(outcome["fidelity_requests"]) == 1
+    assert outcome["fidelity_requests"][0]["role_hint"] == "reasoning"
+    pending = json.loads(engine.pending_tasks())
+    assert len(pending) == 1
+    assert pending[0]["task_type"] == "memory_fidelity_pass"
 
 
 def test_sleep_resume_persists_multi_track_fields(engine: memory_engine.MemoryEngine):
