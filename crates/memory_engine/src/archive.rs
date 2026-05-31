@@ -103,6 +103,8 @@ pub struct MemoryUnit {
     pub weight: f64,
     pub status: MemoryUnitStatus,
     pub fidelity_status: FidelityStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidelity_review: Option<FidelityReview>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -160,6 +162,46 @@ pub struct RelationalTone {
     pub summary: Option<String>,
     #[serde(default)]
     pub source_event_ids: Vec<Id>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FidelityReview {
+    pub schema_version: String,
+    pub memory_unit_id: Id,
+    pub archive_id: Id,
+    pub status: FidelityStatus,
+    pub confidence: f64,
+    pub explanation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revised_thesis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_detail: Option<String>,
+}
+
+impl FidelityReview {
+    pub fn validate_basic(&self) -> crate::Result<()> {
+        if self.memory_unit_id.trim().is_empty() {
+            return Err(crate::MemoryEngineError::Validation(
+                "fidelity review memory_unit_id must not be empty".to_string(),
+            ));
+        }
+        if self.archive_id.trim().is_empty() {
+            return Err(crate::MemoryEngineError::Validation(
+                "fidelity review archive_id must not be empty".to_string(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.confidence) {
+            return Err(crate::MemoryEngineError::Validation(
+                "fidelity review confidence must be between 0.0 and 1.0".to_string(),
+            ));
+        }
+        if self.explanation.trim().is_empty() {
+            return Err(crate::MemoryEngineError::Validation(
+                "fidelity review explanation must not be empty".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

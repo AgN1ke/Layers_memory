@@ -4446,3 +4446,43 @@ DEVLOG ведеться українською. Для кожного зміст
 - `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
 - `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
 - `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+
+## Запис 84 — 2026-05-31 13:26 +03:00 — Phase B reflection: evidence pack і memory fidelity validator
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+MemoryUnit уже став атомарним спогадом, але система ще не мала окремого механізму перевірити, чи LLM-стиснення не додумало або не викривило source events. Без цього reflection і майбутній Core promotion ризикували будуватись на красивій, але неточній тезі.
+
+**Задум:**
+Додати validator boundary без повернення логіки в host: ядро саме збирає малий evidence pack із конкретних source events і сусіднього контексту, створює `memory_fidelity_pass` із `role_hint: reasoning`, приймає structured verdict і оновлює status memory unit. Host тільки виконує один LLM-примітив `prompt -> text`.
+
+**Що робили:**
+- Додали `EvidencePack` (`evidence_pack.v1`) і `FidelityReview` (`fidelity_review.v1`).
+- Додали `TaskType::MemoryFidelityPass` і prompt `prompts/memory_fidelity_pass.md`.
+- Додали core API: `build_evidence_pack`, `begin_memory_fidelity_pass`, `submit_memory_fidelity_response`, `resume_memory_fidelity_pass`.
+- Додали storage read path для `MemoryUnit` за id.
+- Додали PyO3 boundary для нових методів.
+- Додали Telegram debug-команди `/evidence <memory_unit_id>` і `/fidelity <memory_unit_id>`.
+- `archive_last` тепер показує memory unit ids/status/fidelity_status, щоб можна було запустити ручну перевірку конкретної тези.
+
+**Що зробили детально:**
+Evidence pack збирається програмно, без LLM: source events з `MemoryUnit.source_event_ids`, configured neighbors навколо source events, thesis/evidence unit-а, token estimate і прапор `truncated`. Source events включаються пріоритетно, neighbors входять тільки в budget. Validator повертає один із статусів `valid`, `too_broad`, `unsupported`, `distorted`, `missing_key_detail`, `needs_revision`; ядро зберігає review і переводить unit у `active_archive`, `rejected` або `needs_revision` відповідно.
+
+**Проблеми чи виклики:**
+Це ще не повна reflection-система. Автоматична маршрутизація "валідувати тільки high-risk/high-weight/Core-path units" поки не реалізована; зараз є manual/debug path через `/fidelity`. Candidate beliefs, Core formulation і `/confirm`/`/reject` лишаються Phase C.
+
+**Фідбек користувача:**
+Користувач наполягав, що агенти не мають правити істину напряму. Цей крок реалізує саме це: validator може підтвердити, відхилити або попросити revision для compressed memory unit, але не пише в Core.
+
+**Перевірки:**
+- `cargo fmt --check` — пройшло.
+- `cargo test --workspace` — пройшло.
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+
+**Висновок:**
+Phase B має перший робочий шар: atomic memory units тепер можна перевіряти проти компактного evidence pack дорогою/reasoning-моделлю на малому контексті. Наступний крок після gates — live-check `/archive_last` -> `/evidence <id>` -> `/fidelity <id>` на реальному memory unit.

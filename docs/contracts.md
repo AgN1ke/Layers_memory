@@ -82,6 +82,8 @@ Markdown-файли існують для людини. Вони не замін
 - `recall_query.v1`;
 - `recall_result.v1`;
 - `pending_task.v1`;
+- `evidence_pack.v1`;
+- `fidelity_review.v1`;
 - `sleep_compression_result.v1`;
 - `manifest.v1`;
 - `journal_operation.v1`.
@@ -1036,6 +1038,8 @@ PendingTask - спосіб, яким ядро системи просить хо
 
 - `sleep_compression`;
 - `compact_memory_pass`;
+- `memory_unit_pass`;
+- `memory_fidelity_pass`;
 - `score_event` опціонально.
 
 Зарезервовані на v0.2+:
@@ -1071,6 +1075,61 @@ PendingTask - спосіб, яким ядро системи просить хо
 ```
 
 Це metadata для аудиту. Ядро не вибирає provider/model, але може зберегти те, що хост повідомив після виконання.
+
+### 9.3 EvidencePack і FidelityReview
+
+`EvidencePack` — малий пакет доказів для validator-а. Його збирає ядро програмно: source events із `MemoryUnit.source_event_ids`, конфігуровані сусідні події для локального контексту, thesis/evidence самого unit і token budget. Хост не збирає ці дані сам; він тільки рендерить `prompt_id = memory_fidelity_pass`, виконує LLM-запит і повертає відповідь.
+
+```json
+{
+  "schema_version": "evidence_pack.v1",
+  "evidence_pack_id": "evidence_pack_mu_01J00000000000000000000001",
+  "created_at": "2026-05-31T10:00:00.000Z",
+  "memory_unit_id": "mu_01J00000000000000000000001",
+  "archive_id": "archive_01J00000000000000000000001",
+  "source_session_id": "telegram_311422683",
+  "target_thesis": "Користувач має кішку Іржу.",
+  "unit_evidence": "Користувач прямо розповів про кішку та її ім'я.",
+  "events": [
+    {
+      "event_id": "event_01J00000000000000000000001",
+      "timestamp": "2026-05-31T09:58:00.000Z",
+      "type": "user_message",
+      "source": "telegram_user_311422683",
+      "role": "source",
+      "text": "В мене ще є кішечка. Її звати Іржа.",
+      "tags": ["personal_fact_signal"]
+    }
+  ],
+  "max_estimated_tokens": 1500,
+  "estimated_tokens": 96,
+  "truncated": false
+}
+```
+
+`FidelityReview` — verdict validator-а щодо одного `MemoryUnit`. Він не пише в Core і не створює нову істину; він тільки позначає, чи стиснений спогад відповідає evidence pack. Ядро зберігає review в memory unit і оновлює status unit-а: `valid` лишає unit активним, `unsupported`/`distorted` відхиляють, `too_broad`/`missing_key_detail`/`needs_revision` переводять у revision path.
+
+```json
+{
+  "schema_version": "fidelity_review.v1",
+  "memory_unit_id": "mu_01J00000000000000000000001",
+  "archive_id": "archive_01J00000000000000000000001",
+  "status": "valid",
+  "confidence": 0.92,
+  "explanation": "Теза прямо підтримана source event і не додає нових деталей.",
+  "revised_thesis": null,
+  "missing_detail": null
+}
+```
+
+Допустимі `status` для v0.2 Phase B:
+
+- `valid`;
+- `too_broad`;
+- `unsupported`;
+- `distorted`;
+- `missing_key_detail`;
+- `needs_revision`.
 
 ---
 
@@ -1170,6 +1229,8 @@ PendingTask - спосіб, яким ядро системи просить хо
     "core_fact": "core_fact.v1",
     "candidate_belief": "candidate_belief.v1",
     "pending_task": "pending_task.v1",
+    "evidence_pack": "evidence_pack.v1",
+    "fidelity_review": "fidelity_review.v1",
     "journal_operation": "journal_operation.v1"
   },
   "active_embedding_model_id": null,

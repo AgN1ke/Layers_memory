@@ -282,6 +282,17 @@ impl Storage for FileStorage {
         atomic_write_json(&self.memory_unit_path(&unit.memory_unit_id), unit)
     }
 
+    fn read_memory_unit_by_id(&self, memory_unit_id: &str) -> Result<MemoryUnit> {
+        self.ensure_layout()?;
+        let path = self.memory_unit_path(memory_unit_id);
+        if !path.exists() {
+            return Err(MemoryEngineError::Storage(format!(
+                "memory unit not found: {memory_unit_id}"
+            )));
+        }
+        read_json(&path)
+    }
+
     fn read_memory_units_for_archive(&self, archive_id: &str) -> Result<Vec<MemoryUnit>> {
         let mut files = Vec::new();
         collect_json_files(&self.root.join("archive").join("units"), &mut files)?;

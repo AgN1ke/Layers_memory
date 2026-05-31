@@ -24,6 +24,8 @@ pub const SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION: &str = "sleep_compression_res
 pub const CONSOLIDATOR_TEXT_SCHEMA_VERSION: &str = "consolidator_text.v1";
 pub const COMPACT_MEMORY_RESULT_SCHEMA_VERSION: &str = "compact_memory_text.v1";
 pub const MEMORY_UNITS_RESULT_SCHEMA_VERSION: &str = "memory_units_result.v1";
+pub const EVIDENCE_PACK_SCHEMA_VERSION: &str = "evidence_pack.v1";
+pub const FIDELITY_REVIEW_SCHEMA_VERSION: &str = "fidelity_review.v1";
 pub const MANIFEST_SCHEMA_VERSION: &str = "manifest.v1";
 pub const JOURNAL_OPERATION_SCHEMA_VERSION: &str = "journal_operation.v1";
 

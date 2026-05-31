@@ -8,7 +8,8 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::archive::{
-    ArchiveEntry, ArchiveFilters, ArchiveStatus, FidelityStatus, MemoryUnit, MemoryUnitStatus,
+    ArchiveEntry, ArchiveFilters, ArchiveStatus, FidelityReview, FidelityStatus, MemoryUnit,
+    MemoryUnitStatus,
 };
 use crate::core_store::{
     CoreContextBudgetReport, CoreContextEvent, CoreContextFact, CoreContextPackage,
@@ -16,6 +17,7 @@ use crate::core_store::{
     CoreFactPatchResult, CoreFactStatus, CoreFactUpsertResult,
 };
 use crate::event::{IngestEvent, StoredEvent};
+use crate::fidelity::{EvidenceEvent, EvidenceEventRole, EvidencePack, MemoryFidelityPassStart};
 use crate::llm::{
     CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmRequest, LlmResponse, SleepOutcome,
     SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
@@ -41,10 +43,10 @@ use crate::types::{
     CORE_FACT_INPUT_SCHEMA_VERSION, CORE_FACT_PATCH_INPUT_SCHEMA_VERSION,
     CORE_FACT_PATCH_RESULT_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
     CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
-    INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
-    MEMORY_UNITS_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION,
-    RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
-    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    FIDELITY_REVIEW_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION, JOURNAL_OPERATION_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION,
+    PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION, RECALL_RESULT_SCHEMA_VERSION,
+    SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use crate::{MemoryEngineError, Result};
 
@@ -905,6 +907,7 @@ impl<S: Storage> MemoryEngine<S> {
                 weight: draft.weight,
                 status: MemoryUnitStatus::ActiveArchive,
                 fidelity_status: FidelityStatus::Unchecked,
+                fidelity_review: None,
             });
         }
 
@@ -914,10 +917,8 @@ impl<S: Storage> MemoryEngine<S> {
 
         archive_entry.updated_at = now.clone();
         archive_entry.memory_units = units;
-        if let Some(compact_memory) = render_compact_memory_from_units(&archive_entry.memory_units)
-        {
-            archive_entry.compact_memory = Some(compact_memory);
-        }
+        archive_entry.compact_memory =
+            render_compact_memory_from_units(&archive_entry.memory_units);
         self.storage
             .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
 
@@ -927,6 +928,272 @@ impl<S: Storage> MemoryEngine<S> {
         self.storage.save_task(&task)?;
 
         Ok(archive_entry)
+    }
+
+    pub fn build_evidence_pack(&self, memory_unit_id: &str) -> Result<EvidencePack> {
+        if memory_unit_id.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "memory_unit_id must not be empty".to_string(),
+            ));
+        }
+        self.ensure_manifest()?;
+        let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
+        let session_id = unit.source_session_id.clone();
+        self.with_resource_lock(session_lock_key(&session_id), || {
+            self.build_evidence_pack_unlocked(memory_unit_id)
+        })
+    }
+
+    pub fn begin_memory_fidelity_pass(
+        &self,
+        memory_unit_id: &str,
+    ) -> Result<MemoryFidelityPassStart> {
+        if memory_unit_id.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "memory_unit_id must not be empty".to_string(),
+            ));
+        }
+        self.ensure_manifest()?;
+
+        let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
+        let session_id = unit.source_session_id.clone();
+        self.with_resource_lock(session_lock_key(&session_id), || {
+            let evidence_pack = self.build_evidence_pack_unlocked(memory_unit_id)?;
+            let now = now_rfc3339()?;
+            let task = PendingTask {
+                schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
+                task_id: new_id("task")?,
+                task_type: TaskType::MemoryFidelityPass,
+                state: TaskState::Pending,
+                created_at: now.clone(),
+                updated_at: now,
+                prompt_id: self.options.fidelity.prompt_id.clone(),
+                prompt_version: self.options.fidelity.prompt_version,
+                role_hint: ModelRole::Reasoning,
+                expected_output_schema: FIDELITY_REVIEW_SCHEMA_VERSION.to_string(),
+                inputs: serde_json::to_value(&evidence_pack)?,
+                attempts: Vec::new(),
+                last_error: None,
+            };
+            self.storage.save_task(&task)?;
+            let request = llm_request_from_task(
+                &task,
+                &self.options.fidelity.prompt_id,
+                json!({ "evidence_pack": evidence_pack.clone() }),
+            )?;
+            Ok(MemoryFidelityPassStart {
+                evidence_pack,
+                pending_task: task,
+                request,
+            })
+        })
+    }
+
+    pub fn submit_memory_fidelity_response(
+        &self,
+        task_id: &str,
+        response: LlmResponse,
+    ) -> Result<MemoryUnit> {
+        let request_id = llm_response_request_id(&response).to_string();
+        match response {
+            LlmResponse::Ok { text, .. } => {
+                let result = (|| {
+                    let value = parse_json_value_from_llm_text(&text)?;
+                    let mut review: FidelityReview = serde_json::from_value(value)?;
+                    if review.schema_version.trim().is_empty() {
+                        review.schema_version = FIDELITY_REVIEW_SCHEMA_VERSION.to_string();
+                    }
+                    self.resume_memory_fidelity_pass(task_id, review)
+                })();
+                if let Err(err) = &result {
+                    self.mark_memory_fidelity_task_failed_best_effort(
+                        task_id,
+                        format!("{request_id} semantic error: {err}"),
+                    );
+                }
+                result
+            }
+            LlmResponse::Err { kind, detail, .. } => {
+                self.mark_memory_fidelity_task_failed_best_effort(
+                    task_id,
+                    format!("{request_id} {kind:?}: {detail}"),
+                );
+                Err(MemoryEngineError::Validation(format!(
+                    "memory_fidelity_pass failed: {kind:?}: {detail}"
+                )))
+            }
+        }
+    }
+
+    pub fn resume_memory_fidelity_pass(
+        &self,
+        task_id: &str,
+        mut review: FidelityReview,
+    ) -> Result<MemoryUnit> {
+        if review.schema_version != FIDELITY_REVIEW_SCHEMA_VERSION {
+            return Err(MemoryEngineError::IncompatibleSchema {
+                expected: FIDELITY_REVIEW_SCHEMA_VERSION.to_string(),
+                actual: review.schema_version.clone(),
+            });
+        }
+        review.explanation = normalize_whitespace(&review.explanation);
+        review.revised_thesis = normalize_optional_string(review.revised_thesis.as_deref());
+        review.missing_detail = normalize_optional_string(review.missing_detail.as_deref());
+        review.validate_basic()?;
+        self.ensure_manifest()?;
+
+        let task = self.storage.load_task(task_id)?;
+        if task.task_type != TaskType::MemoryFidelityPass {
+            return Err(MemoryEngineError::Validation(format!(
+                "task is not memory_fidelity_pass: {task_id}"
+            )));
+        }
+
+        let task_memory_unit_id = task
+            .inputs
+            .get("memory_unit_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                MemoryEngineError::Validation(format!(
+                    "memory_fidelity_pass task has no memory_unit_id: {task_id}"
+                ))
+            })?;
+        if task_memory_unit_id != review.memory_unit_id {
+            return Err(MemoryEngineError::Validation(format!(
+                "memory_fidelity_pass memory_unit_id mismatch: task={task_memory_unit_id} result={}",
+                review.memory_unit_id
+            )));
+        }
+
+        let session_id = task
+            .inputs
+            .get("source_session_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                MemoryEngineError::Validation(format!(
+                    "memory_fidelity_pass task has no source_session_id: {task_id}"
+                ))
+            })?
+            .to_string();
+
+        self.with_resource_lock(session_lock_key(&session_id), || {
+            let now = now_rfc3339()?;
+            let mut unit = self
+                .storage
+                .read_memory_unit_by_id(&review.memory_unit_id)?;
+            if unit.archive_id != review.archive_id {
+                return Err(MemoryEngineError::Validation(format!(
+                    "fidelity review archive_id mismatch: unit={} review={}",
+                    unit.archive_id, review.archive_id
+                )));
+            }
+
+            unit.updated_at = now.clone();
+            unit.fidelity_status = review.status;
+            unit.status = memory_unit_status_after_fidelity(review.status);
+            unit.fidelity_review = Some(review.clone());
+            self.storage.write_memory_unit(&unit)?;
+
+            let mut archive_entry = self.storage.read_archive_entry_by_id(&unit.archive_id)?;
+            archive_entry.updated_at = now.clone();
+            for archive_unit in &mut archive_entry.memory_units {
+                if archive_unit.memory_unit_id == unit.memory_unit_id {
+                    *archive_unit = unit.clone();
+                }
+            }
+            archive_entry.compact_memory =
+                render_compact_memory_from_units(&archive_entry.memory_units);
+            self.storage
+                .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
+
+            let mut task = self.storage.load_task(task_id)?;
+            task.state = TaskState::Completed;
+            task.updated_at = now;
+            task.last_error = None;
+            self.storage.save_task(&task)?;
+
+            Ok(unit)
+        })
+    }
+
+    fn build_evidence_pack_unlocked(&self, memory_unit_id: &str) -> Result<EvidencePack> {
+        let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
+        let archive = self.storage.read_archive_entry_by_id(&unit.archive_id)?;
+        let session = self.storage.read_session(&unit.source_session_id)?;
+        let now = now_rfc3339()?;
+        let mut pack = EvidencePack::empty_for(
+            new_id("evidence_pack")?,
+            now,
+            unit.memory_unit_id.clone(),
+            unit.archive_id.clone(),
+            unit.source_session_id.clone(),
+            unit.thesis.clone(),
+            self.options.fidelity.max_evidence_tokens,
+        );
+        pack.unit_evidence = unit.evidence.clone();
+
+        let source_ids = if unit.source_event_ids.is_empty() {
+            archive.source_event_ids.iter().collect::<HashSet<_>>()
+        } else {
+            unit.source_event_ids.iter().collect::<HashSet<_>>()
+        };
+        let source_indices = session
+            .events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| source_ids.contains(&event.event_id).then_some(index))
+            .collect::<Vec<_>>();
+
+        let mut selected = HashSet::new();
+        for index in &source_indices {
+            if let Some(event) = session.events.get(*index) {
+                let event = evidence_event_from_stored(
+                    event,
+                    EvidenceEventRole::Source,
+                    self.options.fidelity.max_event_text_chars,
+                );
+                add_evidence_event(&mut pack, event, &mut selected, true);
+            }
+        }
+
+        let mut neighbor_indices = BTreeSet::new();
+        for source_index in &source_indices {
+            for offset in 1..=self.options.fidelity.neighbor_events {
+                if let Some(left) = source_index.checked_sub(offset) {
+                    neighbor_indices.insert(left);
+                }
+                let right = source_index + offset;
+                if right < session.events.len() {
+                    neighbor_indices.insert(right);
+                }
+            }
+        }
+
+        for index in neighbor_indices {
+            let Some(event) = session.events.get(index) else {
+                continue;
+            };
+            let event = evidence_event_from_stored(
+                event,
+                EvidenceEventRole::Neighbor,
+                self.options.fidelity.max_event_text_chars,
+            );
+            add_evidence_event(&mut pack, event, &mut selected, false);
+        }
+
+        pack.estimated_tokens = estimate_evidence_pack_tokens(&pack);
+        Ok(pack)
+    }
+
+    fn mark_memory_fidelity_task_failed_best_effort(&self, task_id: &str, detail: String) {
+        if let Ok(mut task) = self.storage.load_task(task_id) {
+            if task.task_type == TaskType::MemoryFidelityPass {
+                task.state = TaskState::Failed;
+                task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
+                task.last_error = Some(detail);
+                let _ = self.storage.save_task(&task);
+            }
+        }
     }
 
     pub fn recall(&self, query: RecallQuery) -> Result<RecallResult> {
@@ -1029,6 +1296,7 @@ pub struct EngineOptions {
     pub sleep: SleepStage1Config,
     pub recall: RecallStage1Config,
     pub context: ContextPackageConfig,
+    pub fidelity: FidelityConfig,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1090,6 +1358,15 @@ pub struct ContextPackageConfig {
     pub token_budget: CoreContextTokenBudget,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FidelityConfig {
+    pub neighbor_events: usize,
+    pub max_evidence_tokens: usize,
+    pub max_event_text_chars: usize,
+    pub prompt_id: String,
+    pub prompt_version: u32,
+}
+
 impl Default for RecallStage1Config {
     fn default() -> Self {
         Self {
@@ -1118,6 +1395,18 @@ impl Default for ContextPackageConfig {
                 "relationship".to_string(),
             ],
             token_budget: CoreContextTokenBudget::default(),
+        }
+    }
+}
+
+impl Default for FidelityConfig {
+    fn default() -> Self {
+        Self {
+            neighbor_events: 2,
+            max_evidence_tokens: 1_500,
+            max_event_text_chars: 800,
+            prompt_id: "memory_fidelity_pass".to_string(),
+            prompt_version: 1,
         }
     }
 }
@@ -1900,6 +2189,79 @@ fn render_compact_memory_from_units(units: &[MemoryUnit]) -> Option<String> {
     } else {
         Some(lines.join("\n"))
     }
+}
+
+fn memory_unit_status_after_fidelity(status: FidelityStatus) -> MemoryUnitStatus {
+    match status {
+        FidelityStatus::Valid | FidelityStatus::SelfChecked => MemoryUnitStatus::ActiveArchive,
+        FidelityStatus::Unsupported | FidelityStatus::Distorted => MemoryUnitStatus::Rejected,
+        FidelityStatus::Unchecked
+        | FidelityStatus::TooBroad
+        | FidelityStatus::MissingKeyDetail
+        | FidelityStatus::NeedsRevision => MemoryUnitStatus::NeedsRevision,
+    }
+}
+
+fn evidence_event_from_stored(
+    event: &StoredEvent,
+    role: EvidenceEventRole,
+    max_text_chars: usize,
+) -> EvidenceEvent {
+    EvidenceEvent {
+        event_id: event.event_id.clone(),
+        timestamp: event.timestamp.clone(),
+        event_type: event.event_type.clone(),
+        source: event.source.clone(),
+        role,
+        text: truncate_chars(
+            &event_text(event).unwrap_or_else(|| event.payload.to_string()),
+            max_text_chars,
+        ),
+        tags: event.tags.clone(),
+    }
+}
+
+fn add_evidence_event(
+    pack: &mut EvidencePack,
+    event: EvidenceEvent,
+    selected: &mut HashSet<String>,
+    force: bool,
+) {
+    if !selected.insert(event.event_id.clone()) {
+        return;
+    }
+    let mut candidate = pack.clone();
+    candidate.events.push(event.clone());
+    let candidate_tokens = estimate_evidence_pack_tokens(&candidate);
+    if force || candidate_tokens <= pack.max_estimated_tokens {
+        pack.events.push(event);
+        pack.estimated_tokens = candidate_tokens;
+    } else {
+        pack.truncated = true;
+    }
+}
+
+fn estimate_evidence_pack_tokens(pack: &EvidencePack) -> usize {
+    let mut chars = pack.target_thesis.chars().count()
+        + pack
+            .unit_evidence
+            .as_deref()
+            .map(|value| value.chars().count())
+            .unwrap_or(0);
+    for event in &pack.events {
+        chars += event.event_id.chars().count()
+            + event.timestamp.chars().count()
+            + event.event_type.chars().count()
+            + event.source.chars().count()
+            + event.text.chars().count()
+            + event
+                .tags
+                .iter()
+                .map(|tag| tag.chars().count())
+                .sum::<usize>()
+            + 32;
+    }
+    chars.div_ceil(2)
 }
 
 fn archive_filters_from_recall(filters: &RecallFilters) -> ArchiveFilters {

@@ -21,6 +21,7 @@ use pyo3::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use ::memory_engine::archive::FidelityReview;
 use ::memory_engine::core_store::{
     CoreContextPackage, CoreContextRequest, CoreFactInput, CoreFactPatchInput,
 };
@@ -87,6 +88,43 @@ impl PyMemoryEngine {
         let run: SleepRun = parse_json(run_json, "sleep run")?;
         let outcome = run_without_gil(py, || self.inner.finish_sleep_run(run))?;
         dump_json(&outcome, "sleep outcome")
+    }
+
+    fn build_evidence_pack(&self, py: Python<'_>, memory_unit_id: &str) -> PyResult<String> {
+        let pack = run_without_gil(py, || self.inner.build_evidence_pack(memory_unit_id))?;
+        dump_json(&pack, "evidence pack")
+    }
+
+    fn begin_memory_fidelity_pass(&self, py: Python<'_>, memory_unit_id: &str) -> PyResult<String> {
+        let start = run_without_gil(py, || self.inner.begin_memory_fidelity_pass(memory_unit_id))?;
+        dump_json(&start, "memory fidelity pass")
+    }
+
+    fn submit_memory_fidelity_response(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        response_json: &str,
+    ) -> PyResult<String> {
+        let response: LlmResponse = parse_json(response_json, "LLM response")?;
+        let unit = run_without_gil(py, || {
+            self.inner
+                .submit_memory_fidelity_response(task_id, response)
+        })?;
+        dump_json(&unit, "memory unit")
+    }
+
+    fn resume_memory_fidelity_pass(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        result_json: &str,
+    ) -> PyResult<String> {
+        let result: FidelityReview = parse_json(result_json, "fidelity review")?;
+        let unit = run_without_gil(py, || {
+            self.inner.resume_memory_fidelity_pass(task_id, result)
+        })?;
+        dump_json(&unit, "memory unit")
     }
 
     fn read_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {

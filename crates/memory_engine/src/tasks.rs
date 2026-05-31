@@ -9,6 +9,7 @@ pub enum TaskType {
     SleepCompression,
     CompactMemoryPass,
     MemoryUnitPass,
+    MemoryFidelityPass,
     ScoreEvent,
     ReflectionAnalyze,
     RecallRerank,

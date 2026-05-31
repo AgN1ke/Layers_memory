@@ -46,6 +46,34 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-05-31 — Memory fidelity validation uses evidence packs
+
+Reflection Phase B begins with an explicit validation boundary: compressed memory units can now be checked against a small evidence pack before they are trusted for critical paths.
+
+**What changed:**
+- Added `evidence_pack.v1`, built by the core from a memory unit's `source_event_ids`, configured neighbor events, unit thesis/evidence, and a token budget.
+- Added `fidelity_review.v1`, stored on `MemoryUnit` as `fidelity_review`.
+- Added `TaskType::MemoryFidelityPass` with `role_hint: reasoning` and prompt `memory_fidelity_pass`.
+- Added core methods to build evidence packs, begin fidelity validation, submit validator responses, and persist review status.
+- Added Telegram debug commands `/evidence <memory_unit_id>` and `/fidelity <memory_unit_id>`.
+- Fidelity results can mark memory units as active, rejected, or needing revision without writing directly to Core.
+
+**What is retracted (if applicable):**
+- Nothing. This implements the planned validator boundary; it does not claim full reflection or automatic Core promotion is complete.
+
+**What is still true:**
+- Reviewer agents do not write truth directly into Core.
+- Core still has no provider, model, key, prompt directory, or network dependency.
+- Automatic routing of only high-risk/high-weight units to validation remains a later step; the current Telegram path is manual/debug.
+- Candidate beliefs, `/reflect`, `/confirm`, `/reject`, and full forgetting remain future v0.2 work.
+
+**Reproducibility anchor:**
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+- `crates\python_adapter\.venv\Scripts\maturin.exe develop`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q`
+
 ## 2026-05-30 — Recall uses time decay and recall feedback
 
 Archive recall now computes an effective freshness at query time instead of treating stored `freshness` as permanently current. Old archive memories sink in rank unless text/theme/tag relevance or recall feedback keeps them useful.

@@ -20,6 +20,7 @@ pub trait Storage {
     fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry>;
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>>;
     fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()>;
+    fn read_memory_unit_by_id(&self, memory_unit_id: &str) -> Result<MemoryUnit>;
     fn read_memory_units_for_archive(&self, archive_id: &str) -> Result<Vec<MemoryUnit>>;
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory>;
