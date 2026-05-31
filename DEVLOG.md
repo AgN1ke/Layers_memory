@@ -4483,6 +4483,8 @@ Evidence pack збирається програмно, без LLM: source events
 - `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
 - `crates\python_adapter\.venv\Scripts\maturin.exe develop` — пройшло.
 - `crates\python_adapter\.venv\Scripts\python.exe -m pytest tests -q` — 13 passed.
+- Live-check на реальному runtime unit `mu_1780169586541668900_25`: evidence pack `1269/1500` estimated tokens, `truncated=true`, 10 events (`8 source`, `2 neighbor`), verdict `valid`, confidence `1.0`.
+- Live-check на контрольному викривленому unit у scratch-сховищі: thesis `The user is a professional astronomer.` проти source `I like astronomy documentaries.`, evidence pack `121/1500`, verdict `unsupported`, unit status `rejected`.
 
 **Висновок:**
-Phase B має перший робочий шар: atomic memory units тепер можна перевіряти проти компактного evidence pack дорогою/reasoning-моделлю на малому контексті. Наступний крок після gates — live-check `/archive_last` -> `/evidence <id>` -> `/fidelity <id>` на реальному memory unit.
+Phase B має перший робочий шар: atomic memory units тепер можна перевіряти проти компактного evidence pack дорогою/reasoning-моделлю на малому контексті. Manual live-check підтвердив, що pack не роздувається до всієї розмови, validator пропускає чесну тезу й відхиляє викривлену. Наступний підкрок — автоматична маршрутизація fidelity для high-risk/high-weight/Core-path units.
