@@ -4670,3 +4670,42 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Contested path реалізовано в ядрі без порушення головного інваріанту: агенти лише пропонують, Core змінюється тільки після manual review. Phase C тепер має promotion і controlled contradiction handling. Наступні відкриті речі: live-check на реальному contradiction-кандидаті, опційний core candidate reviewer/formulation pass і після цього forgetting.
+
+## Запис 90 — 2026-06-01 12:31 +03:00 — Live-check contested Core на реальному Gemini
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Contested path був покритий unit/e2e тестом, але треба було перевірити головне live-питання: чи реальний `reflection_analyze` через Gemini здатен сам вказати `contradicted_core_fact_ids`, а не лише створити звичайний candidate без суперечності.
+
+**Задум:**
+Запустити ізольований scratch runtime без Telegram UI. Seed Core: `The user lives in Berlin.` Додати validated memory unit: "користувач повернувся в Київ, Berlin fact outdated". Далі виконати реальний `LlmRequest` для `reflection_analyze` через cached Gemini key і submit-нути відповідь назад у engine.
+
+**Що робили:**
+- Зупинили stale Telegram bot processes через `run_dev_bot.ps1 -NoStart`.
+- Перебудували PyO3 adapter через `maturin develop`.
+- Створили scratch memory directory.
+- Seed-нули старий active Core fact про Berlin.
+- Створили complete archive + valid memory unit про Kyiv update.
+- Запустили `begin_reflection_analysis` і виконали request через `gemini-2.5-pro`.
+- Approve-нули candidate через `review_candidate(approved)`.
+
+**Що зробили детально:**
+Gemini повернув 1 candidate: `The user lives in Kyiv.` Категорія `location`, confidence `0.98`, `contradicted_core_fact_ids` містив старий Berlin `core_fact_id`. Після `review_candidate(approved)` engine повернув `contested_count=1`, promoted fact зі статусом `active`, а `core_context_package` показав старий fact як `contested` і новий fact як `active`.
+
+**Проблеми чи виклики:**
+Перший запуск live-script впав до LLM-виклику через неправильний helper (`read_gemini_key` не існує в `bot.py`). Це не зачепило runtime data і було виправлено прямим `GeminiClient(os.environ["GEMINI_API_KEY"])`.
+
+**Фідбек користувача:**
+Користувач попросив провести live-check самостійно, бо cached access уже є і Telegram — лише один із можливих інтерфейсів. Тест виконано напряму через бібліотечний API + host LLM primitive, без залежності від Telegram commands.
+
+**Перевірки:**
+- `reflection_analyze` live token usage: role `reasoning`, model `gemini-2.5-pro`, prompt `1096`, output `287`, total `2532`.
+- Live candidate мав `contradicted_core_fact_ids` зі старим Berlin `core_fact_id`.
+- `review_candidate(approved)` повернув one contested old fact.
+- `core_context_package` повернув statuses: old Berlin `contested`, new Kyiv `active`.
+- Scratch runtime був видалений після перевірки.
+
+**Висновок:**
+Contested Core path пройшов live-check із реальною reasoning-моделлю. Це закриває Phase C contradiction handling: агент не пише Core напряму, але може запропонувати суперечність; власник підтверджує, engine позначає старе знання як contested і додає нове active знання з provenance.

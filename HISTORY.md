@@ -72,6 +72,7 @@ The Core can now adapt without silently overwriting old truth. When a reviewed r
 - `cargo fmt --check`
 - `cargo clippy -p memory_engine --all-targets -- -D warnings`
 - `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+- Live Gemini check on 2026-06-01: scratch memory seeded `The user lives in Berlin.`, a validated memory unit said the user moved back to Kyiv and Berlin was outdated, `reflection_analyze` on `gemini-2.5-pro` returned a candidate with the old `core_fact_id` in `contradicted_core_fact_ids`, and `review_candidate(approved)` produced one `contested` old fact plus one active promoted Kyiv fact.
 
 ## 2026-06-01 — Reflection candidates require manual review before Core promotion
 
