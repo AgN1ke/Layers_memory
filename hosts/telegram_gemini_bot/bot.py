@@ -368,7 +368,8 @@ def main() -> None:
         "Commands: /help, /sleep, /archives, /archive_last, /recall text, "
         "/core, /core_seed, /remember text, /core_update id text, "
         "/core_forget id, /evidence unit_id, /fidelity unit_id, /reflect, "
-        "/candidates, /confirm id, /reject id, /tasks, /models"
+        "/candidates, /confirm id, /reject id, /forget_review, "
+        "/forgotten, /remember_back unit_id, /tasks, /models"
     )
     offset = read_saved_offset()
     log_line(
@@ -561,6 +562,25 @@ def handle_update(
     if text == "/candidates":
         candidates = json.loads(engine.list_candidates())
         telegram.send_message(chat_id, format_candidates(candidates, scope=core_scope(session_id)))
+        return
+
+    if text == "/forget_review":
+        result = run_forget_review(engine, gemini, llm_config, session_id)
+        telegram.send_message(chat_id, format_forget_review_result(result))
+        return
+
+    if text == "/forgotten":
+        result = json.loads(engine.list_forgotten_memory_units(session_id))
+        telegram.send_message(chat_id, format_forgotten_units(result))
+        return
+
+    if text.startswith("/remember_back"):
+        unit_id = text.removeprefix("/remember_back").strip()
+        if not unit_id:
+            telegram.send_message(chat_id, "Usage: /remember_back memory_unit_id")
+            return
+        unit = json.loads(engine.remember_back(unit_id))
+        telegram.send_message(chat_id, f"Memory unit restored: {unit.get('thesis', '')}")
         return
 
     if text.startswith("/confirm"):
@@ -1083,6 +1103,29 @@ def run_reflection_analysis(
     task_id = start["pending_task"]["task_id"]
     result = json.loads(
         engine.submit_reflection_response(
+            task_id,
+            json.dumps(response, ensure_ascii=False),
+        )
+    )
+    return {
+        "start": start,
+        "result": result,
+    }
+
+
+def run_forget_review(
+    engine: memory_engine.MemoryEngine,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    session_id: str,
+) -> dict[str, Any]:
+    start = json.loads(engine.begin_forget_review(session_id))
+    if int(start.get("candidate_count", 0)) == 0:
+        return {"start": start, "result": None}
+    response = execute_llm_request(start["request"], gemini, llm_config)
+    task_id = start["pending_task"]["task_id"]
+    result = json.loads(
+        engine.submit_forget_review_response(
             task_id,
             json.dumps(response, ensure_ascii=False),
         )
@@ -2176,6 +2219,42 @@ def format_candidate_review(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_forget_review_result(result: dict[str, Any]) -> str:
+    start = result.get("start", {})
+    applied = result.get("result")
+    candidate_count = int(start.get("candidate_count", 0) or 0)
+    if not applied:
+        return f"Forget review finished. Candidates: {candidate_count}. Nothing to review."
+    return "\n".join(
+        [
+            "Forget review finished.",
+            f"Candidates: {candidate_count}",
+            f"Reviewed: {applied.get('reviewed', 0)}",
+            f"Forgotten: {applied.get('forgotten', 0)}",
+            f"Kept: {applied.get('kept', 0)}",
+            f"Protected: {applied.get('protected', 0)}",
+            f"Ignored: {applied.get('ignored', 0)}",
+        ]
+    )
+
+
+def format_forgotten_units(result: dict[str, Any]) -> str:
+    units = [unit for unit in result.get("units", []) if isinstance(unit, dict)]
+    if not units:
+        return "No forgotten memory units for this chat."
+    lines = ["Forgotten memory units:"]
+    for index, unit in enumerate(units[:20], start=1):
+        weight = float(unit.get("weight", 0.0) or 0.0)
+        lines.append(
+            f"{index}. {unit.get('memory_unit_id', '')} "
+            f"[{weight:.2f}] {truncate_chars(clean_string(unit.get('thesis')), 160)}"
+        )
+    if len(units) > 20:
+        lines.append(f"... and {len(units) - 20} more")
+    lines.append("Use /remember_back memory_unit_id to restore one.")
+    return "\n".join(lines)
+
+
 def format_core_facts(package: dict[str, Any]) -> str:
     facts = package.get("core_facts", [])
     if not facts:
@@ -2243,6 +2322,9 @@ def help_text() -> str:
         "/candidates - list candidate beliefs for this chat\n"
         "/confirm candidate_id - promote a reviewed candidate into Core\n"
         "/reject candidate_id - reject a candidate belief\n"
+        "/forget_review - review old low-signal memory units for reversible forgetting\n"
+        "/forgotten - list forgotten memory units for this chat\n"
+        "/remember_back memory_unit_id - restore a forgotten memory unit\n"
         "/tasks - show pending tasks\n"
         "/models - show model role mapping\n"
         "\n"

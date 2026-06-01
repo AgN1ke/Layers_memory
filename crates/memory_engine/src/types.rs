@@ -29,6 +29,8 @@ pub const COMPACT_MEMORY_RESULT_SCHEMA_VERSION: &str = "compact_memory_text.v1";
 pub const MEMORY_UNITS_RESULT_SCHEMA_VERSION: &str = "memory_units_result.v1";
 pub const EVIDENCE_PACK_SCHEMA_VERSION: &str = "evidence_pack.v1";
 pub const FIDELITY_REVIEW_SCHEMA_VERSION: &str = "fidelity_review.v1";
+pub const FORGET_REVIEW_INPUT_SCHEMA_VERSION: &str = "forget_review_input.v1";
+pub const FORGET_REVIEW_RESULT_SCHEMA_VERSION: &str = "forget_review_result.v1";
 pub const MANIFEST_SCHEMA_VERSION: &str = "manifest.v1";
 pub const JOURNAL_OPERATION_SCHEMA_VERSION: &str = "journal_operation.v1";
 

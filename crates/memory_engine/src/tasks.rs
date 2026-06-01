@@ -10,6 +10,7 @@ pub enum TaskType {
     CompactMemoryPass,
     MemoryUnitPass,
     MemoryFidelityPass,
+    ForgetReview,
     ScoreEvent,
     ReflectionAnalyze,
     RecallRerank,

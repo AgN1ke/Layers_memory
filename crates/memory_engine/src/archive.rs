@@ -23,6 +23,14 @@ pub enum MemoryUnitStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ForgetDecision {
+    Forget,
+    Keep,
+    Protect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FidelityStatus {
     Unchecked,
     SelfChecked,
@@ -105,6 +113,8 @@ pub struct MemoryUnit {
     pub fidelity_status: FidelityStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity_review: Option<FidelityReview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forget_review: Option<ForgetReviewRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -176,6 +186,15 @@ pub struct FidelityReview {
     pub revised_thesis: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub missing_detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForgetReviewRecord {
+    pub reviewed_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<Id>,
+    pub decision: ForgetDecision,
+    pub reason: String,
 }
 
 impl FidelityReview {

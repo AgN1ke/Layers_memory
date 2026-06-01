@@ -12,6 +12,7 @@ pub mod error;
 pub mod event;
 pub mod fidelity;
 pub mod file_storage;
+pub mod forgetting;
 pub mod journal;
 pub mod llm;
 pub mod manifest;
