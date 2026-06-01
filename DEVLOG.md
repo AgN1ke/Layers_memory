@@ -4743,3 +4743,29 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Forgetting v1 реалізовано на `feature/forgetting`, review по чотирьох пунктах пройдено, простий і розширений scratch live-check пройшли. Гілка готова до commit і merge у `develop`.
+
+## Запис 92 — 2026-06-01 — v0.2 close: deterministic living memory cycle
+
+**Проблематика:**
+Після forgetting v1 повний цикл живої пам'яті був реалізований шматками, але не мав одного коміченого end-to-end anchor. Без такого тесту твердження "v0.2 працює як цикл" лишалось би сумою окремих перевірок.
+
+**Задум:**
+Додати deterministic acceptance-test у Rust core, без live LLM і без Telegram UI. Тест має пройти через ті самі public engine APIs і pull-based LLM boundary, але підставити відповіді агентів як `LlmResponse`.
+
+**Що зробили:**
+- Додали `crates/memory_engine/tests/living_memory_cycle.rs`.
+- Додали `docs/v0.2-acceptance.md`.
+- Оновили `HISTORY.md` з v0.2 acceptance entry.
+- Оновили roadmap, щоб позначити North Star v0.2 як закритий acceptance-тестом.
+
+**Що перевіряє тест:**
+`ingest -> sleep driver -> Archive + MemoryUnit -> Archive-to-Core bridge -> fidelity -> core_context_package/recall -> reflection candidate -> manual confirm -> Core -> contradiction -> contested -> forget_review -> Forgotten -> remember_back`.
+
+**Проблеми чи виклики:**
+Це не live quality benchmark. Тест доводить композицію core lifecycle і регресійно захищає основні інваріанти. Якість промптів, зовнішні benchmark-и, vector storage, reviewer-pass і unit-level recall counters лишаються окремими майбутніми задачами.
+
+**Перевірки:**
+- `cargo test -p memory_engine --test living_memory_cycle` — пройшло.
+
+**Висновок:**
+v0.2 отримав reproducibility anchor у коді. Наступний крок перед тегом — повний release gate, merge `develop` у `main`, annotated tag `v0.2.0`, push main+tag.

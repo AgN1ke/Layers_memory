@@ -46,6 +46,36 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-01 — v0.2 living memory cycle acceptance
+
+v0.2 is ready to close as an end-to-end living-memory cycle in the reusable Rust core. This entry records the acceptance anchor; it does not claim external benchmark quality.
+
+**What changed:**
+- Added `docs/v0.2-acceptance.md`.
+- Added deterministic integration test `crates/memory_engine/tests/living_memory_cycle.rs`.
+- The test composes the full core lifecycle: `ingest -> sleep driver -> Archive + MemoryUnit -> recall/context -> fidelity -> reflection candidate -> manual Core promotion -> contested Core -> forget_review -> remember_back`.
+- The acceptance path uses injected `LlmResponse` values, so the cycle is reproducible without a live provider.
+
+**What is retracted (if applicable):**
+- No quality or benchmark claim is made for v0.2. The release claim is only that the living-memory lifecycle is implemented and regression-tested end to end.
+
+**What is still true:**
+- The core still does no network I/O and knows no provider/model/key.
+- Hosts still execute a single primitive: `LlmRequest -> text`, then submit the result back to the core.
+- Agents still cannot write Core truth directly; Core mutation happens through explicit bridge/gating or manual review paths.
+
+**Known limitations / deferred work:**
+- Vector storage remains opt-in future work.
+- Core candidate reviewer/formulation pass remains deferred.
+- Unit-level recall counters are not implemented; forgetting v1 uses archive-level recall proxy.
+- Per-scope Core store layout remains an optimization if shared category locks become a bottleneck.
+- Partial sleep/session-tail strategy remains deferred.
+- Public quality claims require a separate benchmark harness and reproducibility anchor.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test living_memory_cycle`
+- Full release gate is documented in `docs/v0.2-acceptance.md`.
+
 ## 2026-06-01 — Reversible forgetting review for low-signal memory units
 
 Memory units can now be marked as forgotten through a conservative review path. This changes prompt-facing recall behavior, because forgotten units are excluded from compact memory projections, while the full archive and audit trail remain on disk.
