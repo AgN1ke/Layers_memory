@@ -2107,7 +2107,15 @@ def format_candidate(candidate: dict[str, Any], index: int | None = None) -> str
     status = clean_string(candidate.get("status")) or "candidate"
     confidence = clamp_float(candidate.get("confidence"), 0.0)
     text = clean_string(candidate.get("text"))
-    return f"{prefix}{candidate_id} [{status} {category} {confidence:.2f}] {text}"
+    suffix = ""
+    contradicted_core_ids = [
+        clean_string(value)
+        for value in candidate.get("contradicted_core_fact_ids", [])
+        if clean_string(value)
+    ]
+    if contradicted_core_ids:
+        suffix = f" (contests: {', '.join(contradicted_core_ids[:3])})"
+    return f"{prefix}{candidate_id} [{status} {category} {confidence:.2f}] {text}{suffix}"
 
 
 def format_reflection_result(result: dict[str, Any]) -> str:
@@ -2153,6 +2161,7 @@ def format_candidates(candidates: list[dict[str, Any]], scope: str) -> str:
 def format_candidate_review(result: dict[str, Any]) -> str:
     candidate = result.get("candidate", {})
     promoted = result.get("promoted_fact")
+    contested = [fact for fact in result.get("contested_facts", []) if isinstance(fact, dict)]
     lines = [
         f"Candidate: {candidate.get('candidate_id', '')}",
         f"Status: {candidate.get('status', '')}",
@@ -2160,6 +2169,10 @@ def format_candidate_review(result: dict[str, Any]) -> str:
     ]
     if isinstance(promoted, dict):
         lines.append(f"Promoted Core fact: {promoted.get('core_fact_id', '')}")
+    if contested:
+        lines.append("Contested Core facts:")
+        for fact in contested[:5]:
+            lines.append(f"- {fact.get('core_fact_id', '')}: {fact.get('text', '')}")
     return "\n".join(lines)
 
 
@@ -2173,7 +2186,11 @@ def format_core_facts(package: dict[str, Any]) -> str:
         category = fact.get("category", "core")
         confidence = float(fact.get("confidence", 0.0))
         fact_id = fact.get("core_fact_id", "")
-        lines.append(f"{index}. {fact_id} [{category} {confidence:.2f}] {fact.get('text', '')}")
+        status = clean_string(fact.get("status")) or "active"
+        status_prefix = "" if status == "active" else f"{status} "
+        lines.append(
+            f"{index}. {fact_id} [{status_prefix}{category} {confidence:.2f}] {fact.get('text', '')}"
+        )
     return "\n".join(lines)
 
 

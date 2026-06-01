@@ -4630,3 +4630,82 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Phase C first slice пройшов live-check. Reflection може створювати reviewable candidates із validated memory units, а Core лишається стабільним і росте тільки після manual review. Гілка `feature/reflection-candidates` готова до merge у `develop`. Наступні відкриті задачі Phase C: core candidate reviewer/formulation pass із `role_hint: reasoning` і contested logic.
+
+## Запис 89 — 2026-06-01 11:35 +03:00 — Contested Core через manual candidate review
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після першого зрізу Phase C Core уже міг рости через `/confirm`, але не мав контрольованого способу передумати. Якщо новий candidate суперечив старому Core-факту, approve міг створити другий active-факт поруч зі старим active-фактом. Це ламало ідею Adaptive Stable Core: ядро має адаптуватись, але не тихо переписувати істину і не тримати дві активні суперечності без позначки.
+
+**Задум:**
+Додати contested-шлях тільки через manual review. Reflection може запропонувати `contradicted_core_fact_ids`, але це не змінює Core. Лише `review_candidate(approved)` позначає старі active facts як `contested`, додає provenance-link на candidate і після цього промоутить новий факт як active. `/reject` і `needs_changes` Core не чіпають.
+
+**Що робили:**
+- Додали `contradicted_core_fact_ids` у `ReflectionCandidateDraft` і `CandidateBelief`.
+- Додали `contested_facts` у `CandidateReviewResult`.
+- Оновили `review_candidate(approved)`: перед promotion він переводить active same-scope Core facts із `contradicted_core_fact_ids` у `CoreFactStatus::Contested`.
+- Додали link `contested_by_candidate` і теги `contested`, `contested_by_reflection_candidate` до старого факта.
+- Додали `status` у `CoreContextFact`.
+- `core_context_package` тепер включає active і contested Core facts; `render_memory_view` показує contested marker.
+- Оновили `prompts/reflection_analyze.md`, щоб модель вказувала `contradicted_core_fact_ids` тільки для реальних суперечностей, не для harmless refinements.
+- Telegram host тільки форматить нові поля: показує contested ids у candidates, contested facts у review result і status у `/core`.
+
+**Що зробили детально:**
+Суперечність проходить через той самий review-gate: candidate зберігає id старого Core-факта, але до `/confirm` нічого не мутує. При approve engine під candidate-lock переводить старий active факт у `contested`, зберігає його в Core store, додає link на candidate, а новий факт пише як active із `source_candidate_id`. Contested facts лишаються prompt-visible, тому модель бачить, що старе знання спірне, а не просто зникло.
+
+**Проблеми чи виклики:**
+Не додавали окремий `engine.contest_core_fact` у цьому зрізі, щоб не розширювати API без потреби. Manual demotion у `deprecated` уже покривається `patch_core_fact` і `/core_forget`; окремий UX для resolution можна робити пізніше, якщо live-використання покаже потребу.
+
+**Фідбек користувача:**
+Користувач погодив порядок contested → forgetting і наголосив, що Core має бути живим, валідованим і адаптивним, але стабільним. Цей крок саме це й закриває на ручному candidate-review шляху.
+
+**Перевірки:**
+- `cargo test -p memory_engine --test engine_reflection` — 2 passed.
+- `cargo test -p memory_engine --test engine_sleep_recall` — 28 passed.
+- `cargo fmt --check` — пройшло.
+- `cargo clippy -p memory_engine --all-targets -- -D warnings` — пройшло.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+
+**Висновок:**
+Contested path реалізовано в ядрі без порушення головного інваріанту: агенти лише пропонують, Core змінюється тільки після manual review. Phase C тепер має promotion і controlled contradiction handling. Наступні відкриті речі: live-check на реальному contradiction-кандидаті, опційний core candidate reviewer/formulation pass і після цього forgetting.
+
+## Запис 90 — 2026-06-01 12:31 +03:00 — Live-check contested Core на реальному Gemini
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Contested path був покритий unit/e2e тестом, але треба було перевірити головне live-питання: чи реальний `reflection_analyze` через Gemini здатен сам вказати `contradicted_core_fact_ids`, а не лише створити звичайний candidate без суперечності.
+
+**Задум:**
+Запустити ізольований scratch runtime без Telegram UI. Seed Core: `The user lives in Berlin.` Додати validated memory unit: "користувач повернувся в Київ, Berlin fact outdated". Далі виконати реальний `LlmRequest` для `reflection_analyze` через cached Gemini key і submit-нути відповідь назад у engine.
+
+**Що робили:**
+- Зупинили stale Telegram bot processes через `run_dev_bot.ps1 -NoStart`.
+- Перебудували PyO3 adapter через `maturin develop`.
+- Створили scratch memory directory.
+- Seed-нули старий active Core fact про Berlin.
+- Створили complete archive + valid memory unit про Kyiv update.
+- Запустили `begin_reflection_analysis` і виконали request через `gemini-2.5-pro`.
+- Approve-нули candidate через `review_candidate(approved)`.
+
+**Що зробили детально:**
+Gemini повернув 1 candidate: `The user lives in Kyiv.` Категорія `location`, confidence `0.98`, `contradicted_core_fact_ids` містив старий Berlin `core_fact_id`. Після `review_candidate(approved)` engine повернув `contested_count=1`, promoted fact зі статусом `active`, а `core_context_package` показав старий fact як `contested` і новий fact як `active`.
+
+**Проблеми чи виклики:**
+Перший запуск live-script впав до LLM-виклику через неправильний helper (`read_gemini_key` не існує в `bot.py`). Це не зачепило runtime data і було виправлено прямим `GeminiClient(os.environ["GEMINI_API_KEY"])`.
+
+**Фідбек користувача:**
+Користувач попросив провести live-check самостійно, бо cached access уже є і Telegram — лише один із можливих інтерфейсів. Тест виконано напряму через бібліотечний API + host LLM primitive, без залежності від Telegram commands.
+
+**Перевірки:**
+- `reflection_analyze` live token usage: role `reasoning`, model `gemini-2.5-pro`, prompt `1096`, output `287`, total `2532`.
+- Live candidate мав `contradicted_core_fact_ids` зі старим Berlin `core_fact_id`.
+- `review_candidate(approved)` повернув one contested old fact.
+- `core_context_package` повернув statuses: old Berlin `contested`, new Kyiv `active`.
+- Scratch runtime був видалений після перевірки.
+
+**Висновок:**
+Contested Core path пройшов live-check із реальною reasoning-моделлю. Це закриває Phase C contradiction handling: агент не пише Core напряму, але може запропонувати суперечність; власник підтверджує, engine позначає старе знання як contested і додає нове active знання з provenance.

@@ -1,4 +1,4 @@
-use crate::core_store::{CoreContextEvent, CoreContextFact, CoreContextPackage};
+use crate::core_store::{CoreContextEvent, CoreContextFact, CoreContextPackage, CoreFactStatus};
 use crate::recall::RecallItem;
 
 pub const ARCHIVE_MEMORY_PROMPT_LIMIT: usize = 5;
@@ -172,8 +172,15 @@ pub fn render_core_fact_prompt_line(fact: &CoreContextFact) -> Option<String> {
         clean_string(&fact.category)
     };
     let confidence = format_score(fact.confidence);
+    let status_marker = match fact.status {
+        CoreFactStatus::Active => String::new(),
+        CoreFactStatus::Contested => " [contested]".to_string(),
+        CoreFactStatus::Deprecated => " [deprecated]".to_string(),
+        CoreFactStatus::Contradicted => " [contradicted]".to_string(),
+        CoreFactStatus::NeedsReview => " [needs_review]".to_string(),
+    };
     Some(format!(
-        "- {category} ({confidence}): {}",
+        "- {category}{status_marker} ({confidence}): {}",
         xml_escape(&text)
     ))
 }
@@ -280,7 +287,9 @@ fn xml_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::render_memory_view;
-    use crate::core_store::{CoreContextEvent, CoreContextFact, CoreContextPackage};
+    use crate::core_store::{
+        CoreContextEvent, CoreContextFact, CoreContextPackage, CoreFactStatus,
+    };
     use crate::recall::{RecallItem, RecallSourceLayer};
 
     #[test]
@@ -293,6 +302,7 @@ mod tests {
                 core_fact_id: "core_fact_1".to_string(),
                 scope: Some("chat_1".to_string()),
                 text: "User name is Mykyta.".to_string(),
+                status: CoreFactStatus::Active,
                 confidence: 0.95,
                 tags: vec![],
             }],

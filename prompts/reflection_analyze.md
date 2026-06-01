@@ -18,6 +18,7 @@ Return only valid JSON matching `reflection_result.v1`:
       "source_memory_unit_ids": ["mu_..."],
       "supporting_archive_ids": ["archive_..."],
       "contradicting_archive_ids": [],
+      "contradicted_core_fact_ids": [],
       "tags": ["reflection"]
     }
   ]
@@ -32,5 +33,6 @@ Rules:
 - Keep each `text` short, dense, and suitable for Core review. Prefer "Користувач ..." / "The user ..." phrasing.
 - `category` is a free normalized label; choose a human-readable snake_case name.
 - Every candidate must cite at least one `source_memory_unit_id`.
-- If evidence contradicts an active Core fact, include the relevant archive ids in `contradicting_archive_ids` and explain briefly in `evidence_summary`.
+- If evidence contradicts an active or contested Core fact, include that fact's `core_fact_id` in `contradicted_core_fact_ids`; include relevant archive ids in `contradicting_archive_ids` when available, and explain briefly in `evidence_summary`.
+- Do not mark a contradiction for a harmless refinement. Use `contradicted_core_fact_ids` only when both facts should not remain active as-is.
 - Never invent facts, dates, emotions, or motives not supported by the provided material.

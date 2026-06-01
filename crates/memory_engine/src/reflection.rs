@@ -39,6 +39,8 @@ pub struct ReflectionCandidateDraft {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub contradicting_archive_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contradicted_core_fact_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 }
 
