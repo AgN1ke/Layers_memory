@@ -46,6 +46,33 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-01 — Approved reflection candidates can contest existing Core facts
+
+The Core can now adapt without silently overwriting old truth. When a reviewed reflection candidate explicitly contradicts an existing Core fact, approving that candidate marks the older fact as `contested` and preserves it with provenance instead of deleting or replacing it.
+
+**What changed:**
+- `ReflectionCandidateDraft` and `CandidateBelief` now support `contradicted_core_fact_ids`.
+- `CandidateReviewResult` now returns `contested_facts`.
+- `review_candidate(approved)` marks active same-scope Core facts listed in `contradicted_core_fact_ids` as `CoreFactStatus::Contested`, tags them, and links them to the candidate through `contested_by_candidate`.
+- The promoted candidate still becomes an active Core fact only after explicit review and keeps `source_candidate_id`.
+- `CoreContextFact` now includes `status`; `core_context_package` includes active and contested Core facts, and `render_memory_view` marks contested facts in prompt-facing Core memory.
+- `reflection_analyze.md` now instructs the model to use `contradicted_core_fact_ids` only for real contradictions, not harmless refinements.
+
+**What is retracted (if applicable):**
+- The prior HISTORY note that contested logic remained future work is now superseded for the manual candidate-review path. A standalone `engine.contest_core_fact`, automatic contested detection outside candidate review, and richer contested-resolution UX remain future work.
+
+**What is still true:**
+- Reviewer/reflection agents still cannot write Core directly. They can only propose candidates and contradiction references.
+- Core mutation still requires explicit review (`review_candidate(approved)`) or an existing owner/admin patch path.
+- Contested facts are preserved as audit trail and remain visible to prompt assembly with a contested marker.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_reflection`
+- `cargo test -p memory_engine --test engine_sleep_recall`
+- `cargo fmt --check`
+- `cargo clippy -p memory_engine --all-targets -- -D warnings`
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+
 ## 2026-06-01 — Reflection candidates require manual review before Core promotion
 
 Reflection Phase C starts the controlled path from validated memory units to Core. The core can now ask a host to run `reflection_analyze`, store candidate beliefs, list them, and promote or reject them by explicit owner review. Agents still cannot write Core directly.

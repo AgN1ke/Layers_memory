@@ -42,7 +42,7 @@ use crate::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use crate::storage::Storage;
 use crate::tasks::{PendingTask, TaskState, TaskType};
 use crate::types::{
-    ImportanceHint, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
+    ImportanceHint, Link, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
     ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION,
     CANDIDATE_REVIEW_INPUT_SCHEMA_VERSION, CANDIDATE_REVIEW_RESULT_SCHEMA_VERSION,
     COMPACT_MEMORY_RESULT_SCHEMA_VERSION, CONSOLIDATOR_TEXT_SCHEMA_VERSION,
@@ -441,7 +441,7 @@ impl<S: Storage> MemoryEngine<S> {
         for category in self.storage.read_core_store_categories()? {
             let fact_category = category.category.clone();
             for fact in category.facts {
-                if fact.status != CoreFactStatus::Active {
+                if !core_fact_visible_in_context(fact.status) {
                     continue;
                 }
                 if fact.scope != normalized_scope {
@@ -452,6 +452,7 @@ impl<S: Storage> MemoryEngine<S> {
                     core_fact_id: fact.core_fact_id,
                     scope: fact.scope,
                     text: fact.text,
+                    status: fact.status,
                     confidence: fact.confidence,
                     tags: fact.tags,
                 });
@@ -459,9 +460,9 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         facts.sort_by(|left, right| {
-            right
-                .confidence
-                .total_cmp(&left.confidence)
+            core_context_status_rank(left.status)
+                .cmp(&core_context_status_rank(right.status))
+                .then_with(|| right.confidence.total_cmp(&left.confidence))
                 .then_with(|| left.category.cmp(&right.category))
                 .then_with(|| left.core_fact_id.cmp(&right.core_fact_id))
         });
@@ -1463,6 +1464,18 @@ impl<S: Storage> MemoryEngine<S> {
                 .into_iter()
                 .map(|unit| unit.memory_unit_id)
                 .collect::<HashSet<_>>();
+            let known_core_facts = task
+                .inputs
+                .get("core_facts")
+                .and_then(Value::as_array)
+                .map(|facts| {
+                    facts
+                        .iter()
+                        .filter_map(|fact| fact.get("core_fact_id").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect::<HashSet<_>>()
+                })
+                .unwrap_or_default();
             let mut candidates = Vec::new();
             for draft in result.candidates {
                 if let Some(candidate) = self.candidate_from_reflection_draft(
@@ -1470,6 +1483,7 @@ impl<S: Storage> MemoryEngine<S> {
                     task_scope.clone(),
                     draft,
                     &known_units,
+                    &known_core_facts,
                     &now,
                 )? {
                     self.storage.write_candidate_belief(&candidate)?;
@@ -1513,6 +1527,7 @@ impl<S: Storage> MemoryEngine<S> {
             };
 
             let mut promoted_fact = None;
+            let mut contested_facts = Vec::new();
             match input.decision {
                 ReviewDecision::Approved => {
                     let scope = normalize_optional_string(input.core_scope.as_deref())
@@ -1526,6 +1541,8 @@ impl<S: Storage> MemoryEngine<S> {
                     };
                     let source_archive_ids =
                         unique_strings(candidate.supporting_archive_ids.clone());
+                    contested_facts =
+                        self.contest_candidate_core_conflicts(&candidate, scope.clone(), &now)?;
                     let upsert = self.with_resource_lock(core_lock_key(&category), || {
                         self.upsert_core_fact_unlocked(
                             CoreFactInput {
@@ -1560,8 +1577,85 @@ impl<S: Storage> MemoryEngine<S> {
                 schema_version: CANDIDATE_REVIEW_RESULT_SCHEMA_VERSION.to_string(),
                 candidate,
                 promoted_fact,
+                contested_facts,
             })
         })
+    }
+
+    fn contest_candidate_core_conflicts(
+        &self,
+        candidate: &CandidateBelief,
+        scope: Option<String>,
+        now: &str,
+    ) -> Result<Vec<CoreFact>> {
+        let target_ids = candidate
+            .contradicted_core_fact_ids
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        if target_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let candidate_id = candidate.candidate_id.clone();
+        let category_names = self
+            .storage
+            .read_core_store_categories()?
+            .into_iter()
+            .filter(|category| {
+                category.facts.iter().any(|fact| {
+                    target_ids.contains(&fact.core_fact_id)
+                        && fact.status == CoreFactStatus::Active
+                        && fact.scope == scope
+                })
+            })
+            .map(|category| category.category)
+            .collect::<BTreeSet<_>>();
+
+        let mut contested = Vec::new();
+        for category_name in category_names {
+            let contested_for_category =
+                self.with_resource_lock(core_lock_key(&category_name), || {
+                    let mut category = self.storage.read_core_store_category(&category_name)?;
+                    let mut changed = false;
+                    let mut contested_for_category = Vec::new();
+                    for fact in &mut category.facts {
+                        if !target_ids.contains(&fact.core_fact_id)
+                            || fact.status != CoreFactStatus::Active
+                            || fact.scope != scope
+                        {
+                            continue;
+                        }
+                        fact.status = CoreFactStatus::Contested;
+                        fact.updated_at = now.to_string();
+                        merge_unique(
+                            &mut fact.tags,
+                            &[
+                                "contested".to_string(),
+                                "contested_by_reflection_candidate".to_string(),
+                            ],
+                        );
+                        push_link_once(
+                            &mut fact.links,
+                            Link {
+                                kind: "contested_by_candidate".to_string(),
+                                target: candidate_id.clone(),
+                                note: Some(candidate.text.clone()),
+                            },
+                        );
+                        changed = true;
+                        contested_for_category.push(fact.clone());
+                    }
+                    if changed {
+                        category.updated_at = now.to_string();
+                        self.storage.write_core_store_category(&category)?;
+                    }
+                    Ok(contested_for_category)
+                })?;
+            contested.extend(contested_for_category);
+        }
+
+        Ok(contested)
     }
 
     fn build_reflection_inputs_unlocked(
@@ -1614,7 +1708,7 @@ impl<S: Storage> MemoryEngine<S> {
                 let category_name = category.category.clone();
                 let scope_filter = core_scope.clone();
                 category.facts.into_iter().filter_map(move |fact| {
-                    if fact.status != CoreFactStatus::Active {
+                    if !core_fact_visible_in_context(fact.status) {
                         return None;
                     }
                     if scope_filter.is_some() && fact.scope != scope_filter {
@@ -1624,6 +1718,7 @@ impl<S: Storage> MemoryEngine<S> {
                         "category": category_name,
                         "core_fact_id": fact.core_fact_id,
                         "text": fact.text,
+                        "status": fact.status,
                         "confidence": fact.confidence,
                         "tags": fact.tags,
                     }))
@@ -1687,6 +1782,7 @@ impl<S: Storage> MemoryEngine<S> {
         core_scope: Option<String>,
         draft: ReflectionCandidateDraft,
         known_units: &HashSet<String>,
+        known_core_facts: &HashSet<String>,
         now: &str,
     ) -> Result<Option<CandidateBelief>> {
         let text = normalize_whitespace(&draft.text);
@@ -1709,6 +1805,13 @@ impl<S: Storage> MemoryEngine<S> {
 
         let supporting_archive_ids = unique_strings(draft.supporting_archive_ids);
         let contradicting_archive_ids = unique_strings(draft.contradicting_archive_ids);
+        let contradicted_core_fact_ids = unique_strings(
+            draft
+                .contradicted_core_fact_ids
+                .into_iter()
+                .filter(|fact_id| known_core_facts.contains(fact_id))
+                .collect(),
+        );
         let confidence = draft.confidence.clamp(0.0, 1.0);
         Ok(Some(CandidateBelief {
             schema_version: CANDIDATE_BELIEF_SCHEMA_VERSION.to_string(),
@@ -1723,11 +1826,13 @@ impl<S: Storage> MemoryEngine<S> {
             confidence,
             supporting_archive_ids,
             contradicting_archive_ids: contradicting_archive_ids.clone(),
+            contradicted_core_fact_ids: contradicted_core_fact_ids.clone(),
             evidence_summary,
             promotion_checks: PromotionChecks {
                 min_sources_met: true,
                 weight_threshold_met: confidence >= 0.70,
-                no_recent_contradiction: contradicting_archive_ids.is_empty(),
+                no_recent_contradiction: contradicting_archive_ids.is_empty()
+                    && contradicted_core_fact_ids.is_empty(),
                 manual_review_required: true,
             },
             source_memory_unit_ids,
@@ -3956,6 +4061,30 @@ fn merge_unique(target: &mut Vec<String>, source: &[String]) {
             continue;
         }
         target.push(normalized);
+    }
+}
+
+fn push_link_once(target: &mut Vec<Link>, link: Link) {
+    if target
+        .iter()
+        .any(|existing| existing.kind == link.kind && existing.target == link.target)
+    {
+        return;
+    }
+    target.push(link);
+}
+
+fn core_fact_visible_in_context(status: CoreFactStatus) -> bool {
+    matches!(status, CoreFactStatus::Active | CoreFactStatus::Contested)
+}
+
+fn core_context_status_rank(status: CoreFactStatus) -> u8 {
+    match status {
+        CoreFactStatus::Active => 0,
+        CoreFactStatus::Contested => 1,
+        CoreFactStatus::NeedsReview => 2,
+        CoreFactStatus::Contradicted => 3,
+        CoreFactStatus::Deprecated => 4,
     }
 }
 

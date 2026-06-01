@@ -4630,3 +4630,43 @@ DEVLOG ведеться українською. Для кожного зміст
 
 **Висновок:**
 Phase C first slice пройшов live-check. Reflection може створювати reviewable candidates із validated memory units, а Core лишається стабільним і росте тільки після manual review. Гілка `feature/reflection-candidates` готова до merge у `develop`. Наступні відкриті задачі Phase C: core candidate reviewer/formulation pass із `role_hint: reasoning` і contested logic.
+
+## Запис 89 — 2026-06-01 11:35 +03:00 — Contested Core через manual candidate review
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після першого зрізу Phase C Core уже міг рости через `/confirm`, але не мав контрольованого способу передумати. Якщо новий candidate суперечив старому Core-факту, approve міг створити другий active-факт поруч зі старим active-фактом. Це ламало ідею Adaptive Stable Core: ядро має адаптуватись, але не тихо переписувати істину і не тримати дві активні суперечності без позначки.
+
+**Задум:**
+Додати contested-шлях тільки через manual review. Reflection може запропонувати `contradicted_core_fact_ids`, але це не змінює Core. Лише `review_candidate(approved)` позначає старі active facts як `contested`, додає provenance-link на candidate і після цього промоутить новий факт як active. `/reject` і `needs_changes` Core не чіпають.
+
+**Що робили:**
+- Додали `contradicted_core_fact_ids` у `ReflectionCandidateDraft` і `CandidateBelief`.
+- Додали `contested_facts` у `CandidateReviewResult`.
+- Оновили `review_candidate(approved)`: перед promotion він переводить active same-scope Core facts із `contradicted_core_fact_ids` у `CoreFactStatus::Contested`.
+- Додали link `contested_by_candidate` і теги `contested`, `contested_by_reflection_candidate` до старого факта.
+- Додали `status` у `CoreContextFact`.
+- `core_context_package` тепер включає active і contested Core facts; `render_memory_view` показує contested marker.
+- Оновили `prompts/reflection_analyze.md`, щоб модель вказувала `contradicted_core_fact_ids` тільки для реальних суперечностей, не для harmless refinements.
+- Telegram host тільки форматить нові поля: показує contested ids у candidates, contested facts у review result і status у `/core`.
+
+**Що зробили детально:**
+Суперечність проходить через той самий review-gate: candidate зберігає id старого Core-факта, але до `/confirm` нічого не мутує. При approve engine під candidate-lock переводить старий active факт у `contested`, зберігає його в Core store, додає link на candidate, а новий факт пише як active із `source_candidate_id`. Contested facts лишаються prompt-visible, тому модель бачить, що старе знання спірне, а не просто зникло.
+
+**Проблеми чи виклики:**
+Не додавали окремий `engine.contest_core_fact` у цьому зрізі, щоб не розширювати API без потреби. Manual demotion у `deprecated` уже покривається `patch_core_fact` і `/core_forget`; окремий UX для resolution можна робити пізніше, якщо live-використання покаже потребу.
+
+**Фідбек користувача:**
+Користувач погодив порядок contested → forgetting і наголосив, що Core має бути живим, валідованим і адаптивним, але стабільним. Цей крок саме це й закриває на ручному candidate-review шляху.
+
+**Перевірки:**
+- `cargo test -p memory_engine --test engine_reflection` — 2 passed.
+- `cargo test -p memory_engine --test engine_sleep_recall` — 28 passed.
+- `cargo fmt --check` — пройшло.
+- `cargo clippy -p memory_engine --all-targets -- -D warnings` — пройшло.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+
+**Висновок:**
+Contested path реалізовано в ядрі без порушення головного інваріанту: агенти лише пропонують, Core змінюється тільки після manual review. Phase C тепер має promotion і controlled contradiction handling. Наступні відкриті речі: live-check на реальному contradiction-кандидаті, опційний core candidate reviewer/formulation pass і після цього forgetting.

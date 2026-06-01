@@ -118,9 +118,15 @@ pub struct CoreContextFact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     pub text: String,
+    #[serde(default = "default_core_context_fact_status")]
+    pub status: CoreFactStatus,
     pub confidence: f64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+}
+
+fn default_core_context_fact_status() -> CoreFactStatus {
+    CoreFactStatus::Active
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -255,6 +261,8 @@ pub struct CandidateBelief {
     pub supporting_archive_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub contradicting_archive_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contradicted_core_fact_ids: Vec<Id>,
     pub evidence_summary: String,
     pub promotion_checks: PromotionChecks,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -287,4 +295,6 @@ pub struct CandidateReviewResult {
     pub candidate: CandidateBelief,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promoted_fact: Option<CoreFact>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contested_facts: Vec<CoreFact>,
 }
