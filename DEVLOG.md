@@ -4559,3 +4559,74 @@ PowerShell вимагає, щоб `param(...)` був першою executable-і
 
 **Висновок:**
 Dev-harness не змінює пам'ять і не додає нової архітектури. Це робочий інструмент для стабільного локального циклу: rebuild+run без ручного введення ключів, без stale bot процесів і з видимими dev sleep notices.
+
+## Запис 87 — 2026-06-01 02:34 +03:00 — Phase C: reflection candidates і manual Core promotion
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після fidelity-routing validated memory units уже існують, але Core досі ріс або через explicit `/remember`, або через Archive→Core bridge із direct personal signals. Не було reflection-шляху, де система сама пропонує стабільні висновки з валідованих спогадів, але не має права записувати їх у Core без review.
+
+**Задум:**
+Реалізувати перший ручний зріз Phase C: `reflection_analyze` створює candidate beliefs із validated memory units і активного Core; кандидат зберігається в `memory/core/candidates/`; власник переглядає `/candidates` і явно робить `/confirm` або `/reject`. Auto-confirm, contested logic і окремий core candidate reviewer не входять у цей зріз.
+
+**Що робили:**
+- Додали `prompts/reflection_analyze.md`.
+- Додали типи `ReflectionPassStart`, `ReflectionAnalyzeResult`, `ReflectionCandidateDraft`, `ReflectionCandidatesResult`.
+- Розширили `CandidateBelief` полями `source_session_id`, `core_scope`, `source_memory_unit_ids`, `tags`, `promoted_core_fact_id`.
+- Додали `CandidateReviewInput` і `CandidateReviewResult`.
+- Додали storage read/list для candidate beliefs.
+- Додали engine methods `begin_reflection_analysis`, `submit_reflection_response`, `resume_reflection_analysis`, `list_candidates`, `review_candidate`.
+- Додали PyO3 methods і Telegram-команди `/reflect`, `/candidates`, `/confirm <id>`, `/reject <id>`.
+
+**Що зробили детально:**
+Reflection input будується ядром: тільки complete archives поточної сесії, тільки `MemoryUnit` зі статусом `active_archive` і `fidelity_status=valid`, compact archive summaries і активні Core facts поточного scope. LLM повертає candidates, але engine відкидає draft без підтриманого `source_memory_unit_id`. `/confirm` викликає `review_candidate` з рішенням `approved`, і тільки тоді engine робить `upsert_core_fact` із `source_candidate_id`; `/reject` ставить candidate status `rejected`.
+
+**Проблеми чи виклики:**
+Перший lifecycle зроблено як `ready_for_review` → `rejected`/`promoted`. Окремий стан `confirmed` і автоматичний reviewer/formulator не реалізовані, щоб не змішувати ручний контроль із наступним reasoning-pass. `Contested` статус додано до `CoreFactStatus`, але автоматична contested logic лишається відкритою roadmap-задачею.
+
+**Фідбек користувача:**
+Користувач просив продовжувати по плану після dev-harness і не давати агентам "правити істину" напряму. Цей зріз залишає Core stable: агент лише пропонує, власник підтверджує.
+
+**Перевірки:**
+- `cargo test -p memory_engine --test engine_reflection` — 1 passed.
+- `cargo test -p memory_engine --test engine_sleep_recall` — 28 passed.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` — пройшло.
+
+**Висновок:**
+Phase C має перший робочий шлях: validated memory units можуть стати Core candidates, а Core росте тільки після manual review. Наступний підкрок — live-test `/reflect` на реальному Telegram runtime, після цього core candidate reviewer/formulation pass і contested logic.
+
+## Запис 88 — 2026-06-01 11:07 +03:00 — Live-check reflection candidates на Telegram runtime
+
+**Правила:**
+DEVLOG ведеться українською. Для кожного змістовного кроку фіксувати проблематику, задум, що робили, що зробили детально, проблеми чи виклики, фідбек користувача і перевірки з часом, якщо доступний годинник.
+
+**Проблематика:**
+Після реалізації `/reflect` і candidate review треба було підтвердити не лише unit-тести, а живу поведінку на Telegram runtime: чи команда реально створює reviewable candidate, чи `/candidates` його бачить, і чи Core не змінюється без явного `/confirm`.
+
+**Задум:**
+Виконати мінімальний acceptance-прогін Phase C first slice: `/candidates` до reflection, `/reflect`, повторний `/candidates`. Це перевіряє command wiring, LLM-pass, candidate storage/listing і головний інваріант "агент пропонує, але не пише Core напряму".
+
+**Що робили:**
+- Користувач виконав `/candidates`.
+- Користувач виконав `/reflect`.
+- Користувач повторно виконав `/candidates`.
+
+**Що зробили детально:**
+До reflection бот відповів `No candidate beliefs for this chat.` Після `/reflect` бот повідомив: `Memory units scanned: 7`, `Core facts in view: 37`, `Candidates: 1`. Створений кандидат: `candidate_1780300762881461500_3` у статусі `ready_for_review`, категорія `interaction_pattern`, confidence `0.95`, текст: "Користувач періодично перевіряє пам'ять асистента, ставлячи прямі запитання про раніше надану особисту інформацію, та висловлює занепокоєння, якщо вважає, що асистент неуважний." Повторний `/candidates` показав того самого кандидата.
+
+**Проблеми чи виклики:**
+Перший live-кандидат якісно радше операційний/поведінковий, а не факт, який обов'язково треба промоутити в Core. Це нормальний результат для першого reflection-прогону: механіка працює, але власник має право `/reject`. Важливо, що без `/confirm` Core не змінився.
+
+**Фідбек користувача:**
+Користувач нагадав, що ми робимо бібліотеку, а не Telegram bot. Це підтверджує правильність поточної межі: Telegram-команди лише тонкий host UX для перевірки core API; сама логіка reflection, candidate storage і manual promotion живе в ядрі.
+
+**Перевірки:**
+- Live Telegram: `/candidates` порожній до `/reflect`.
+- Live Telegram: `/reflect` створив `candidate_1780300762881461500_3`.
+- Live Telegram: `/candidates` після `/reflect` показав цього кандидата.
+- Core не змінювався без явного `/confirm`.
+
+**Висновок:**
+Phase C first slice пройшов live-check. Reflection може створювати reviewable candidates із validated memory units, а Core лишається стабільним і росте тільки після manual review. Гілка `feature/reflection-candidates` готова до merge у `develop`. Наступні відкриті задачі Phase C: core candidate reviewer/formulation pass із `role_hint: reasoning` і contested logic.
