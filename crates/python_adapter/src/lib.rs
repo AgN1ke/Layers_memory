@@ -26,6 +26,7 @@ use ::memory_engine::core_store::{
     CandidateReviewInput, CoreContextPackage, CoreContextRequest, CoreFactInput, CoreFactPatchInput,
 };
 use ::memory_engine::event::IngestEvent;
+use ::memory_engine::forgetting::ForgetReviewResult;
 use ::memory_engine::llm::{LlmResponse, SleepRun};
 use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::reflection::ReflectionAnalyzeResult;
@@ -112,6 +113,45 @@ impl PyMemoryEngine {
             self.inner
                 .submit_memory_fidelity_response(task_id, response)
         })?;
+        dump_json(&unit, "memory unit")
+    }
+
+    fn begin_forget_review(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let start = run_without_gil(py, || self.inner.begin_forget_review(session_id))?;
+        dump_json(&start, "forget review")
+    }
+
+    fn submit_forget_review_response(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        response_json: &str,
+    ) -> PyResult<String> {
+        let response: LlmResponse = parse_json(response_json, "LLM response")?;
+        let result = run_without_gil(py, || {
+            self.inner.submit_forget_review_response(task_id, response)
+        })?;
+        dump_json(&result, "forget review result")
+    }
+
+    fn resume_forget_review(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        result_json: &str,
+    ) -> PyResult<String> {
+        let result: ForgetReviewResult = parse_json(result_json, "forget review result")?;
+        let applied = run_without_gil(py, || self.inner.resume_forget_review(task_id, result))?;
+        dump_json(&applied, "forget review result")
+    }
+
+    fn list_forgotten_memory_units(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.list_forgotten_memory_units(session_id))?;
+        dump_json(&result, "forgotten memory units")
+    }
+
+    fn remember_back(&self, py: Python<'_>, memory_unit_id: &str) -> PyResult<String> {
+        let unit = run_without_gil(py, || self.inner.remember_back(memory_unit_id))?;
         dump_json(&unit, "memory unit")
     }
 

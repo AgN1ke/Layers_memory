@@ -46,6 +46,38 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-01 — Reversible forgetting review for low-signal memory units
+
+Memory units can now be marked as forgotten through a conservative review path. This changes prompt-facing recall behavior, because forgotten units are excluded from compact memory projections, while the full archive and audit trail remain on disk.
+
+**What changed:**
+- Added `TaskType::ForgetReview`, `forget_review_pass`, and core APIs for `begin_forget_review`, `submit_forget_review_response`, `list_forgotten_memory_units`, and `remember_back`.
+- Added `MemoryUnit.forget_review` audit metadata and reversible `MemoryUnitStatus::Forgotten` application.
+- Forgetting uses a triple gate: structurally eligible old/low-signal unit, LLM recommendation, and a hard engine protection re-check at submit time.
+- Protected units are not forgotten even if the model says `forget`: Core-linked, high-weight, emotionally strong, or recently recalled archive-linked units stay active.
+- Parent `ArchiveEntry.compact_memory` is rebuilt after both forget and remember-back, so prompt-facing memory matches unit status.
+
+**What is retracted (if applicable):**
+- Nothing is retracted. The earlier `forgotten/` directory remains future scaffolding; v1 intentionally does not physically move archive files.
+
+**What is still true:**
+- Core facts are not touched by forgetting.
+- Full archive entries remain stored and auditable.
+- Unit-level recall counters do not exist yet; v1 uses archive-level `recall_count` / `last_recalled_at` as a conservative proxy, which may protect routine sibling units when the archive was recalled for a more important unit.
+
+**What we are doing:**
+- Review the feature branch before merge. Scratch live-checks passed with cached Gemini: one old routine unit was recommended as `forget` and became `Forgotten`; richer live-check confirmed routine forgotten, Core-linked unit protected at submit re-check, high-weight unit stayed active, and `remember_back` restored the forgotten thesis into `compact_memory`.
+- Add unit-level recall counters later only if archive-level proxy proves too conservative.
+
+**Reproducibility anchor:**
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest crates\python_adapter\tests -q`
+- Scenario tests: `engine_forgetting.rs`
+- Scratch live-check 1: `forget_review_pass`, role `balanced`, model `gemini-2.5-flash`, prompt 580 / output 110 / total 810, result `forgotten=1`.
+- Scratch live-check 2: `forget_review_pass`, role `balanced`, model `gemini-2.5-flash`, prompt 758 / output 176 / total 1339, result `forgotten=1`, `protected=1`, routine compact removed after forget and restored after `remember_back`.
+
 ## 2026-06-01 — Approved reflection candidates can contest existing Core facts
 
 The Core can now adapt without silently overwriting old truth. When a reviewed reflection candidate explicitly contradicts an existing Core fact, approving that candidate marks the older fact as `contested` and preserves it with provenance instead of deleting or replacing it.
