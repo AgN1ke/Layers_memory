@@ -70,6 +70,7 @@ Reflection Phase C starts the controlled path from validated memory units to Cor
 - `cargo test -p memory_engine --test engine_reflection`
 - `cargo test -p memory_engine --test engine_sleep_recall`
 - `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+- Telegram live-check on 2026-06-01: `/candidates` returned no candidates before `/reflect`; `/reflect` scanned 7 memory units and 37 Core facts, then created `candidate_1780300762881461500_3` as `ready_for_review`; `/candidates` listed the same candidate, and Core remained unchanged without `/confirm`.
 
 ## 2026-05-31 — Fidelity validation is auto-routed after sleep
 
