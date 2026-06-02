@@ -68,6 +68,27 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools --source winget --ove
 cd C:\Python_projects\Layers_memory
 ```
 
+## Local Secret Scan
+
+Public repository safety relies on two layers:
+
+- GitHub Actions runs `gitleaks` on pushes and pull requests.
+- Developers should run the same scan locally before committing.
+
+Install local tools:
+
+```powershell
+pip install pre-commit
+winget install --id Gitleaks.Gitleaks --source winget
+```
+
+Enable the hook:
+
+```powershell
+pre-commit install
+pre-commit run --all-files
+```
+
 Перевірити Rust:
 
 ```powershell
