@@ -1,6 +1,6 @@
 # Memory Engine
 
-Memory Engine is planned as a separate Rust-based memory core for reusable long-term memory.
+Memory Engine is a reusable Rust-based memory core for long-term memory, built as a standalone library with thin host adapters.
 
 The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current work is a Cargo workspace with the Rust memory core, PyO3 Python adapter, and runnable host examples.
 
@@ -10,8 +10,8 @@ The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current
 - [`docs/architecture.md`](docs/architecture.md) - architecture v0.1: terminology, data flows, storage, PendingTask, recall, sleep, adapters, and MVP scope.
 - [`docs/contracts.md`](docs/contracts.md) - data contracts v0.1: JSON/JSONL shapes for events, sessions, archive, core, recall, tasks, manifest, and journal.
 - [`docs/local-development.md`](docs/local-development.md) - local Windows/Rust setup, installed tools, paths, and verification commands.
-- [`docs/licensing.md`](docs/licensing.md) - Memory Engine non-commercial public license.
-- [`LICENSE.md`](LICENSE.md) - root license file for GitHub publication.
+- [`docs/licensing.md`](docs/licensing.md) - Memory Engine license (MIT).
+- [`LICENSE.md`](LICENSE.md) - root MIT license file for GitHub publication.
 
 ## Current Structure
 
