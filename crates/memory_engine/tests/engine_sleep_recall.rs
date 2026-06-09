@@ -7,7 +7,7 @@ use memory_engine::core_store::{
 };
 use memory_engine::event::IngestEvent;
 use memory_engine::fidelity::EvidenceEventRole;
-use memory_engine::llm::{LlmResponse, SleepRunStage};
+use memory_engine::llm::{LlmResponse, SleepRunStage, SleepTrack};
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::storage::Storage;
@@ -1725,6 +1725,185 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
         .core_facts
         .iter()
         .any(|fact| fact.text == "Користувач любить космос."));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_run_persists_and_recovers_after_restart() {
+    let root = unique_temp_dir("engine_sleep_run_persists_and_recovers_after_restart");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said they love astronomy and wants that remembered.",
+        vec!["personal_fact", "interest"],
+    );
+
+    let mut run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let step = engine.next_sleep_batch(run).expect("first batch");
+    run = step.run;
+    let batch = step.batch.expect("extraction batch");
+    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+    let archive_id = run.archive_id.clone();
+
+    let memory_unit_request = batch
+        .requests
+        .iter()
+        .find(|request| request.prompt_id == "memory_unit_pass")
+        .expect("memory unit request")
+        .clone();
+    let step = engine
+        .submit_sleep_batch(
+            run,
+            vec![LlmResponse::Ok {
+                request_id: memory_unit_request.request_id.clone(),
+                text: json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": archive_id,
+                    "memory_units": [{
+                        "thesis": "Astronomy -> the user loves this topic.",
+                        "source_event_ids": [event_id.clone()],
+                        "weight": 0.95
+                    }]
+                })
+                .to_string(),
+            }],
+        )
+        .expect("submit partial extraction");
+    run = step.run;
+    assert_eq!(run.stage, SleepRunStage::Extraction);
+
+    let recovered_engine = MemoryEngine::new(FileStorage::with_host_id(&root, "terminal"));
+    let recovered_runs = recovered_engine
+        .pending_sleep_runs()
+        .expect("pending sleep runs after restart");
+    assert_eq!(recovered_runs.len(), 1);
+    let mut recovered_run = recovered_runs[0].clone();
+    assert_eq!(recovered_run.sleep_task_id, run.sleep_task_id);
+    assert!(recovered_run
+        .requests
+        .iter()
+        .any(|state| state.track == SleepTrack::MemoryUnit && state.completed));
+
+    let step = recovered_engine
+        .next_sleep_batch(recovered_run)
+        .expect("recovered extraction batch");
+    recovered_run = step.run;
+    let batch = step.batch.expect("remaining extraction batch");
+    let responses = batch
+        .requests
+        .into_iter()
+        .map(|request| {
+            let text = match request.prompt_id.as_str() {
+                "sleep_emotional_pass" => json!({
+                    "emotional_markers": [{
+                        "target": "astronomy",
+                        "affect": "love",
+                        "strength": 0.9,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_topic_thread_pass" => json!({
+                    "topic_thread": [{
+                        "topic": "astronomy_interest",
+                        "summary": "The user said they love astronomy.",
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_personal_signal_pass" => json!({
+                    "personal_signals": [{
+                        "text": "The user loves astronomy.",
+                        "category": "interest",
+                        "confidence": 0.95,
+                        "source_event_ids": [event_id.clone()]
+                    }]
+                }),
+                "sleep_relational_pass" => json!({"relational_tone": null}),
+                other => panic!("unexpected request after recovery: {other}"),
+            };
+            LlmResponse::Ok {
+                request_id: request.request_id,
+                text: text.to_string(),
+            }
+        })
+        .collect();
+
+    let step = recovered_engine
+        .submit_sleep_batch(recovered_run, responses)
+        .expect("submit remaining extraction");
+    recovered_run = step.run;
+    let batch = step.batch.expect("consolidator batch");
+    let step = recovered_engine
+        .submit_sleep_batch(
+            recovered_run,
+            vec![LlmResponse::Ok {
+                request_id: batch.requests[0].request_id.clone(),
+                text: "GIST: The user loves astronomy.\n\nThe recovered sleep run completed after restart."
+                    .to_string(),
+            }],
+        )
+        .expect("submit consolidator");
+    recovered_run = step.run;
+
+    let outcome = recovered_engine
+        .finish_sleep_run(recovered_run)
+        .expect("finish recovered sleep run");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert_eq!(outcome.core_summary.created, 1);
+    assert!(recovered_engine
+        .pending_sleep_runs()
+        .expect("pending runs after finish")
+        .is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_cancel_sleep_run_unblocks_unarchived_events() {
+    let root = unique_temp_dir("engine_cancel_sleep_run_unblocks_unarchived_events");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "This event should remain available if its sleep run is cancelled.",
+        vec!["routine"],
+    );
+
+    let run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let cancelled = engine
+        .cancel_sleep_run(&run.sleep_task_id)
+        .expect("cancel sleep run");
+    assert_eq!(cancelled.stage, SleepRunStage::Finished);
+    assert_eq!(cancelled.completion_mode.as_deref(), Some("cancelled"));
+    assert!(engine.pending_tasks().expect("pending tasks").is_empty());
+    assert!(engine
+        .pending_sleep_runs()
+        .expect("pending sleep runs")
+        .is_empty());
+
+    let next_run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run after cancel");
+    assert_ne!(next_run.sleep_task_id, run.sleep_task_id);
+    assert_eq!(
+        next_run.requests[0].request.prompt_inputs["sleep_task"]["events"]
+            .as_array()
+            .expect("events")
+            .len(),
+        1
+    );
 
     fs::remove_dir_all(root).ok();
 }

@@ -608,6 +608,9 @@ memory/
       <candidate_id>.json    — кандидати на промоцію
   tasks/
     <task_id>.json           — стан PendingTask'ів
+  runs/
+    sleep/
+      <sleep_task_id>.json   — durable SleepRun orchestration cursor
   journal/
     <op_id>.json             — журнал мульти-файлових операцій
 ```
@@ -629,6 +632,13 @@ memory/
 Дефолтна імплементація `FileStorage` працює з файловою розкладкою вище. Інші імплементації (`IndexedStorage`, in-memory для тестів) реалізують той самий trait. Це дає тестам швидке in-memory сховище, а майбутньому індексу — місце.
 
 ### 10.3 Crash safety
+
+Implementation note 2026-06-10: runtime sleep recovery is currently provided by
+durable `SleepRun` checkpoints in `memory/runs/sleep/` plus idempotent
+event-coverage rules. The `memory/journal/` primitive exists in `Storage`, but
+v0.2 runtime sleep does not yet use it as a multi-file transaction journal.
+Journal-based recovery is deferred until schema migrations, raw-event
+compaction, or another operation needs explicit recover/rollback semantics.
 
 **Один файл:** запис іде у `<file>.tmp`, виконується fsync, потім `rename(<file>.tmp, <file>)`. На більшості файлових систем це атомарна операція.
 

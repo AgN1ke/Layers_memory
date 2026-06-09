@@ -483,64 +483,79 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         self.with_resource_lock(session_lock_key(session_id), || {
-            let session = self.storage.read_session(session_id)?;
-            if session.events.is_empty() {
-                return Err(MemoryEngineError::Validation(format!(
-                    "session has no events: {session_id}"
-                )));
-            }
-
-            let archived_event_ids =
-                self.archived_event_ids_for_session(&session.metadata.session_id)?;
-            let unarchived_events = session
-                .events
-                .iter()
-                .filter(|event| !archived_event_ids.contains(&event.event_id))
-                .collect::<Vec<_>>();
-            if unarchived_events.is_empty() {
-                return Err(MemoryEngineError::Validation(format!(
-                    "session has no unarchived events: {session_id}"
-                )));
-            }
-
-            let compactable_events =
-                compactable_sleep_events(&unarchived_events, &self.options.sleep);
-            let selected_events = select_sleep_events(&compactable_events, &self.options.sleep);
-            let now = now_rfc3339()?;
-            let archive_id = new_id("archive")?;
-            let archive_entry =
-                build_preliminary_archive(&session, &selected_events, &archive_id, &now);
-            self.storage.write_archive_entry(&archive_entry)?;
-
-            let pending_task = build_sleep_compression_task(
-                &session,
-                &selected_events,
-                &archive_entry,
-                &self.options.sleep,
-                &now,
-            )?;
-            let memory_unit_task =
-                build_memory_unit_task(&session, &selected_events, &archive_entry, &now)?;
-            self.storage.save_task(&pending_task)?;
-            self.storage.save_task(&memory_unit_task)?;
-
-            Ok(SleepStage1Result {
-                archive_entry,
-                pending_task,
-                memory_unit_task: Some(memory_unit_task),
-                compact_memory_task: None,
-            })
+            self.sleep_stage1_unlocked(session_id)
         })
     }
 
     pub fn begin_sleep_run(&self, session_id: &str) -> Result<SleepRun> {
-        let sleep_result = self.sleep(session_id)?;
-        sleep_run_from_stage1(sleep_result)
+        if session_id.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "sleep session_id must not be empty".to_string(),
+            ));
+        }
+        self.ensure_manifest()?;
+
+        self.with_resource_lock(session_lock_key(session_id), || {
+            let sleep_result = self.sleep_stage1_unlocked(session_id)?;
+            let run = sleep_run_from_stage1(sleep_result)?;
+            self.storage.save_sleep_run(&run)?;
+            Ok(run)
+        })
+    }
+
+    fn sleep_stage1_unlocked(&self, session_id: &str) -> Result<SleepStage1Result> {
+        let session = self.storage.read_session(session_id)?;
+        if session.events.is_empty() {
+            return Err(MemoryEngineError::Validation(format!(
+                "session has no events: {session_id}"
+            )));
+        }
+
+        let archived_event_ids =
+            self.archived_event_ids_for_session(&session.metadata.session_id)?;
+        let unarchived_events = session
+            .events
+            .iter()
+            .filter(|event| !archived_event_ids.contains(&event.event_id))
+            .collect::<Vec<_>>();
+        if unarchived_events.is_empty() {
+            return Err(MemoryEngineError::Validation(format!(
+                "session has no unarchived events: {session_id}"
+            )));
+        }
+
+        let compactable_events = compactable_sleep_events(&unarchived_events, &self.options.sleep);
+        let selected_events = select_sleep_events(&compactable_events, &self.options.sleep);
+        let now = now_rfc3339()?;
+        let archive_id = new_id("archive")?;
+        let archive_entry =
+            build_preliminary_archive(&session, &selected_events, &archive_id, &now);
+        self.storage.write_archive_entry(&archive_entry)?;
+
+        let pending_task = build_sleep_compression_task(
+            &session,
+            &selected_events,
+            &archive_entry,
+            &self.options.sleep,
+            &now,
+        )?;
+        let memory_unit_task =
+            build_memory_unit_task(&session, &selected_events, &archive_entry, &now)?;
+        self.storage.save_task(&pending_task)?;
+        self.storage.save_task(&memory_unit_task)?;
+
+        Ok(SleepStage1Result {
+            archive_entry,
+            pending_task,
+            memory_unit_task: Some(memory_unit_task),
+            compact_memory_task: None,
+        })
     }
 
     pub fn next_sleep_batch(&self, mut run: SleepRun) -> Result<SleepRunStep> {
         validate_sleep_run(&run)?;
         advance_sleep_run_stage(&mut run)?;
+        self.storage.save_sleep_run(&run)?;
 
         let requests = run
             .requests
@@ -581,12 +596,14 @@ impl<S: Storage> MemoryEngine<S> {
             run.requests[index] = state;
         }
 
+        self.storage.save_sleep_run(&run)?;
         self.next_sleep_batch(run)
     }
 
     pub fn finish_sleep_run(&self, mut run: SleepRun) -> Result<SleepOutcome> {
         validate_sleep_run(&run)?;
         advance_sleep_run_stage(&mut run)?;
+        self.storage.save_sleep_run(&run)?;
         if run.stage != SleepRunStage::ReadyToFinish {
             return Err(MemoryEngineError::Validation(
                 "sleep run is not ready to finish".to_string(),
@@ -631,16 +648,53 @@ impl<S: Storage> MemoryEngine<S> {
             let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
             let fidelity_requests = self.auto_route_memory_fidelity_requests(&archive_entry)?;
             run.stage = SleepRunStage::Finished;
+            run.completion_mode = Some(
+                run.completion_mode
+                    .clone()
+                    .unwrap_or_else(|| "consolidated".to_string()),
+            );
+            self.storage.save_sleep_run(&run)?;
 
             Ok(SleepOutcome {
                 archive_entry,
                 core_summary,
                 fidelity_requests,
-                failed_passes: run.failed_passes,
+                failed_passes: run.failed_passes.clone(),
                 completion_mode: run
                     .completion_mode
+                    .clone()
                     .unwrap_or_else(|| "consolidated".to_string()),
             })
+        })
+    }
+
+    pub fn pending_sleep_runs(&self) -> Result<Vec<SleepRun>> {
+        self.ensure_manifest()?;
+        let mut runs = self
+            .storage
+            .load_sleep_runs()?
+            .into_iter()
+            .filter(|run| run.stage != SleepRunStage::Finished)
+            .collect::<Vec<_>>();
+        runs.sort_by(|left, right| left.sleep_task_id.cmp(&right.sleep_task_id));
+        Ok(runs)
+    }
+
+    pub fn cancel_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun> {
+        let run = self.storage.load_sleep_run(sleep_task_id)?;
+        validate_sleep_run(&run)?;
+        let session_id = run.session_id.clone();
+        self.with_resource_lock(session_lock_key(&session_id), || {
+            let mut run = self.storage.load_sleep_run(sleep_task_id)?;
+            validate_sleep_run(&run)?;
+            cancel_task_if_active(&self.storage, &run.sleep_task_id, "sleep run cancelled")?;
+            if let Some(memory_unit_task_id) = run.memory_unit_task_id.as_deref() {
+                cancel_task_if_active(&self.storage, memory_unit_task_id, "sleep run cancelled")?;
+            }
+            run.stage = SleepRunStage::Finished;
+            run.completion_mode = Some("cancelled".to_string());
+            self.storage.save_sleep_run(&run)?;
+            Ok(run)
         })
     }
 
@@ -894,6 +948,14 @@ impl<S: Storage> MemoryEngine<S> {
         let mut archive_entry = self.storage.read_archive_entry_by_id(&result.archive_id)?;
 
         let now = now_rfc3339()?;
+        if archive_entry.status == ArchiveStatus::Complete {
+            task.state = TaskState::Completed;
+            task.updated_at = now;
+            task.last_error = None;
+            self.storage.save_task(&task)?;
+            return Ok(archive_entry);
+        }
+
         archive_entry.updated_at = now.clone();
         archive_entry.theme = result.theme;
         archive_entry.tags = result.tags;
@@ -1009,6 +1071,14 @@ impl<S: Storage> MemoryEngine<S> {
 
         let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
         let now = now_rfc3339()?;
+        if task.state == TaskState::Completed || !archive_entry.memory_units.is_empty() {
+            task.state = TaskState::Completed;
+            task.updated_at = now;
+            task.last_error = None;
+            self.storage.save_task(&task)?;
+            return Ok(archive_entry);
+        }
+
         let mut units = Vec::new();
         for draft in result.memory_units {
             let thesis = normalize_whitespace(&draft.thesis);
@@ -3910,6 +3980,21 @@ fn validate_sleep_run(run: &SleepRun) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn cancel_task_if_active<S: Storage>(storage: &S, task_id: &str, reason: &str) -> Result<()> {
+    let mut task = storage.load_task(task_id)?;
+    if matches!(
+        task.state,
+        TaskState::Completed | TaskState::Failed | TaskState::Cancelled
+    ) {
+        return Ok(());
+    }
+
+    task.state = TaskState::Cancelled;
+    task.updated_at = now_rfc3339()?;
+    task.last_error = Some(reason.to_string());
+    storage.save_task(&task)
 }
 
 fn advance_sleep_run_stage(run: &mut SleepRun) -> Result<()> {

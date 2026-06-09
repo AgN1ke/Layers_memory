@@ -46,6 +46,32 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - SleepRun recovery is persisted in the core
+
+The post-v0.2 audit found that multi-pass sleep orchestration kept `SleepRun` only in process memory. If the host crashed mid-sleep, durable `PendingTask` files could remain pending while no public API could reconstruct the run cursor, blocking future sleep for that session.
+
+**What changed:**
+- `Storage` now persists `SleepRun` checkpoints under `memory/runs/sleep/<sleep_task_id>.json`.
+- `begin_sleep_run`, `next_sleep_batch`, `submit_sleep_batch`, and `finish_sleep_run` checkpoint the run as it advances.
+- The core exposes `pending_sleep_runs()` and `cancel_sleep_run(sleep_task_id)` through Rust and PyO3.
+- The Telegram host queues recovered sleep runs at startup before polling.
+- `resume_sleep_compression` and `resume_memory_unit_pass` are idempotent for already-completed archive/unit artifacts, so recovery can safely re-enter `finish_sleep_run`.
+
+**What is retracted (if applicable):**
+- The prior architecture wording implied that the journal was already active for sleep lifecycle recovery. It was not. Runtime sleep recovery now relies on durable `SleepRun` checkpoints plus idempotent event coverage; the journal remains a deferred primitive for future multi-file transactions.
+
+**What is still true:**
+- The Rust core still performs no network I/O and knows no provider/model/key.
+- `PendingTask` remains the durable LLM work item; `SleepRun` is the durable orchestration cursor over those work items.
+- `cancel_sleep_run` does not mark session events archived. A cancelled run leaves its preliminary archive non-complete, so the same source events remain eligible for the next sleep.
+
+**What we are doing:**
+- Continue the audit queue with raw-session scaling work (A4) and recall counter isolation (B3) before v0.3 adapter work.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_sleep_recall engine_sleep_run_persists_and_recovers_after_restart`
+- `cargo test -p memory_engine --test engine_sleep_recall engine_cancel_sleep_run_unblocks_unarchived_events`
+
 ## 2026-06-10 - Telegram background sleep uses the shared engine
 
 The post-v0.2 audit found that the Telegram host created a second `MemoryEngine` inside `SleepRunner._run()` for background sleep. Because `LockRegistry` is per engine instance, that bypassed the concurrency guarantees added in v0.2 and could allow lost updates between normal chat commands and background sleep completion.

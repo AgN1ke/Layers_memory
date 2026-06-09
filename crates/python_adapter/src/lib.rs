@@ -92,6 +92,16 @@ impl PyMemoryEngine {
         dump_json(&outcome, "sleep outcome")
     }
 
+    fn pending_sleep_runs(&self, py: Python<'_>) -> PyResult<String> {
+        let runs = run_without_gil(py, || self.inner.pending_sleep_runs())?;
+        dump_json(&runs, "pending sleep runs")
+    }
+
+    fn cancel_sleep_run(&self, py: Python<'_>, sleep_task_id: &str) -> PyResult<String> {
+        let run = run_without_gil(py, || self.inner.cancel_sleep_run(sleep_task_id))?;
+        dump_json(&run, "sleep run")
+    }
+
     fn build_evidence_pack(&self, py: Python<'_>, memory_unit_id: &str) -> PyResult<String> {
         let pack = run_without_gil(py, || self.inner.build_evidence_pack(memory_unit_id))?;
         dump_json(&pack, "evidence pack")
