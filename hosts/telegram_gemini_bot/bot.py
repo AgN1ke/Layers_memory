@@ -125,7 +125,13 @@ class GeminiNoCandidatesError(RuntimeError):
 
 
 class SleepRunner:
-    def __init__(self, gemini: "GeminiClient", llm_config: HostLlmConfig) -> None:
+    def __init__(
+        self,
+        engine: memory_engine.MemoryEngine,
+        gemini: "GeminiClient",
+        llm_config: HostLlmConfig,
+    ) -> None:
+        self._engine = engine
         self._gemini = gemini
         self._llm_config = llm_config
         self._lock = threading.Lock()
@@ -173,11 +179,7 @@ class SleepRunner:
                 chat_id,
                 f"[dev sleep] started: {reason}, task={task_id}",
             )
-            engine = memory_engine.MemoryEngine(
-                str(MEMORY_DIR),
-                host_id="telegram_gemini_bot",
-            )
-            summary = complete_sleep_result(engine, self._gemini, self._llm_config, sleep_run)
+            summary = complete_sleep_result(self._engine, self._gemini, self._llm_config, sleep_run)
             log_line(f"{reason} completed: {summary.replace(chr(10), ' | ')}")
             if telegram is not None and chat_id is not None:
                 if sleep_notices_enabled():
@@ -354,7 +356,7 @@ def main() -> None:
     )
     telegram = TelegramClient(telegram_token)
     gemini = GeminiClient(gemini_key)
-    sleep_runner = SleepRunner(gemini, llm_config)
+    sleep_runner = SleepRunner(engine, gemini, llm_config)
 
     log_line(f"telegram token fingerprint: {secret_fingerprint(telegram_token)}")
     log_line(f"gemini key fingerprint: {secret_fingerprint(gemini_key)}")

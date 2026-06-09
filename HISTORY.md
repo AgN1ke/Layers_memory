@@ -46,6 +46,30 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - Telegram background sleep uses the shared engine
+
+The post-v0.2 audit found that the Telegram host created a second `MemoryEngine` inside `SleepRunner._run()` for background sleep. Because `LockRegistry` is per engine instance, that bypassed the concurrency guarantees added in v0.2 and could allow lost updates between normal chat commands and background sleep completion.
+
+**What changed:**
+- `hosts/telegram_gemini_bot/bot.py` now passes the main `MemoryEngine` into `SleepRunner`.
+- Background sleep completion calls `complete_sleep_result()` with that shared engine instead of constructing a new one over the same `runtime/memory` directory.
+- The Telegram host now constructs `memory_engine.MemoryEngine(...)` only once, in `main()`.
+
+**What is retracted (if applicable):**
+- The implied post-concurrency assumption that all Telegram host memory writes already shared one lock registry. They did not for background sleep until this fix.
+
+**What is still true:**
+- The Rust core lock model and lock ordering are unchanged.
+- The core still supports many threads through one engine instance; it still does not provide multi-process file locking over the same memory directory.
+- Manual `/sleep` already used the main engine and is unchanged.
+
+**What we are doing:**
+- Continue the audit queue with persistent `SleepRun` recovery and the explicit journal decision before starting v0.3 adapter work.
+
+**Reproducibility anchor:**
+- `Select-String -Path hosts\telegram_gemini_bot\bot.py -Pattern 'MemoryEngine\('` returns one constructor call.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py`
+
 ## 2026-06-01 — v0.2 living memory cycle acceptance
 
 v0.2 is ready to close as an end-to-end living-memory cycle in the reusable Rust core. This entry records the acceptance anchor; it does not claim external benchmark quality.
