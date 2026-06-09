@@ -4840,3 +4840,29 @@ Make sleep lifecycle recovery a reusable core behavior, not a Telegram-specific 
 
 **Conclusion:**
 A2 is fixed in code. A3 is no longer an undocumented mismatch: sleep recovery is handled by durable `SleepRun` checkpoints, while full journaled multi-file transactions remain deferred for migrations/raw-event compaction or another operation that truly needs recover/rollback semantics.
+
+## Entry 96 - 2026-06-10 - A4 step 1: rotate completed raw session events
+
+**Problem:**
+Audit A4 showed that long-lived host sessions kept all raw events in active `events.jsonl`. Even after sleep produced Complete archives, `read_session` still parsed the whole raw chat history on each context build.
+
+**Intent:**
+Close only the raw-event rotation part of A4 without mixing in recall-counter isolation or archived-id caching. Keep evidence/fidelity and Archive-to-Core paths able to inspect old source events.
+
+**What changed:**
+- Added `Storage::read_session_archived_events` and `Storage::rotate_session_events`.
+- `FileStorage` now writes completed raw events to `sessions/<session_id>/archived/events-<NNN>.jsonl`.
+- `finish_sleep_run` rotates Complete-archive-covered events after archive completion, memory-unit creation, Core bridge, and auto-fidelity routing.
+- `read_session` stays active-tail only.
+- Core bridge and evidence pack construction now read active + archived events with `event_id` dedupe.
+- `session.md` is unchanged and remains the human full-session view.
+- A4 in `docs/audit-2026-06-10.md` is marked as step-1 closed, with B3 and archived-id metadata cache still open.
+
+**Problems or challenges:**
+The rotation is intentionally journal-light. If the process crashes after writing an archived segment but before rewriting active `events.jsonl`, duplicate raw events can temporarily exist across active and archived files. Engine readers dedupe by `event_id`, and a later rotation can clean the active file. This is acceptable for v1 of the scaling fix.
+
+**Checks:**
+- `cargo test -p memory_engine --test engine_sleep_recall` passed.
+
+**Conclusion:**
+A4 step 1 is fixed: active session files no longer need to grow forever with already-archived raw events. A4 remains partially open for recall-counter write isolation and `archived_event_ids` metadata caching.

@@ -195,6 +195,20 @@ impl<S: Storage> MemoryEngine<S> {
             .collect())
     }
 
+    fn read_session_events_with_archived(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
+        let mut events = self.storage.read_session_archived_events(session_id)?;
+        events.extend(self.storage.read_session(session_id)?.events);
+
+        let mut seen = HashSet::new();
+        events.retain(|event| seen.insert(event.event_id.clone()));
+        events.sort_by(|left, right| {
+            left.timestamp
+                .cmp(&right.timestamp)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+        Ok(events)
+    }
+
     pub fn upsert_core_fact(&self, input: CoreFactInput) -> Result<CoreFactUpsertResult> {
         validate_core_fact_input(&input)?;
         self.ensure_manifest()?;
@@ -647,6 +661,13 @@ impl<S: Storage> MemoryEngine<S> {
 
             let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
             let fidelity_requests = self.auto_route_memory_fidelity_requests(&archive_entry)?;
+            let covered_event_ids = self
+                .archived_event_ids_for_session(&session_id)?
+                .into_iter()
+                .collect::<Vec<_>>();
+            let _ = self
+                .storage
+                .rotate_session_events(&session_id, &covered_event_ids)?;
             run.stage = SleepRunStage::Finished;
             run.completion_mode = Some(
                 run.completion_mode
@@ -727,9 +748,8 @@ impl<S: Storage> MemoryEngine<S> {
             return Ok(summary);
         }
 
-        let session = self.storage.read_session(&archive.source_session_id)?;
-        let user_event_ids = session
-            .events
+        let session_events = self.read_session_events_with_archived(&archive.source_session_id)?;
+        let user_event_ids = session_events
             .iter()
             .filter(|event| event.event_type == "user_message")
             .map(|event| event.event_id.clone())
@@ -854,9 +874,8 @@ impl<S: Storage> MemoryEngine<S> {
         if archive.personal_signals.is_empty() {
             return Ok(HashSet::new());
         }
-        let session = self.storage.read_session(&archive.source_session_id)?;
-        let user_event_ids = session
-            .events
+        let session_events = self.read_session_events_with_archived(&archive.source_session_id)?;
+        let user_event_ids = session_events
             .iter()
             .filter(|event| event.event_type == "user_message")
             .map(|event| event.event_id.clone())
@@ -1319,7 +1338,7 @@ impl<S: Storage> MemoryEngine<S> {
     fn build_evidence_pack_unlocked(&self, memory_unit_id: &str) -> Result<EvidencePack> {
         let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
         let archive = self.storage.read_archive_entry_by_id(&unit.archive_id)?;
-        let session = self.storage.read_session(&unit.source_session_id)?;
+        let session_events = self.read_session_events_with_archived(&unit.source_session_id)?;
         let now = now_rfc3339()?;
         let mut pack = EvidencePack::empty_for(
             new_id("evidence_pack")?,
@@ -1337,8 +1356,7 @@ impl<S: Storage> MemoryEngine<S> {
         } else {
             unit.source_event_ids.iter().collect::<HashSet<_>>()
         };
-        let source_indices = session
-            .events
+        let source_indices = session_events
             .iter()
             .enumerate()
             .filter_map(|(index, event)| source_ids.contains(&event.event_id).then_some(index))
@@ -1346,7 +1364,7 @@ impl<S: Storage> MemoryEngine<S> {
 
         let mut selected = HashSet::new();
         for index in &source_indices {
-            if let Some(event) = session.events.get(*index) {
+            if let Some(event) = session_events.get(*index) {
                 let event = evidence_event_from_stored(
                     event,
                     EvidenceEventRole::Source,
@@ -1363,14 +1381,14 @@ impl<S: Storage> MemoryEngine<S> {
                     neighbor_indices.insert(left);
                 }
                 let right = source_index + offset;
-                if right < session.events.len() {
+                if right < session_events.len() {
                     neighbor_indices.insert(right);
                 }
             }
         }
 
         for index in neighbor_indices {
-            let Some(event) = session.events.get(index) else {
+            let Some(event) = session_events.get(index) else {
                 continue;
             };
             let event = evidence_event_from_stored(

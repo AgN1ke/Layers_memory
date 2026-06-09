@@ -14,7 +14,13 @@ pub trait Storage {
     fn write_manifest(&self, manifest: &Manifest) -> Result<()>;
 
     fn read_session(&self, session_id: &str) -> Result<SessionRecord>;
+    fn read_session_archived_events(&self, session_id: &str) -> Result<Vec<StoredEvent>>;
     fn append_event(&self, session_id: &str, event: &StoredEvent) -> Result<()>;
+    fn rotate_session_events(
+        &self,
+        session_id: &str,
+        covered_event_ids: &[String],
+    ) -> Result<usize>;
 
     fn write_archive_entry(&self, entry: &ArchiveEntry) -> Result<()>;
     fn update_archive_entry(&self, archive_id: &str, entry: &ArchiveEntry) -> Result<()>;

@@ -39,7 +39,8 @@ JSONL-файл містить один JSON-об'єкт на рядок.
 
 На v0.1 JSONL використовується для:
 
-- `memory/sessions/<session_id>/events.jsonl`.
+- `memory/sessions/<session_id>/events.jsonl`;
+- `memory/sessions/<session_id>/archived/events-<NNN>.jsonl` for raw events rotated after they are covered by Complete archives.
 
 Кожен рядок має бути валідним `StoredEvent`.
 
@@ -269,7 +270,7 @@ Markdown-файли існують для людини. Вони не замін
 - `initial_weight` - попередня вага `0.0..1.0`;
 - `weight_reason` - коротке пояснення для debug і людського аудиту.
 
-`events.jsonl` містить саме `StoredEvent`.
+`events.jsonl` і `archived/events-<NNN>.jsonl` містять саме `StoredEvent`.
 
 ### 3.3 IngestResult
 
@@ -374,7 +375,7 @@ updated_at: 2026-05-17T16:45:00.000Z
 
 - файл створюється для читання людиною;
 - не є джерелом правди для коду;
-- може бути перебудований із `events.jsonl` і `session.json`.
+- може бути перебудований із `events.jsonl`, `archived/events-<NNN>.jsonl` і `session.json`.
 
 ---
 
@@ -1318,6 +1319,7 @@ memory/
       session.json
       session.md
       archived/
+        events-<NNN>.jsonl
   archive/
     <YYYY>/<MM>/
       <archive_id>.json
@@ -1336,7 +1338,7 @@ memory/
 
 Джерела правди:
 
-- `events.jsonl` - правда для подій сесії;
+- `events.jsonl` + `archived/events-<NNN>.jsonl` - правда для raw-подій сесії;
 - `<archive_id>.json` - правда для архівного спогаду;
 - `<category>.json` - правда для Core Store;
 - `<candidate_id>.json` - правда для candidate belief;

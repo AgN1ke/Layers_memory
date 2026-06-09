@@ -46,6 +46,31 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - Completed sleep rotates archived raw session events
+
+The post-v0.2 audit found that long-lived host sessions kept all raw events in one active `sessions/<session_id>/events.jsonl` file. Even after those events were covered by Complete archives, every `read_session` call still parsed the full raw chat history.
+
+**What changed:**
+- `Storage` now exposes `read_session_archived_events(session_id)` and `rotate_session_events(session_id, covered_event_ids)`.
+- `FileStorage` writes rotated raw events to `sessions/<session_id>/archived/events-<NNN>.jsonl`.
+- `finish_sleep_run` rotates events covered by Complete archives after archive completion, memory-unit creation, Archive-to-Core bridge, and auto-fidelity routing.
+- `read_session` remains active-file only; old source events remain available through archived segments.
+- Core bridge and evidence-pack construction now read active + archived session events with `event_id` deduplication, so old units remain verifiable after rotation.
+
+**What is retracted (if applicable):**
+- Nothing is retracted. This is the first step of audit A4, not the full A4 closure: recall-counter isolation and the cached `archived_event_ids` session metadata path remain open.
+
+**What is still true:**
+- `session.md` remains append-only and human-readable; it is not rotated by this change.
+- Archive entries and memory units remain the canonical compressed memory.
+- If a process crashes after writing an archived segment but before rewriting the active file, duplicate raw events may temporarily exist across active and archived files; engine evidence reads deduplicate by `event_id`.
+
+**What we are doing:**
+- Continue the audit queue with recall-counter isolation (B3), then engine module split and tolerant collection reads.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_sleep_recall`
+
 ## 2026-06-10 - SleepRun recovery is persisted in the core
 
 The post-v0.2 audit found that multi-pass sleep orchestration kept `SleepRun` only in process memory. If the host crashed mid-sleep, durable `PendingTask` files could remain pending while no public API could reconstruct the run cursor, blocking future sleep for that session.
