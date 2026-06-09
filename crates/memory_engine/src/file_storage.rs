@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -77,6 +78,24 @@ impl FileStorage {
 
     fn events_path(&self, session_id: &str) -> PathBuf {
         self.session_dir(session_id).join("events.jsonl")
+    }
+
+    fn archived_events_dir(&self, session_id: &str) -> PathBuf {
+        self.session_dir(session_id).join("archived")
+    }
+
+    fn next_archived_events_path(&self, session_id: &str) -> Result<PathBuf> {
+        let dir = self.archived_events_dir(session_id);
+        fs::create_dir_all(&dir)?;
+
+        let mut index = 1usize;
+        loop {
+            let path = dir.join(format!("events-{index:06}.jsonl"));
+            if !path.exists() {
+                return Ok(path);
+            }
+            index += 1;
+        }
     }
 
     fn archive_entry_path(&self, entry: &ArchiveEntry) -> PathBuf {
@@ -236,6 +255,18 @@ impl Storage for FileStorage {
         Ok(SessionRecord { metadata, events })
     }
 
+    fn read_session_archived_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
+        let mut files = Vec::new();
+        collect_jsonl_files_shallow(&self.archived_events_dir(session_id), &mut files)?;
+        files.sort();
+
+        let mut events = Vec::new();
+        for path in files {
+            events.extend(read_jsonl(&path)?);
+        }
+        Ok(events)
+    }
+
     fn append_event(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
         self.ensure_layout()?;
         fs::create_dir_all(self.session_dir(session_id))?;
@@ -253,6 +284,47 @@ impl Storage for FileStorage {
         self.update_session_markdown(session_id, event)?;
 
         Ok(())
+    }
+
+    fn rotate_session_events(
+        &self,
+        session_id: &str,
+        covered_event_ids: &[String],
+    ) -> Result<usize> {
+        if covered_event_ids.is_empty() {
+            return Ok(0);
+        }
+
+        self.ensure_layout()?;
+        fs::create_dir_all(self.session_dir(session_id))?;
+        let active_path = self.events_path(session_id);
+        let active_events = read_jsonl::<StoredEvent>(&active_path)?;
+        if active_events.is_empty() {
+            return Ok(0);
+        }
+
+        let covered = covered_event_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let mut archived = Vec::new();
+        let mut active = Vec::new();
+        for event in active_events {
+            if covered.contains(event.event_id.as_str()) {
+                archived.push(event);
+            } else {
+                active.push(event);
+            }
+        }
+
+        if archived.is_empty() {
+            return Ok(0);
+        }
+
+        let archived_path = self.next_archived_events_path(session_id)?;
+        write_jsonl_sync(&archived_path, &archived)?;
+        atomic_write_jsonl(&active_path, &active, true)?;
+        Ok(archived.len())
     }
 
     fn write_archive_entry(&self, entry: &ArchiveEntry) -> Result<()> {
@@ -497,6 +569,29 @@ fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
     Ok(items)
 }
 
+fn write_jsonl_sync<T: Serialize>(path: &Path, values: &[T]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut file = File::create(path)?;
+    for value in values {
+        let line = serde_json::to_string(value)?;
+        writeln!(file, "{line}")?;
+    }
+    file.sync_all()?;
+    Ok(())
+}
+
+fn atomic_write_jsonl<T: Serialize>(path: &Path, values: &[T], sync_file: bool) -> Result<()> {
+    let mut content = String::new();
+    for value in values {
+        content.push_str(&serde_json::to_string(value)?);
+        content.push('\n');
+    }
+    atomic_write_string(path, &content, sync_file)
+}
+
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let content = serde_json::to_string_pretty(value)?;
     atomic_write_string(path, &format!("{content}\n"), true)
@@ -558,6 +653,22 @@ fn collect_json_files_shallow(root: &Path, files: &mut Vec<PathBuf>) -> Result<(
         let entry = entry?;
         let path = entry.path();
         if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_jsonl_files_shallow(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
             files.push(path);
         }
     }

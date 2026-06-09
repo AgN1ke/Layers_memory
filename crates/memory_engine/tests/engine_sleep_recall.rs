@@ -1652,6 +1652,7 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
         memory_engine::types::CONSOLIDATOR_TEXT_SCHEMA_VERSION
     );
 
+    let source_event_id = event_id.clone();
     let _consolidated = json!({
         "schema_version": SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
         "archive_id": run.archive_id,
@@ -1721,6 +1722,27 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
             token_budget: None,
         })
         .expect("context package");
+    assert!(package.session_recent.is_empty());
+
+    let active_session = engine
+        .storage()
+        .read_session("live_session")
+        .expect("active session");
+    assert!(active_session.events.is_empty());
+    let archived_events = engine
+        .storage()
+        .read_session_archived_events("live_session")
+        .expect("archived session events");
+    assert_eq!(archived_events.len(), 1);
+    assert_eq!(archived_events[0].event_id, source_event_id);
+
+    let unit_id = outcome.archive_entry.memory_units[0].memory_unit_id.clone();
+    let evidence_pack = engine
+        .build_evidence_pack(&unit_id)
+        .expect("evidence pack from archived event");
+    assert!(evidence_pack.events.iter().any(|event| {
+        event.event_id == source_event_id && event.role == EvidenceEventRole::Source
+    }));
     assert!(package
         .core_facts
         .iter()
