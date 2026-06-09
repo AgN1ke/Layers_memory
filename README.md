@@ -1,6 +1,23 @@
 # Memory Engine
 
-Memory Engine is a reusable Rust-based memory core for long-term memory, built as a standalone library with thin host adapters.
+Memory Engine is a reusable Rust-based memory core that gives AI applications human-like long-term memory, built as a standalone library with thin host adapters.
+
+Most AI projects rebuild long-term memory from scratch and hit the same wall: the context window. You either stuff everything into the prompt (burning thousands of tokens every turn and still overflowing), or the assistant forgets the moment the window fills. Memory Engine is designed to reduce that trade-off. It distills conversations into compact, layered memory and recalls only what matters for the current moment, so an assistant can build up long-running memory while each turn spends only a small, focused memory budget.
+
+Memory mirrors how people remember, across three layers:
+
+- **Session** - the live, working conversation.
+- **Archive** - long-term, consolidated experience. Opt-in vector storage is planned for scalable semantic recall.
+- **Core** - the slow, stable layer: who the user is and what is settled and trusted.
+
+Experience moves upward only when it earns its place: it is validated against its source, promoted through review rather than written blindly, and forgotten gently and reversibly when it stops mattering.
+
+## Principles
+
+- **Yours and auditable** - memory lives in plain, human-readable files you can read, fix, and delete. No black box.
+- **Private by choice** - deep semantic (vector) storage is planned as opt-in, not as a default requirement.
+- **Provider-independent by design** - the Rust core performs no network I/O and holds no model, vendor, or API key; the host runs language tasks through whatever model it chooses.
+- **Reusable** - one memory layer that any host (a bot, a game, an assistant) adopts through a thin adapter, instead of rebuilding memory.
 
 The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current work is a Cargo workspace with the Rust memory core, PyO3 Python adapter, and runnable host examples.
 
