@@ -10,6 +10,7 @@ use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
 use crate::event::StoredEvent;
 use crate::journal::{JournalOperation, JournalState};
+use crate::llm::SleepRun;
 use crate::manifest::Manifest;
 use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
 use crate::storage::Storage;
@@ -53,6 +54,7 @@ impl FileStorage {
         fs::create_dir_all(self.root.join("core").join("candidates"))?;
         fs::create_dir_all(self.root.join("tasks"))?;
         fs::create_dir_all(self.root.join("tasks").join("completed"))?;
+        fs::create_dir_all(self.root.join("runs").join("sleep"))?;
         fs::create_dir_all(self.root.join("journal"))?;
         Ok(())
     }
@@ -128,6 +130,13 @@ impl FileStorage {
             .join("tasks")
             .join("completed")
             .join(format!("{task_id}.json"))
+    }
+
+    fn sleep_run_path(&self, sleep_task_id: &str) -> PathBuf {
+        self.root
+            .join("runs")
+            .join("sleep")
+            .join(format!("{sleep_task_id}.json"))
     }
 
     fn journal_path(&self, op_id: &str) -> PathBuf {
@@ -415,6 +424,38 @@ impl Storage for FileStorage {
         }
 
         Ok(tasks)
+    }
+
+    fn save_sleep_run(&self, run: &SleepRun) -> Result<()> {
+        self.ensure_layout()?;
+        atomic_write_json(&self.sleep_run_path(&run.sleep_task_id), run)
+    }
+
+    fn load_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun> {
+        self.ensure_layout()?;
+        let path = self.sleep_run_path(sleep_task_id);
+        if !path.exists() {
+            return Err(MemoryEngineError::Storage(format!(
+                "sleep run not found: {sleep_task_id}"
+            )));
+        }
+        read_json(&path)
+    }
+
+    fn load_sleep_runs(&self) -> Result<Vec<SleepRun>> {
+        self.ensure_layout()?;
+        let mut files = Vec::new();
+        collect_json_files_shallow(&self.root.join("runs").join("sleep"), &mut files)?;
+
+        let mut runs = Vec::new();
+        for path in files {
+            runs.push(read_json(&path)?);
+        }
+        runs.sort_by(|left: &SleepRun, right: &SleepRun| {
+            left.sleep_task_id.cmp(&right.sleep_task_id)
+        });
+
+        Ok(runs)
     }
 
     fn begin_journaled_operation(&self, operation: &JournalOperation) -> Result<()> {

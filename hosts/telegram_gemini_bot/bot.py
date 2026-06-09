@@ -365,6 +365,7 @@ def main() -> None:
 
     telegram.delete_webhook()
     log_line("deleteWebhook completed")
+    queue_recovered_sleep_runs(engine, sleep_runner)
     print("Bot is running. Open Telegram and write to your bot.")
     print(
         "Commands: /help, /sleep, /archives, /archive_last, /recall text, "
@@ -707,6 +708,27 @@ def queue_sleep_update(
             telegram.send_message(chat_id, "Memory update queued.")
 
 
+def queue_recovered_sleep_runs(
+    engine: memory_engine.MemoryEngine,
+    sleep_runner: SleepRunner,
+) -> None:
+    try:
+        runs = json.loads(engine.pending_sleep_runs())
+    except Exception as err:
+        log_exception("failed to inspect recoverable sleep runs", err)
+        return
+
+    queued = 0
+    for run in runs if isinstance(runs, list) else []:
+        if not isinstance(run, dict):
+            continue
+        if sleep_runner.submit(run, reason="recovered sleep"):
+            queued += 1
+
+    if queued:
+        log_line(f"queued recovered sleep runs: {queued}")
+
+
 def maybe_queue_token_pressure_sleep(
     engine: memory_engine.MemoryEngine,
     sleep_runner: SleepRunner,
@@ -907,6 +929,18 @@ def parse_rfc3339_datetime(value: str) -> datetime | None:
 
 
 def has_pending_sleep_task(engine: memory_engine.MemoryEngine, session_id: str) -> bool:
+    try:
+        runs = json.loads(engine.pending_sleep_runs())
+    except Exception as err:
+        log_exception("failed to inspect pending sleep runs", err)
+        return True
+
+    for run in runs if isinstance(runs, list) else []:
+        if not isinstance(run, dict):
+            continue
+        if clean_string(run.get("session_id")) == session_id:
+            return True
+
     try:
         tasks = json.loads(engine.pending_tasks())
     except Exception as err:

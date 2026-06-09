@@ -4815,3 +4815,28 @@ Audit A1 показав, що Telegram host створював два `MemoryEng
 
 **Наступні кроки:**
 Закомітити A1 fix окремою гілкою. Далі за audit-порядком: A2+A3 — persistent `SleepRun` recovery і чесне рішення щодо journal.
+## Entry 95 - 2026-06-10 - A2/A3 fix: persistent SleepRun recovery and journal decision
+
+**Problem:**
+Audit A2 showed that multi-pass sleep kept the `SleepRun` driver cursor only in process memory. A crash could leave `sleep_compression` / `memory_unit_pass` tasks pending, while the host had no way to resume the partially completed run. Audit A3 also showed that the journal primitive existed but was not actually wired into engine operations.
+
+**Intent:**
+Make sleep lifecycle recovery a reusable core behavior, not a Telegram-specific repair path. Be honest about the journal: do not claim it is active for sleep until the engine actually uses it.
+
+**What changed:**
+- Added persistent `SleepRun` storage under `memory/runs/sleep/<sleep_task_id>.json`.
+- Added `Storage::save_sleep_run`, `load_sleep_run`, and `load_sleep_runs`.
+- `begin_sleep_run`, `next_sleep_batch`, `submit_sleep_batch`, and `finish_sleep_run` now checkpoint the run.
+- Added core/PyO3 APIs `pending_sleep_runs()` and `cancel_sleep_run()`.
+- Telegram startup now queues recovered sleep runs before polling.
+- `has_pending_sleep_task` checks pending sleep runs first, with the old task scan left as a legacy guard.
+- `resume_sleep_compression` and `resume_memory_unit_pass` are idempotent for already-finished artifacts, so re-entering `finish_sleep_run` after a crash does not duplicate memory units.
+- Audit A2 is marked closed. A3 is marked as an explicit deferred journal decision.
+
+**Verification:**
+- `cargo test -p memory_engine --test engine_sleep_recall engine_sleep_run_persists_and_recovers_after_restart` passed.
+- `cargo test -p memory_engine --test engine_sleep_recall engine_cancel_sleep_run_unblocks_unarchived_events` passed.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` passed during implementation.
+
+**Conclusion:**
+A2 is fixed in code. A3 is no longer an undocumented mismatch: sleep recovery is handled by durable `SleepRun` checkpoints, while full journaled multi-file transactions remain deferred for migrations/raw-event compaction or another operation that truly needs recover/rollback semantics.

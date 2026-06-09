@@ -2,6 +2,7 @@ use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
 use crate::event::StoredEvent;
 use crate::journal::JournalOperation;
+use crate::llm::SleepRun;
 use crate::manifest::Manifest;
 use crate::session::SessionRecord;
 use crate::tasks::PendingTask;
@@ -33,6 +34,10 @@ pub trait Storage {
     fn save_task(&self, task: &PendingTask) -> Result<()>;
     fn load_task(&self, task_id: &str) -> Result<PendingTask>;
     fn load_tasks(&self) -> Result<Vec<PendingTask>>;
+
+    fn save_sleep_run(&self, run: &SleepRun) -> Result<()>;
+    fn load_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun>;
+    fn load_sleep_runs(&self) -> Result<Vec<SleepRun>>;
 
     fn begin_journaled_operation(&self, operation: &JournalOperation) -> Result<()>;
     fn complete_journaled_operation(&self, op_id: &str) -> Result<()>;
