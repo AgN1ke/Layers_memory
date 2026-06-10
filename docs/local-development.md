@@ -113,6 +113,14 @@ machine without extra environment variables:
 crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless
 ```
 
+The first product-host Godot spike uses the same local binary and runs a minimal
+Chibigochi-style memory loop: user text -> context -> reply -> sleep -> restart
+-> persisted Core/context recall.
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-spike
+```
+
 Перевірити Rust:
 
 ```powershell

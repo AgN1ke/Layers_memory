@@ -5298,3 +5298,49 @@ crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_confo
 
 **Висновок:**
 Це не змінює memory behavior і не потребує HISTORY-запису. Це закриває локальний dev-loop для Godot: conformance можна запускати повторювано без ручного шляху до binary і без ризику закомітити executable.
+
+## Entry 112 - 2026-06-10 - Chibigochi Godot memory spike
+
+**Проблематика:**
+v0.3 довів, що Godot може пройти headless conformance через тонкий GDExtension adapter. Але це ще був тестовий runner, не product-host shape: майбутній Chibigochi host має мати власний Godot-side loop `user text -> context -> reply -> sleep -> restart`, не копіювати memory policy і не вимагати ручного кліку власником.
+
+**Задум:**
+Зробити мінімальний Godot product-host spike без polished UI: окремий host object, fake LLM responses всередині Godot-side smoke, real `MemoryEngineGodot`, реальний sleep driver і restart persistence check. Мета — перевірити, що гра може жити поверх бібліотеки, а не тільки conformance script.
+
+**Що робили:**
+- Додано `hosts/chibigochi_spike/` як окремий Godot project.
+- Додано `chibigochi_memory_host.gd`: Godot-side host object, який відкриває `MemoryEngineGodot`, ingest-ить user/assistant events, рендерить memory view, виконує sleep driver і submit-ить fake LLM responses назад у core.
+- Додано `spike_runner.gd`: headless smoke, який проганяє user facts (Mykyta, cat Irzha, space), sleep, Core/context check, створює новий host instance над тим самим memory dir і перевіряє, що після restart відповідь про cat використовує persisted Core/context memory.
+- Розширено `tests/host_conformance/host_conformance.py --host chibigochi-spike`.
+- Оновлено `docs/roadmap.md`: Chibigochi integration стала `[~]`, бо spike є, але real scene/UI і production LLM loop ще відкриті.
+- Оновлено `docs/local-development.md` з командою запуску spike.
+
+**Що зроблено:**
+Команда проходить з реальним Godot 4.6 через repo-local `tools/godot/`:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-spike
+```
+
+Результат:
+
+```text
+HOST CONFORMANCE PASSED
+host=chibigochi-spike
+memory_units=3
+core_facts=3
+```
+
+**Проблеми чи виклики:**
+Перший запуск зловив Godot 4.6 strict GDScript typing issue: змінні, що infer-ились із `Variant`, стали warning-as-error. Це виправлено явними типами. Runner також посилено: якщо Godot script зависає до timeout, помилка тепер показує stdout/import-pass output, а не ховає root cause.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile tests\host_conformance\host_conformance.py` passed.
+- `git diff --check` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-spike` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host direct` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host telegram-local` passed.
+
+**Висновок:**
+Перший product-host spike є. Він не є повною Chibigochi integration, але доводить практичний Godot host loop і restart persistence поверх того самого core. Наступний крок для цього напряму — або real Godot scene/UI wrapper, або production LLM bridge для Chibigochi; не додавати memory policy в Godot.

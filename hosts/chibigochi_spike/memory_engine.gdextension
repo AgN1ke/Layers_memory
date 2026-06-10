@@ -1,0 +1,14 @@
+[configuration]
+
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = "4.6"
+reloadable = false
+
+[libraries]
+
+windows.debug.x86_64 = "res://bin/memory_engine_godot.dll"
+windows.release.x86_64 = "res://bin/memory_engine_godot.dll"
+linux.debug.x86_64 = "res://bin/libmemory_engine_godot.so"
+linux.release.x86_64 = "res://bin/libmemory_engine_godot.so"
+macos.debug = "res://bin/libmemory_engine_godot.dylib"
+macos.release = "res://bin/libmemory_engine_godot.dylib"
