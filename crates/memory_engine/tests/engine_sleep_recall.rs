@@ -464,6 +464,91 @@ fn engine_recall_boosts_previously_recalled_archive_memory() {
 }
 
 #[test]
+fn engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts() {
+    let root =
+        unique_temp_dir("engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let storage_probe = storage.clone();
+    let mut options = EngineOptions::default();
+    options.recall.text_match_bonus = 0.0;
+    options.recall.recall_count_log_bonus = 0.20;
+    options.recall.recent_recall_bonus = 0.15;
+    options.recall.max_recall_boost_factor = 1.50;
+    options.recall.stats_flush_interval = 0;
+    let mut engine = MemoryEngine::with_options(storage, options);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "calibration memory: buffered stats",
+        vec!["calibration"],
+    );
+    let sleep_result = engine.sleep("live_session").expect("sleep");
+    resume_test_sleep(
+        &mut engine,
+        &sleep_result,
+        "calibration memory: buffered stats",
+        "The user discussed buffered recall stats.",
+    );
+    let archive_id = sleep_result.archive_entry.archive_id.clone();
+    let mut archive = storage_probe
+        .read_archive_entry_by_id(&archive_id)
+        .expect("read archive");
+    archive.weight = 0.40;
+    storage_probe
+        .update_archive_entry(&archive_id, &archive)
+        .expect("write archive");
+
+    let first = engine
+        .recall(RecallQuery {
+            schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+            query_id: Some("first".to_string()),
+            created_at: Some("2026-05-17T18:00:00.000Z".to_string()),
+            session_id: Some("live_session".to_string()),
+            context: json!({ "recent_text": "calibration" }),
+            query_text: Some("calibration memory".to_string()),
+            filters: RecallFilters::default(),
+            limit: 1,
+            include_core: false,
+            explain: true,
+        })
+        .expect("first recall");
+    let after_first = storage_probe
+        .read_archive_entry_by_id(&archive_id)
+        .expect("read archive after first recall");
+    assert_eq!(after_first.recall_count, 0);
+    assert!(after_first.last_recalled_at.is_none());
+
+    let second = engine
+        .recall(RecallQuery {
+            schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+            query_id: Some("second".to_string()),
+            created_at: Some("2026-05-17T18:01:00.000Z".to_string()),
+            session_id: Some("live_session".to_string()),
+            context: json!({ "recent_text": "calibration" }),
+            query_text: Some("calibration memory".to_string()),
+            filters: RecallFilters::default(),
+            limit: 1,
+            include_core: false,
+            explain: true,
+        })
+        .expect("second recall");
+    assert!(second.items[0].relevance_score > first.items[0].relevance_score);
+
+    assert_eq!(engine.flush_recall_stats().expect("flush recall stats"), 1);
+    let flushed = storage_probe
+        .read_archive_entry_by_id(&archive_id)
+        .expect("read archive after flush");
+    assert_eq!(flushed.recall_count, 2);
+    assert_eq!(
+        flushed.last_recalled_at.as_deref(),
+        Some("2026-05-17T18:01:00.000Z")
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_evidence_pack_uses_source_events_and_configured_neighbors() {
     let root = unique_temp_dir("engine_evidence_pack_uses_source_events_and_configured_neighbors");
     let storage = FileStorage::with_host_id(&root, "terminal");

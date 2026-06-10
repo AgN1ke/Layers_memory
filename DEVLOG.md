@@ -4866,3 +4866,30 @@ The rotation is intentionally journal-light. If the process crashes after writin
 
 **Conclusion:**
 A4 step 1 is fixed: active session files no longer need to grow forever with already-archived raw events. A4 remains partially open for recall-counter write isolation and `archived_event_ids` metadata caching.
+
+## Entry 97 - 2026-06-10 - B3 fix: buffered recall stats
+
+**Problem:**
+Audit B3 showed that `recall()` rewrote archive files on every returned memory just to update `recall_count` and `last_recalled_at`. That made a read-like operation write-heavy and kept a write-back race surface around archive entries.
+
+**Intent:**
+Keep recall ranking behavior intact while moving counter persistence out of the hot path. Recall counters are advisory signals, not canonical memory content.
+
+**What changed:**
+- Added an in-memory recall stats buffer to `MemoryEngine`.
+- Recall scoring now uses persisted archive stats plus pending buffered deltas.
+- `recall()` records selected archive ids into the buffer instead of calling `update_archive_entry`.
+- Added `flush_recall_stats()` to batch-write buffered deltas.
+- `finish_sleep_run` flushes recall stats as a natural consolidation point.
+- Added `RecallStage1Config.stats_flush_interval`; `0` disables interval flushing.
+- Exposed `flush_recall_stats()` through PyO3 for host shutdown/maintenance.
+
+**Problems or challenges:**
+Unflushed recall stat deltas can be lost on process crash. This is intentional and documented: counters only influence ranking; they are not the memory itself.
+
+**Checks:**
+- `cargo test -p memory_engine --test engine_sleep_recall` passed.
+- New scenario: `engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts`.
+
+**Conclusion:**
+B3 is fixed in code. Recall no longer rewrites archive entries per call, and repeated recall still affects ranking before the next flush.
