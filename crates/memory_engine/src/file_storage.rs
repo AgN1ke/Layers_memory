@@ -14,7 +14,7 @@ use crate::journal::{JournalOperation, JournalState};
 use crate::llm::SleepRun;
 use crate::manifest::Manifest;
 use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
-use crate::storage::Storage;
+use crate::storage::{Storage, StorageCollection, StorageReadWarning};
 use crate::tasks::TaskState;
 use crate::types::{CORE_STORE_SCHEMA_VERSION, SESSION_SCHEMA_VERSION};
 use crate::{MemoryEngineError, Result};
@@ -343,19 +343,27 @@ impl Storage for FileStorage {
         read_json(&path)
     }
 
-    fn read_archive(&self, filters: &ArchiveFilters) -> Result<Vec<ArchiveEntry>> {
+    fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>> {
         let mut files = Vec::new();
         collect_archive_entry_files(&self.root.join("archive"), &mut files)?;
 
         let mut entries = Vec::new();
+        let mut warnings = Vec::new();
         for path in files {
-            let entry: ArchiveEntry = read_json(&path)?;
+            let Some(entry) =
+                read_json_from_collection::<ArchiveEntry>(self, &path, "archive", &mut warnings)?
+            else {
+                continue;
+            };
             if archive_matches_filters(&entry, filters) {
                 entries.push(entry);
             }
         }
 
-        Ok(entries)
+        Ok(StorageCollection {
+            items: entries,
+            warnings,
+        })
     }
 
     fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()> {
@@ -374,20 +382,31 @@ impl Storage for FileStorage {
         read_json(&path)
     }
 
-    fn read_memory_units_for_archive(&self, archive_id: &str) -> Result<Vec<MemoryUnit>> {
+    fn read_memory_units_for_archive(
+        &self,
+        archive_id: &str,
+    ) -> Result<StorageCollection<MemoryUnit>> {
         let mut files = Vec::new();
         collect_json_files(&self.root.join("archive").join("units"), &mut files)?;
 
         let mut units = Vec::new();
+        let mut warnings = Vec::new();
         for path in files {
-            let unit: MemoryUnit = read_json(&path)?;
+            let Some(unit) =
+                read_json_from_collection::<MemoryUnit>(self, &path, "memory unit", &mut warnings)?
+            else {
+                continue;
+            };
             if unit.archive_id == archive_id {
                 units.push(unit);
             }
         }
         units.sort_by(|left, right| left.created_at.cmp(&right.created_at));
 
-        Ok(units)
+        Ok(StorageCollection {
+            items: units,
+            warnings,
+        })
     }
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory> {
@@ -403,19 +422,30 @@ impl Storage for FileStorage {
         read_json(&path)
     }
 
-    fn read_core_store_categories(&self) -> Result<Vec<CoreStoreCategory>> {
+    fn read_core_store_categories(&self) -> Result<StorageCollection<CoreStoreCategory>> {
         let mut files = Vec::new();
         collect_json_files(&self.root.join("core").join("store"), &mut files)?;
 
         let mut categories = Vec::new();
+        let mut warnings = Vec::new();
         for path in files {
-            categories.push(read_json(&path)?);
+            if let Some(category) = read_json_from_collection::<CoreStoreCategory>(
+                self,
+                &path,
+                "core store",
+                &mut warnings,
+            )? {
+                categories.push(category);
+            }
         }
         categories.sort_by(|left: &CoreStoreCategory, right: &CoreStoreCategory| {
             left.category.cmp(&right.category)
         });
 
-        Ok(categories)
+        Ok(StorageCollection {
+            items: categories,
+            warnings,
+        })
     }
 
     fn write_core_store_category(&self, category: &CoreStoreCategory) -> Result<()> {
@@ -439,14 +469,22 @@ impl Storage for FileStorage {
         read_json(&path)
     }
 
-    fn read_candidate_beliefs(&self) -> Result<Vec<CandidateBelief>> {
+    fn read_candidate_beliefs(&self) -> Result<StorageCollection<CandidateBelief>> {
         self.ensure_layout()?;
         let mut files = Vec::new();
         collect_json_files(&self.root.join("core").join("candidates"), &mut files)?;
 
         let mut candidates = Vec::new();
+        let mut warnings = Vec::new();
         for path in files {
-            candidates.push(read_json(&path)?);
+            if let Some(candidate) = read_json_from_collection::<CandidateBelief>(
+                self,
+                &path,
+                "candidate belief",
+                &mut warnings,
+            )? {
+                candidates.push(candidate);
+            }
         }
         candidates.sort_by(|left: &CandidateBelief, right: &CandidateBelief| {
             right
@@ -454,7 +492,10 @@ impl Storage for FileStorage {
                 .cmp(&left.created_at)
                 .then_with(|| left.candidate_id.cmp(&right.candidate_id))
         });
-        Ok(candidates)
+        Ok(StorageCollection {
+            items: candidates,
+            warnings,
+        })
     }
 
     fn save_task(&self, task: &crate::tasks::PendingTask) -> Result<()> {
@@ -486,16 +527,27 @@ impl Storage for FileStorage {
         Err(MemoryEngineError::TaskNotFound(task_id.to_string()))
     }
 
-    fn load_tasks(&self) -> Result<Vec<crate::tasks::PendingTask>> {
+    fn load_tasks(&self) -> Result<StorageCollection<crate::tasks::PendingTask>> {
         let mut files = Vec::new();
         collect_json_files_shallow(&self.root.join("tasks"), &mut files)?;
 
         let mut tasks = Vec::new();
+        let mut warnings = Vec::new();
         for path in files {
-            tasks.push(read_json(&path)?);
+            if let Some(task) = read_json_from_collection::<crate::tasks::PendingTask>(
+                self,
+                &path,
+                "task",
+                &mut warnings,
+            )? {
+                tasks.push(task);
+            }
         }
 
-        Ok(tasks)
+        Ok(StorageCollection {
+            items: tasks,
+            warnings,
+        })
     }
 
     fn save_sleep_run(&self, run: &SleepRun) -> Result<()> {
@@ -514,20 +566,28 @@ impl Storage for FileStorage {
         read_json(&path)
     }
 
-    fn load_sleep_runs(&self) -> Result<Vec<SleepRun>> {
+    fn load_sleep_runs(&self) -> Result<StorageCollection<SleepRun>> {
         self.ensure_layout()?;
         let mut files = Vec::new();
         collect_json_files_shallow(&self.root.join("runs").join("sleep"), &mut files)?;
 
         let mut runs = Vec::new();
+        let mut warnings = Vec::new();
         for path in files {
-            runs.push(read_json(&path)?);
+            if let Some(run) =
+                read_json_from_collection::<SleepRun>(self, &path, "sleep run", &mut warnings)?
+            {
+                runs.push(run);
+            }
         }
         runs.sort_by(|left: &SleepRun, right: &SleepRun| {
             left.sleep_task_id.cmp(&right.sleep_task_id)
         });
 
-        Ok(runs)
+        Ok(StorageCollection {
+            items: runs,
+            warnings,
+        })
     }
 
     fn begin_journaled_operation(&self, operation: &JournalOperation) -> Result<()> {
@@ -547,6 +607,34 @@ impl Storage for FileStorage {
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let file = File::open(path)?;
     Ok(serde_json::from_reader(file)?)
+}
+
+fn read_json_from_collection<T: DeserializeOwned>(
+    storage: &FileStorage,
+    path: &Path,
+    collection: &str,
+    warnings: &mut Vec<StorageReadWarning>,
+) -> Result<Option<T>> {
+    match read_json(path) {
+        Ok(value) => Ok(Some(value)),
+        Err(err) => {
+            warnings.push(StorageReadWarning {
+                collection: collection.to_string(),
+                path: storage.relative_path(path),
+                error: err.to_string(),
+            });
+            Ok(None)
+        }
+    }
+}
+
+impl FileStorage {
+    fn relative_path(&self, path: &Path) -> String {
+        path.strip_prefix(&self.root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
 }
 
 fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {

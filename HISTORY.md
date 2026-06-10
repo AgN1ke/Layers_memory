@@ -46,6 +46,32 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - Collection reads skip unreadable memory files with visible notes
+
+The post-v0.2 audit found that one malformed JSON file in a collection directory such as `archive/`, `archive/units/`, `core/store/`, `core/candidates/`, `tasks/`, or `runs/sleep/` could make the whole collection read fail. That meant one bad archive file could break recall and context packaging until a human found and repaired it.
+
+**What changed:**
+- Storage collection reads now return `StorageCollection<T> { items, warnings }`.
+- `FileStorage` skips unreadable files when scanning archive entries, memory units, core-store categories, candidate beliefs, pending tasks, and sleep runs.
+- Point reads by id remain strict: if a command asks for a specific archive, unit, candidate, task, or sleep run, read/parse failure still fails that operation.
+- `RecallResult.notes`, `RecallDebug.notes`, and `CoreContextPackage.notes` surface skipped-file warnings.
+- Telegram `/recall` displays recall notes so the owner can see that a memory file needs manual repair.
+
+**What is retracted (if applicable):**
+- The previous implicit behavior "any unreadable collection member aborts the whole memory read" is retracted. Collection reads now degrade softly.
+
+**What is still true:**
+- The engine does not delete, rename, or auto-repair owner data.
+- Strict point reads still preserve precise failures for operations that target one object.
+- Healthy files continue to participate in recall, context packaging, reflection, and maintenance flows.
+
+**What we are doing:**
+- Continue the audit queue with the remaining scaling/documentation items before v0.3 adapter work.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_sleep_recall engine_recall_and_context_skip_unreadable_archive_files_with_notes`
+- `cargo test -p memory_engine --test engine_sleep_recall engine_context_skips_unreadable_core_store_files_with_notes`
+
 ## 2026-06-10 - Recall stats are buffered instead of written on every recall
 
 The post-v0.2 audit found that `recall()` rewrote archive entry files on every returned memory just to increment `recall_count` and `last_recalled_at`. That made recall a write-heavy operation and created avoidable write-back races around archive files.
