@@ -1,0 +1,12 @@
+; Minimal Godot product-host spike for Memory Engine.
+
+config_version=5
+
+[application]
+
+config/name="Chibigochi Memory Spike"
+run/main_scene=""
+
+[editor_plugins]
+
+enabled=PackedStringArray()

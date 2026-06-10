@@ -24,6 +24,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 TELEGRAM_HOST_DIR = ROOT / "hosts" / "telegram_gemini_bot"
 GODOT_HEADLESS_DIR = ROOT / "hosts" / "godot_headless"
+CHIBIGOCHI_SPIKE_DIR = ROOT / "hosts" / "chibigochi_spike"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -634,11 +635,37 @@ def run_telegram_local(keep_runtime: bool) -> DriverResult:
 
 
 def run_godot_headless(keep_runtime: bool, godot_bin: str | None) -> DriverResult:
+    return run_godot_script(
+        keep_runtime=keep_runtime,
+        godot_bin=godot_bin,
+        project_source=GODOT_HEADLESS_DIR,
+        script="res://test_runner.gd",
+        success_marker="HOST CONFORMANCE PASSED",
+    )
+
+
+def run_chibigochi_spike(keep_runtime: bool, godot_bin: str | None) -> DriverResult:
+    return run_godot_script(
+        keep_runtime=keep_runtime,
+        godot_bin=godot_bin,
+        project_source=CHIBIGOCHI_SPIKE_DIR,
+        script="res://spike_runner.gd",
+        success_marker="CHIBIGOCHI SPIKE PASSED",
+    )
+
+
+def run_godot_script(
+    keep_runtime: bool,
+    godot_bin: str | None,
+    project_source: Path,
+    script: str,
+    success_marker: str,
+) -> DriverResult:
     executable = find_godot_binary(godot_bin)
     runtime = Path(tempfile.mkdtemp(prefix="memory_engine_godot_headless_conformance_"))
     project_dir = runtime / "project"
     driver_runtime = runtime / "runtime"
-    shutil.copytree(GODOT_HEADLESS_DIR, project_dir)
+    shutil.copytree(project_source, project_dir)
     bin_dir = project_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(build_godot_extension(), bin_dir / godot_extension_filename())
@@ -661,32 +688,39 @@ def run_godot_headless(keep_runtime: bool, godot_bin: str | None) -> DriverResul
         )
         import_output = import_run.stdout
 
-        completed = subprocess.run(
-            [
-                executable,
-                "--headless",
-                "--path",
-                str(project_dir),
-                "--script",
-                "res://test_runner.gd",
-                "--",
-                "--runtime-dir",
-                str(driver_runtime),
-            ],
-            cwd=project_dir,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=120,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    executable,
+                    "--headless",
+                    "--path",
+                    str(project_dir),
+                    "--script",
+                    script,
+                    "--",
+                    "--runtime-dir",
+                    str(driver_runtime),
+                ],
+                cwd=project_dir,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as err:
+            output = err.stdout or ""
+            raise ConformanceError(
+                f"Godot script timed out after {err.timeout}s:\n{output}\n\n"
+                f"import pass exit={import_run.returncode}:\n{import_output}"
+            ) from err
         if completed.returncode != 0:
             raise ConformanceError(
                 "godot-headless exited with "
                 f"{completed.returncode}:\n{completed.stdout}\n\n"
                 f"import pass exit={import_run.returncode}:\n{import_output}"
             )
-        if "HOST CONFORMANCE PASSED" not in completed.stdout:
-            raise ConformanceError(f"godot-headless did not report success:\n{completed.stdout}")
+        if success_marker not in completed.stdout:
+            raise ConformanceError(f"Godot script did not report success:\n{completed.stdout}")
         fields = parse_conformance_output(completed.stdout)
         return DriverResult(
             runtime_dir=runtime,
@@ -751,7 +785,11 @@ def assert_core(package: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run host conformance scenarios.")
-    parser.add_argument("--host", choices=["direct", "telegram-local", "godot-headless"], default="direct")
+    parser.add_argument(
+        "--host",
+        choices=["direct", "telegram-local", "godot-headless", "chibigochi-spike"],
+        default="direct",
+    )
     parser.add_argument("--godot-bin", help="Godot executable for --host godot-headless")
     parser.add_argument("--keep-runtime", action="store_true")
     args = parser.parse_args()
@@ -763,6 +801,8 @@ def main() -> int:
             result = run_telegram_local(args.keep_runtime)
         elif args.host == "godot-headless":
             result = run_godot_headless(args.keep_runtime, args.godot_bin)
+        elif args.host == "chibigochi-spike":
+            result = run_chibigochi_spike(args.keep_runtime, args.godot_bin)
         else:
             raise ConformanceError(f"unsupported host: {args.host}")
     except Exception as err:
