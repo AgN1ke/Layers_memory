@@ -1956,8 +1956,14 @@ def sleep_events_transcript(events: list[Any]) -> str:
 
 def format_recall(recall_result: dict[str, Any]) -> str:
     items = recall_result.get("items", [])
+    notes = recall_result.get("notes") if isinstance(recall_result.get("notes"), list) else []
     if not items:
-        return "No archive memory found yet. Write something important, then use /sleep."
+        lines = ["No archive memory found yet. Write something important, then use /sleep."]
+        if notes:
+            lines.append("")
+            lines.append("Notes:")
+            lines.extend(f"- {note}" for note in notes)
+        return "\n".join(lines)
     lines = ["Recall:"]
     for index, item in enumerate(items, start=1):
         lines.append(f"{index}. [{item['relevance_score']:.2f}] {item['gist']}")
@@ -1965,6 +1971,10 @@ def format_recall(recall_result: dict[str, Any]) -> str:
             lines.append(f"   {item['narrative']}")
         if item.get("relevance_explanation"):
             lines.append(f"   {item['relevance_explanation']}")
+    if notes:
+        lines.append("")
+        lines.append("Notes:")
+        lines.extend(f"- {note}" for note in notes)
     return "\n".join(lines)
 
 

@@ -44,7 +44,7 @@ use crate::reflection::{
 };
 use crate::session::SessionRecord;
 use crate::sleep::{MemoryUnitPassResult, SleepCompressionResult};
-use crate::storage::Storage;
+use crate::storage::{Storage, StorageReadWarning};
 use crate::tasks::{PendingTask, TaskState, TaskType};
 use crate::types::{
     ImportanceHint, Link, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
@@ -192,6 +192,7 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(self
             .storage
             .load_tasks()?
+            .into_items()
             .into_iter()
             .filter(|task| matches!(task.state, TaskState::Pending | TaskState::Submitted))
             .collect())
@@ -201,6 +202,7 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(self
             .storage
             .read_archive(&ArchiveFilters::default())?
+            .into_items()
             .into_iter()
             .filter(|entry| entry.source_session_id == session_id)
             .filter(|entry| entry.status == ArchiveStatus::Complete)
@@ -401,6 +403,7 @@ impl<S: Storage> MemoryEngine<S> {
         let category_name = self
             .storage
             .read_core_store_categories()?
+            .into_items()
             .into_iter()
             .find(|category| {
                 category
@@ -501,28 +504,27 @@ impl<S: Storage> MemoryEngine<S> {
             });
         let query_text_for_core_ranking = query_text.clone();
 
-        let archive_relevant = self
-            .recall(RecallQuery {
-                schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
-                query_id: None,
-                created_at: Some(created_at.clone()),
-                session_id: Some(request.session_id.clone()),
-                context: json!({ "recent_text": query_text.clone().unwrap_or_default() }),
-                query_text,
-                filters: RecallFilters {
-                    source_layers: vec![RecallSourceLayer::Archive],
-                    ..RecallFilters::default()
-                },
-                limit: recall_limit,
-                include_core: false,
-                explain: false,
-            })?
-            .items;
+        let recall_result = self.recall(RecallQuery {
+            schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+            query_id: None,
+            created_at: Some(created_at.clone()),
+            session_id: Some(request.session_id.clone()),
+            context: json!({ "recent_text": query_text.clone().unwrap_or_default() }),
+            query_text,
+            filters: RecallFilters {
+                source_layers: vec![RecallSourceLayer::Archive],
+                ..RecallFilters::default()
+            },
+            limit: recall_limit,
+            include_core: false,
+            explain: false,
+        })?;
+        let archive_relevant = recall_result.items;
 
-        let core_facts = if request.include_core {
+        let (core_facts, core_read_warnings) = if request.include_core {
             self.core_context_facts(request.core_scope.as_deref())?
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let core_facts =
             rank_core_facts_for_query(core_facts, query_text_for_core_ranking.as_deref());
@@ -533,6 +535,8 @@ impl<S: Storage> MemoryEngine<S> {
         } else {
             Vec::new()
         };
+        notes.extend(recall_result.notes);
+        notes.extend(storage_warning_notes(&core_read_warnings));
 
         let budget_config = request
             .token_budget
@@ -560,10 +564,15 @@ impl<S: Storage> MemoryEngine<S> {
         })
     }
 
-    fn core_context_facts(&self, scope: Option<&str>) -> Result<Vec<CoreContextFact>> {
+    fn core_context_facts(
+        &self,
+        scope: Option<&str>,
+    ) -> Result<(Vec<CoreContextFact>, Vec<StorageReadWarning>)> {
         let normalized_scope = normalize_optional_string(scope);
+        let categories = self.storage.read_core_store_categories()?;
+        let warnings = categories.warnings;
         let mut facts = Vec::new();
-        for category in self.storage.read_core_store_categories()? {
+        for category in categories.items {
             let fact_category = category.category.clone();
             for fact in category.facts {
                 if !core_fact_visible_in_context(fact.status) {
@@ -591,7 +600,7 @@ impl<S: Storage> MemoryEngine<S> {
                 .then_with(|| left.category.cmp(&right.category))
                 .then_with(|| left.core_fact_id.cmp(&right.core_fact_id))
         });
-        Ok(facts)
+        Ok((facts, warnings))
     }
 
     pub fn sleep(&self, session_id: &str) -> Result<SleepStage1Result> {
@@ -801,6 +810,7 @@ impl<S: Storage> MemoryEngine<S> {
         let mut runs = self
             .storage
             .load_sleep_runs()?
+            .into_items()
             .into_iter()
             .filter(|run| run.stage != SleepRunStage::Finished)
             .collect::<Vec<_>>();
@@ -829,7 +839,10 @@ impl<S: Storage> MemoryEngine<S> {
     pub fn seed_core_from_archives(&self) -> Result<CoreArchiveSeedSummary> {
         self.ensure_manifest()?;
         let mut summary = CoreArchiveSeedSummary::default();
-        let archives = self.storage.read_archive(&ArchiveFilters::default())?;
+        let archives = self
+            .storage
+            .read_archive(&ArchiveFilters::default())?
+            .into_items();
         for archive in archives
             .into_iter()
             .filter(|archive| archive.status == ArchiveStatus::Complete)
@@ -1012,7 +1025,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     fn pending_fidelity_task_exists_unlocked(&self, memory_unit_id: &str) -> Result<bool> {
-        let tasks = self.storage.load_tasks()?;
+        let tasks = self.storage.load_tasks()?.into_items();
         Ok(tasks.into_iter().any(|task| {
             task.task_type == TaskType::MemoryFidelityPass
                 && task
@@ -1708,6 +1721,7 @@ impl<S: Storage> MemoryEngine<S> {
             let mut units = self
                 .storage
                 .read_archive(&ArchiveFilters::default())?
+                .into_items()
                 .into_iter()
                 .filter(|archive| archive.source_session_id == session_id)
                 .flat_map(|archive| archive.memory_units.into_iter())
@@ -1763,6 +1777,7 @@ impl<S: Storage> MemoryEngine<S> {
         let archives = self
             .storage
             .read_archive(&ArchiveFilters::default())?
+            .into_items()
             .into_iter()
             .filter(|archive| {
                 archive.source_session_id == session_id && archive.status == ArchiveStatus::Complete
@@ -1977,7 +1992,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     fn unit_has_core_link_unlocked(&self, unit: &MemoryUnit) -> Result<bool> {
-        for category in self.storage.read_core_store_categories()? {
+        for category in self.storage.read_core_store_categories()?.into_items() {
             for fact in category.facts {
                 if !core_fact_visible_in_context(fact.status) {
                     continue;
@@ -2009,6 +2024,7 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(self
             .storage
             .read_candidate_beliefs()?
+            .into_items()
             .into_iter()
             .filter(|candidate| candidate.status == CandidateStatus::Promoted)
             .any(|candidate| {
@@ -2235,7 +2251,7 @@ impl<S: Storage> MemoryEngine<S> {
 
     pub fn list_candidates(&self) -> Result<Vec<CandidateBelief>> {
         self.ensure_manifest()?;
-        self.storage.read_candidate_beliefs()
+        Ok(self.storage.read_candidate_beliefs()?.into_items())
     }
 
     pub fn review_candidate(&self, input: CandidateReviewInput) -> Result<CandidateReviewResult> {
@@ -2327,6 +2343,7 @@ impl<S: Storage> MemoryEngine<S> {
         let category_names = self
             .storage
             .read_core_store_categories()?
+            .into_items()
             .into_iter()
             .filter(|category| {
                 category.facts.iter().any(|fact| {
@@ -2393,6 +2410,7 @@ impl<S: Storage> MemoryEngine<S> {
         let archives = self
             .storage
             .read_archive(&ArchiveFilters::default())?
+            .into_items()
             .into_iter()
             .filter(|entry| entry.source_session_id == session_id)
             .filter(|entry| entry.status == ArchiveStatus::Complete)
@@ -2429,6 +2447,7 @@ impl<S: Storage> MemoryEngine<S> {
         let core_facts = self
             .storage
             .read_core_store_categories()?
+            .into_items()
             .into_iter()
             .flat_map(|category| {
                 let category_name = category.category.clone();
@@ -2471,6 +2490,7 @@ impl<S: Storage> MemoryEngine<S> {
         let archives = self
             .storage
             .read_archive(&ArchiveFilters::default())?
+            .into_items()
             .into_iter()
             .filter(|entry| entry.source_session_id == session_id)
             .filter(|entry| entry.status == ArchiveStatus::Complete)
@@ -2480,6 +2500,7 @@ impl<S: Storage> MemoryEngine<S> {
             for unit in self
                 .storage
                 .read_memory_units_for_archive(&archive.archive_id)?
+                .into_items()
             {
                 if unit.source_session_id != session_id {
                     continue;
@@ -2607,9 +2628,21 @@ impl<S: Storage> MemoryEngine<S> {
                 .source_layers
                 .contains(&RecallSourceLayer::Archive);
 
-        let mut archive_entries = if archive_enabled {
-            self.storage
-                .read_archive(&archive_filters_from_recall(&query.filters))?
+        let archive_read = if archive_enabled {
+            Some(
+                self.storage
+                    .read_archive(&archive_filters_from_recall(&query.filters))?,
+            )
+        } else {
+            None
+        };
+        let read_warnings = archive_read
+            .as_ref()
+            .map(|collection| collection.warnings.clone())
+            .unwrap_or_default();
+        let mut archive_entries = if let Some(collection) = archive_read {
+            collection
+                .items
                 .into_iter()
                 .filter(|entry| entry.status == ArchiveStatus::Complete)
                 .filter(|entry| {
@@ -2674,15 +2707,19 @@ impl<S: Storage> MemoryEngine<S> {
             items.push(recall_item_from_archive(entry, score, query.explain));
         }
 
+        let notes = storage_warning_notes(&read_warnings);
+
         Ok(RecallResult {
             schema_version: RECALL_RESULT_SCHEMA_VERSION.to_string(),
             query_id: query.query_id,
             created_at,
             stage_used: RecallStage::Stage1,
             items,
+            notes: notes.clone(),
             debug: query.explain.then_some(RecallDebug {
                 candidate_count,
                 filtered_count,
+                notes,
             }),
         })
     }
@@ -3842,6 +3879,10 @@ fn archive_with_pending_recall_stats(
         delta.last_recalled_at.as_deref(),
     );
     entry
+}
+
+fn storage_warning_notes(warnings: &[StorageReadWarning]) -> Vec<String> {
+    warnings.iter().map(StorageReadWarning::note).collect()
 }
 
 fn archive_age_days(entry: &ArchiveEntry, reference_at: &str) -> Option<f64> {

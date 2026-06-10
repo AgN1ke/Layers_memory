@@ -55,6 +55,8 @@ pub struct RecallResult {
     pub stage_used: RecallStage,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<RecallItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub debug: Option<RecallDebug>,
 }
@@ -91,4 +93,6 @@ pub struct RecallItem {
 pub struct RecallDebug {
     pub candidate_count: usize,
     pub filtered_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }

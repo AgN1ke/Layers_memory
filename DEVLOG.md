@@ -4893,3 +4893,27 @@ Unflushed recall stat deltas can be lost on process crash. This is intentional a
 
 **Conclusion:**
 B3 is fixed in code. Recall no longer rewrites archive entries per call, and repeated recall still affects ranking before the next flush.
+
+## Entry 98 - 2026-06-10 - A5 fix: tolerant collection reads
+
+**Problem:**
+Audit A5 showed that one malformed JSON file in a memory collection could make the whole read fail. In practice, a single broken archive file could break recall and `core_context_package` even though the rest of memory was intact.
+
+**Intent:**
+Make collection reads resilient without hiding corruption. Healthy files should still be used; broken files should remain in place and be reported to the owner.
+
+**What changed:**
+- Added `StorageCollection<T> { items, warnings }` and `StorageReadWarning`.
+- `FileStorage` now skips unreadable files when scanning archive entries, memory units, core-store categories, candidate beliefs, tasks, and sleep runs.
+- Point reads by id remain strict.
+- Recall and context packaging surface skipped files through `notes`.
+- Telegram `/recall` displays notes.
+
+**Checks:**
+- `cargo test --workspace` passed.
+- New scenarios:
+  - `engine_recall_and_context_skip_unreadable_archive_files_with_notes`
+  - `engine_context_skips_unreadable_core_store_files_with_notes`
+
+**Conclusion:**
+A5 is fixed in code. Memory reads now degrade softly when one collection member is corrupted, while the corrupted file stays visible for manual repair.

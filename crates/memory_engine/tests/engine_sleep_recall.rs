@@ -549,6 +549,126 @@ fn engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts() {
 }
 
 #[test]
+fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
+    let root = unique_temp_dir("engine_recall_skips_unreadable_archive_files");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user talked about a telescope.",
+        vec!["space"],
+    );
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    resume_test_sleep(
+        &mut engine,
+        &sleep_result,
+        "The user talked about a telescope.",
+        "The user discussed a telescope in a space conversation.",
+    );
+
+    let broken_dir = root.join("archive").join("2026").join("05");
+    fs::create_dir_all(&broken_dir).expect("create archive dir");
+    fs::write(broken_dir.join("broken.json"), "{ not valid json").expect("write broken archive");
+
+    let recall = engine
+        .recall(make_recall_query(
+            "telescope",
+            "2026-05-17T17:30:00.000Z",
+            "recall_with_broken_archive",
+        ))
+        .expect("recall with broken archive");
+    assert_eq!(recall.items.len(), 1);
+    assert!(recall
+        .notes
+        .iter()
+        .any(|note| note.contains("archive") && note.contains("broken.json")));
+    assert!(recall
+        .debug
+        .as_ref()
+        .expect("debug")
+        .notes
+        .iter()
+        .any(|note| note.contains("broken.json")));
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "telescope" }),
+            core_scope: None,
+            query_text: Some("telescope".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 5,
+            session_trace_event_limit: 5,
+            include_core: false,
+            token_budget: None,
+        })
+        .expect("context with broken archive");
+    assert_eq!(package.archive_relevant.len(), 1);
+    assert!(package
+        .notes
+        .iter()
+        .any(|note| note.contains("broken.json")));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_context_skips_unreadable_core_store_files_with_notes() {
+    let root = unique_temp_dir("engine_context_skips_unreadable_core_store_files");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user is testing core context.",
+        vec!["test"],
+    );
+    engine
+        .upsert_core_fact(CoreFactInput {
+            schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+            scope: Some("live_session".to_string()),
+            text: "The user likes astronomy.".to_string(),
+            category: "interest".to_string(),
+            confidence: 0.95,
+            source_archive_ids: vec![],
+            source_candidate_id: None,
+            tags: vec!["test".to_string()],
+        })
+        .expect("upsert core fact");
+
+    let core_dir = root.join("core").join("store");
+    fs::create_dir_all(&core_dir).expect("create core store dir");
+    fs::write(core_dir.join("broken.json"), "{ not valid json").expect("write broken core");
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "astronomy" }),
+            core_scope: Some("live_session".to_string()),
+            query_text: Some("astronomy".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 5,
+            session_trace_event_limit: 5,
+            include_core: true,
+            token_budget: None,
+        })
+        .expect("context with broken core store");
+
+    assert_eq!(package.core_facts.len(), 1);
+    assert!(package
+        .notes
+        .iter()
+        .any(|note| note.contains("core store") && note.contains("broken.json")));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_evidence_pack_uses_source_events_and_configured_neighbors() {
     let root = unique_temp_dir("engine_evidence_pack_uses_source_events_and_configured_neighbors");
     let storage = FileStorage::with_host_id(&root, "terminal");
