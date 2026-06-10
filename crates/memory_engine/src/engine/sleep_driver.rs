@@ -363,15 +363,11 @@ pub(super) fn preliminary_gist(events: &[&StoredEvent]) -> String {
         .collect::<Vec<_>>();
 
     if texts.is_empty() {
-        format!(
-            "РџРѕРїРµСЂРµРґРЅС–Р№ СЃРїРѕРіР°Рґ С–Р· {} РїРѕРґС–С—(Р№).",
-            events.len()
-        )
+        format!("Попередній спогад із {} події(й).", events.len())
     } else {
-        format!("РџРѕРїРµСЂРµРґРЅС–Р№ СЃРїРѕРіР°Рґ: {}.", texts.join(" / "))
+        format!("Попередній спогад: {}.", texts.join(" / "))
     }
 }
-
 pub(super) fn preliminary_narrative(session_id: &str, events: &[&StoredEvent]) -> String {
     let lines = events
         .iter()
@@ -389,17 +385,16 @@ pub(super) fn preliminary_narrative(session_id: &str, events: &[&StoredEvent]) -
 
     if lines.is_empty() {
         format!(
-            "РџРѕРїРµСЂРµРґРЅС–Р№ Р°СЂС…С–РІРЅРёР№ СЃРїРѕРіР°Рґ С–Р· СЃРµСЃС–С— {session_id}, СЃС‚РІРѕСЂРµРЅРёР№ Р°Р»РіРѕСЂРёС‚РјС–С‡РЅРѕ Р· {} РїРѕРґС–С—(Р№).",
+            "Попередній архівний спогад із сесії {session_id}, створений алгоритмічно з {} події(й).",
             events.len()
         )
     } else {
         format!(
-            "РџРѕРїРµСЂРµРґРЅС–Р№ Р°СЂС…С–РІРЅРёР№ СЃРїРѕРіР°Рґ С–Р· СЃРµСЃС–С— {session_id}. РљР»СЋС‡РѕРІС– РїРѕРґС–С—: {}",
+            "Попередній архівний спогад із сесії {session_id}. Ключові події: {}",
             lines.join(" | ")
         )
     }
 }
-
 pub(super) fn preliminary_facts(events: &[&StoredEvent]) -> Vec<WeightedFact> {
     events
         .iter()
@@ -998,8 +993,7 @@ pub(super) fn assemble_sleep_compression_from_tracks(
     let mut result = SleepCompressionResult {
         schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
         archive_id: run.archive_id.clone(),
-        gist: "РЎРµСЃС–СЏ Р·Р±РµСЂРµР¶РµРЅР° СЏРє РЅР°Р±С–СЂ РІР°Р¶Р»РёРІРёС… СЃРїРѕРіР°РґС–РІ."
-            .to_string(),
+        gist: "Сесія збережена як набір важливих спогадів.".to_string(),
         narrative: neutral_narrative_from_tracks(
             &serde_json::from_value::<Vec<crate::archive::EmotionalMarker>>(
                 emotional_markers.clone(),
@@ -1051,7 +1045,7 @@ pub(super) fn neutral_narrative_from_tracks(
             .map(|signal| signal.text.as_str())
             .collect::<Vec<_>>()
             .join("; ");
-        parts.push(format!("РћСЃРѕР±РёСЃС‚С– СЃРёРіРЅР°Р»Рё: {signals}."));
+        parts.push(format!("Особисті сигнали: {signals}."));
     }
     if !emotional_markers.is_empty() {
         let markers = emotional_markers
@@ -1060,9 +1054,7 @@ pub(super) fn neutral_narrative_from_tracks(
             .map(|marker| format!("{} ({})", marker.target, marker.affect))
             .collect::<Vec<_>>()
             .join("; ");
-        parts.push(format!(
-            "Р•РјРѕС†С–Р№РЅРѕ РїРѕРјС–С‚РЅС– РјРѕРјРµРЅС‚Рё: {markers}."
-        ));
+        parts.push(format!("Емоційно помітні моменти: {markers}."));
     }
     if !topic_thread.is_empty() {
         let topics = topic_thread
@@ -1077,17 +1069,16 @@ pub(super) fn neutral_narrative_from_tracks(
             })
             .collect::<Vec<_>>()
             .join("; ");
-        parts.push(format!("РўРµРјРё СЂРѕР·РјРѕРІРё: {topics}."));
+        parts.push(format!("Теми розмови: {topics}."));
     }
 
     if parts.is_empty() {
-        "РЎРµСЃС–СЏ Р±СѓР»Р° СЃС‚РёСЃРЅСѓС‚Р° Сѓ СЃС‚СЂСѓРєС‚СѓСЂРѕРІР°РЅС– С‚СЂРµРєРё, Р°Р»Рµ Р±РµР· РІРёСЂР°Р·РЅРёС… РґРѕРІРіРѕС‚СЂРёРІР°Р»РёС… СЃРёРіРЅР°Р»С–РІ."
+        "Сесія була стиснута у структуровані треки, але без виразних довготривалих сигналів."
             .to_string()
     } else {
         parts.join(" ")
     }
 }
-
 pub(super) fn fallback_archive_weight(result: &SleepCompressionResult) -> f64 {
     let strongest_emotion = result
         .emotional_markers

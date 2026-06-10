@@ -5043,3 +5043,36 @@ Rust privacy required internal helper functions and DTO fields that cross siblin
 
 **Conclusion:**
 B2 is closed as a mechanical refactor. The pre-v0.3 audit cleanup is now complete; no runtime behavior changed.
+
+## Entry 104 - 2026-06-10 - Pre-v0.3 polish: restore Ukrainian literals
+
+**Проблематика:**
+Після закриття pre-v0.3 audit cleanup у коді знайшли давні mojibake-літерали. Вони були не наслідком B2-розрізу, але розріз зробив їх видимими: українські стоп-слова у `meaningful_tokens` були зіпсовані, а fallback/preliminary archive prose міг показувати сміття замість нормального тексту.
+
+**Задум:**
+Закрити це маленькою гілкою перед стартом v0.3, бо дефект міг змінювати якість near-duplicate gate для українських фактів і робив fallback-архіви нечитабельними.
+
+**Що робили:**
+- Відновили українські стоп-слова в `crates/memory_engine/src/engine/recall_api.rs`.
+- Відновили український fallback/preliminary текст у `crates/memory_engine/src/engine/sleep_driver.rs`.
+- Додали регресійні тести в `crates/memory_engine/src/engine.rs`.
+- Додали HISTORY-запис, бо це поведінкова зміна для recall/near-duplicate і fallback prose.
+
+**Що зроблено:**
+`meaningful_tokens` тепер справді фільтрує `користувач`, `користувача`, `користувачу`, `дуже`, `любить`, `цікавиться`. Preliminary/fallback archive text знову людський український текст, а не mojibake. Тести фіксують обидва інваріанти, щоб Windows-кодування не зламало їх повторно.
+
+**Проблеми чи виклики:**
+PowerShell консоль досі може показувати українські файли як mojibake, тому перевіряти треба не виводом консолі, а тестами/байтами/UTF-8-safe tooling. Сам дефект не був security issue і не зачіпав runtime memory files.
+
+**Перевірки:**
+- `cargo test -p memory_engine engine::tests -- --nocapture` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `cargo fmt --check` passed.
+- `git diff --check` passed.
+- `python -m maturin develop --manifest-path crates\python_adapter\Cargo.toml` passed with the local venv.
+- `python -m pytest crates\python_adapter\tests -q` passed: 13 tests.
+- `python -m py_compile hosts\telegram_gemini_bot\bot.py` passed.
+
+**Висновок:**
+Mojibake-фікс закриває останній знайдений pre-v0.3 polish-дефект. Після merge цієї гілки можна переходити до планування v0.3 без відкритого cleanup-хвоста.

@@ -46,6 +46,31 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - Ukrainian fallback literals and stop words restored
+
+The post-audit review found that a small set of Ukrainian string literals had been mojibaked in an earlier Windows editing session. The broken literals affected Ukrainian stop-word filtering in recall/core near-duplicate checks and the human-readable fallback/preliminary archive prose used when LLM enrichment is unavailable.
+
+**What changed:**
+- `meaningful_tokens` now filters the intended Ukrainian stop words: `користувач`, `користувача`, `користувачу`, `дуже`, `любить`, and `цікавиться`.
+- Preliminary and deterministic fallback archive text now uses valid Ukrainian prose instead of mojibake.
+- Engine tests now assert that common Ukrainian user tokens are filtered and that fallback Ukrainian literals remain valid text.
+
+**What is retracted (if applicable):**
+- The implicit assumption that the Ukrainian stop-word list was active is retracted. The corrupted strings meant those words were not being filtered before this fix.
+
+**What is still true:**
+- The tokenizer and overlap algorithm are unchanged.
+- English stop-word filtering is unchanged.
+- LLM-enhanced archive records remain the preferred path; the restored fallback text only affects deterministic fallback/preliminary prose.
+- This does not change storage schemas or public API contracts.
+
+**What we are doing:**
+- Keep Windows file edits on UTF-8-safe paths and protect critical non-ASCII literals with tests.
+
+**Reproducibility anchor:**
+- `ukrainian_stop_words_filter_common_user_tokens`
+- `fallback_ukrainian_literals_are_valid_text`
+
 ## 2026-06-10 - Runtime sleep does not use the journal primitive yet
 
 The post-v0.2 audit found that the architecture described `memory/journal/` as an active crash-safety mechanism for multi-file sleep operations, while the runtime implementation actually relies on atomic single-file writes, durable `SleepRun` checkpoints, and idempotent Complete-archive event coverage.
