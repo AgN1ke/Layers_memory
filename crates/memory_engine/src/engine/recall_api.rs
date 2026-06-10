@@ -160,12 +160,12 @@ pub(super) fn meaningful_tokens(text: &str) -> BTreeSet<String> {
         "and",
         "this",
         "that",
-        "Р С”Р С•РЎР‚Р С‘РЎРѓРЎвЂљРЎС“Р Р†Р В°РЎвЂЎ",
-        "Р С”Р С•РЎР‚Р С‘РЎРѓРЎвЂљРЎС“Р Р†Р В°РЎвЂЎР В°",
-        "Р С”Р С•РЎР‚Р С‘РЎРѓРЎвЂљРЎС“Р Р†Р В°РЎвЂЎРЎС“",
-        "Р Т‘РЎС“Р В¶Р Вµ",
-        "Р В»РЎР‹Р В±Р С‘РЎвЂљРЎРЉ",
-        "РЎвЂ РЎвЂ“Р С”Р В°Р Р†Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ",
+        "користувач",
+        "користувача",
+        "користувачу",
+        "дуже",
+        "любить",
+        "цікавиться",
     ];
     let stop_words = stop_words.into_iter().collect::<BTreeSet<_>>();
     tokenize(text)
@@ -173,7 +173,6 @@ pub(super) fn meaningful_tokens(text: &str) -> BTreeSet<String> {
         .filter(|token| !stop_words.contains(token.as_str()))
         .collect()
 }
-
 pub(super) fn token_overlap_sets(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
     if left.is_empty() || right.is_empty() {
         return 0.0;

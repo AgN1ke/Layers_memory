@@ -162,7 +162,10 @@ impl<S: Storage> MemoryEngine<S> {}
 
 #[cfg(test)]
 mod tests {
-    use super::parse_consolidator_text;
+    use super::{
+        meaningful_tokens, neutral_narrative_from_tracks, parse_consolidator_text,
+        preliminary_gist, preliminary_narrative,
+    };
 
     #[test]
     fn parse_consolidator_text_accepts_plain_gist_and_narrative() {
@@ -217,5 +220,31 @@ mod tests {
         .expect_err("structured gist should be rejected");
 
         assert!(error.to_string().contains("consolidator_gist_rejected"));
+    }
+
+    #[test]
+    fn ukrainian_stop_words_filter_common_user_tokens() {
+        let tokens = meaningful_tokens("Користувач дуже любить космос і цікавиться Європою");
+
+        assert!(!tokens.contains("користувач"));
+        assert!(!tokens.contains("дуже"));
+        assert!(!tokens.contains("любить"));
+        assert!(!tokens.contains("цікавиться"));
+        assert!(tokens.contains("космос"));
+        assert!(tokens.contains("європою"));
+    }
+
+    #[test]
+    fn fallback_ukrainian_literals_are_valid_text() {
+        let gist = preliminary_gist(&[]);
+        let narrative = preliminary_narrative("session_a", &[]);
+        let neutral = neutral_narrative_from_tracks(&[], &[], &[]);
+
+        assert_eq!(gist, "Попередній спогад із 0 події(й).");
+        assert!(narrative.contains("Попередній архівний спогад"));
+        assert!(neutral.contains("Сесія була стиснута"));
+        assert!(!gist.contains('Р'));
+        assert!(!narrative.contains('Р'));
+        assert!(!neutral.contains('Р'));
     }
 }
