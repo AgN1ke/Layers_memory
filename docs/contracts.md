@@ -329,6 +329,8 @@ Sleep запускається окремим викликом `engine.sleep(ses
   "active_theme": "personal_background",
   "tags": ["personal_fact", "location", "work"],
   "archived_to": [],
+  "archived_event_ids": [],
+  "archived_event_index_complete": true,
   "notes": []
 }
 ```
@@ -343,7 +345,9 @@ Sleep запускається окремим викликом `engine.sleep(ses
 - `summary` - короткий машинно/людський підсумок;
 - `active_theme`;
 - `tags`;
-- `archived_to` - список `archive_id`, створених зі сесії;
+- `archived_to` - список complete `archive_id`, створених зі сесії;
+- `archived_event_ids` - перебудовний cache raw `event_id`, вже покритих Complete-архівами цієї сесії;
+- `archived_event_index_complete` - `true`, якщо cache можна читати без повного archive scan; старі metadata без цього поля перебудовуються з Complete archive entries;
 - `notes` - службові або людські нотатки.
 
 ### 4.2 session.md
@@ -1339,6 +1343,7 @@ memory/
 Джерела правди:
 
 - `events.jsonl` + `archived/events-<NNN>.jsonl` - правда для raw-подій сесії;
+- `session.json` `archived_event_ids` - cache покриття Complete-архівами, перебудовується з Archive entries і не є окремим джерелом правди;
 - `<archive_id>.json` - правда для архівного спогаду;
 - `<category>.json` - правда для Core Store;
 - `<candidate_id>.json` - правда для candidate belief;

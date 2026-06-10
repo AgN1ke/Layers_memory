@@ -4964,3 +4964,29 @@ No lock file was added intentionally. If a future workflow genuinely needs multi
 
 **Conclusion:**
 B4 is closed as an explicit operational rule. No runtime behavior changed.
+
+## Entry 101 - 2026-06-10 - A4 fix: archived-event coverage metadata cache
+
+**Problem:**
+Audit A4 still had one hot-path scan left after raw-event rotation and buffered recall stats. `core_context_package` and sleep selection needed to know which raw session events were already covered by Complete archives, but the old implementation rebuilt that set by scanning every archive file for the session.
+
+**Intent:**
+Remove the recurring archive scan from ordinary chat turns without making the cache a new source of truth. Archive entries and raw event files remain canonical; session metadata only carries a rebuildable coverage index.
+
+**What changed:**
+- Added `SessionMetadata.archived_event_ids` and `archived_event_index_complete`.
+- Exposed `read_session_metadata` / `write_session_metadata` through the Storage trait.
+- Successful sleep completion records Complete archive coverage into `session.json`.
+- `core_context_package` and sleep selection read the metadata cache on the normal path.
+- Legacy metadata with `archived_event_index_complete=false` rebuilds the cache once from Complete archive entries.
+- Kept the legacy `resume_sleep_compression` path compatible by updating the cache when it completes an archive outside the sleep-run driver.
+
+**Problems or challenges:**
+The metadata cache can be stale if edited manually or if old runtime data predates this schema. That is why missing/incomplete cache state is explicit and rebuildable. The cache is not a separate memory layer.
+
+**Checks:**
+- `cargo test -p memory_engine engine_context_rebuilds_legacy_archived_event_index` passed.
+- `cargo test -p memory_engine engine_sleep_run_driver_finishes_archive_and_seeds_core` passed.
+
+**Conclusion:**
+A4 step 3 is fixed in code. Ordinary context and sleep selection no longer need a full archive scan just to filter already-archived session events; the rebuild scan remains as a legacy/self-healing path.

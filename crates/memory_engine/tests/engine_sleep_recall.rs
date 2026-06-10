@@ -132,6 +132,69 @@ fn engine_context_keeps_preliminary_sleep_events_active() {
 }
 
 #[test]
+fn engine_context_rebuilds_legacy_archived_event_index() {
+    let root = unique_temp_dir("engine_context_rebuilds_legacy_archived_event_index");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Legacy archived event should be filtered after index rebuild.",
+        vec!["legacy_archive"],
+    );
+    let sleep_result = engine.sleep("live_session").expect("sleep stage1");
+    let source_event_id = sleep_result.archive_entry.source_event_ids[0].clone();
+    let archive_id = sleep_result.archive_entry.archive_id.clone();
+    resume_test_sleep(
+        &mut engine,
+        &sleep_result,
+        "Legacy archive gist.",
+        "Legacy archive narrative.",
+    );
+
+    let mut metadata = engine
+        .storage()
+        .read_session_metadata("live_session")
+        .expect("session metadata");
+    metadata.archived_to.clear();
+    metadata.archived_event_ids.clear();
+    metadata.archived_event_index_complete = false;
+    engine
+        .storage()
+        .write_session_metadata(&metadata)
+        .expect("write legacy-style session metadata");
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "What is active now?" }),
+            core_scope: None,
+            query_text: Some("legacy".to_string()),
+            recall_limit: 5,
+            session_recent_limit: 5,
+            session_trace_event_limit: 5,
+            include_core: false,
+            token_budget: None,
+        })
+        .expect("core context package");
+
+    assert!(package.session_trace.is_empty());
+    assert!(package.session_recent.is_empty());
+
+    let metadata = engine
+        .storage()
+        .read_session_metadata("live_session")
+        .expect("rebuilt session metadata");
+    assert!(metadata.archived_event_index_complete);
+    assert_eq!(metadata.archived_to, vec![archive_id]);
+    assert_eq!(metadata.archived_event_ids, vec![source_event_id]);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_sleep_uses_unarchived_events_only() {
     let root = unique_temp_dir("engine_sleep_uses_unarchived_events_only");
     let storage = FileStorage::with_host_id(&root, "terminal");
@@ -1912,6 +1975,17 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
         memory_engine::types::ModelRole::Reasoning
     );
     assert_only_pending_fidelity_task(&engine);
+
+    let metadata = engine
+        .storage()
+        .read_session_metadata("live_session")
+        .expect("session metadata after finish");
+    assert!(metadata.archived_event_index_complete);
+    assert_eq!(
+        metadata.archived_to,
+        vec![outcome.archive_entry.archive_id.clone()]
+    );
+    assert_eq!(metadata.archived_event_ids, vec![source_event_id.clone()]);
 
     let package = engine
         .core_context_package(CoreContextRequest {

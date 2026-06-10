@@ -4,7 +4,7 @@ use crate::event::StoredEvent;
 use crate::journal::JournalOperation;
 use crate::llm::SleepRun;
 use crate::manifest::Manifest;
-use crate::session::SessionRecord;
+use crate::session::{SessionMetadata, SessionRecord};
 use crate::tasks::PendingTask;
 use crate::Result;
 
@@ -49,6 +49,8 @@ pub trait Storage {
     fn write_manifest(&self, manifest: &Manifest) -> Result<()>;
 
     fn read_session(&self, session_id: &str) -> Result<SessionRecord>;
+    fn read_session_metadata(&self, session_id: &str) -> Result<SessionMetadata>;
+    fn write_session_metadata(&self, metadata: &SessionMetadata) -> Result<()>;
     fn read_session_archived_events(&self, session_id: &str) -> Result<Vec<StoredEvent>>;
     fn append_event(&self, session_id: &str, event: &StoredEvent) -> Result<()>;
     fn rotate_session_events(

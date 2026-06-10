@@ -162,18 +162,18 @@ impl FileStorage {
         self.root.join("journal").join(format!("{op_id}.json"))
     }
 
-    fn read_session_metadata(&self, session_id: &str) -> Result<SessionMetadata> {
+    fn read_session_metadata_file(&self, session_id: &str) -> Result<SessionMetadata> {
         read_json(&self.session_json_path(session_id))
     }
 
-    fn write_session_metadata(&self, metadata: &SessionMetadata) -> Result<()> {
+    fn write_session_metadata_file(&self, metadata: &SessionMetadata) -> Result<()> {
         atomic_write_json_relaxed(&self.session_json_path(&metadata.session_id), metadata)
     }
 
     fn upsert_session_metadata(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
         let path = self.session_json_path(session_id);
         let mut metadata = if path.exists() {
-            self.read_session_metadata(session_id)?
+            self.read_session_metadata_file(session_id)?
         } else {
             SessionMetadata {
                 schema_version: SESSION_SCHEMA_VERSION.to_string(),
@@ -188,6 +188,8 @@ impl FileStorage {
                 active_theme: event.theme.clone(),
                 tags: Vec::new(),
                 archived_to: Vec::new(),
+                archived_event_ids: Vec::new(),
+                archived_event_index_complete: true,
                 notes: Vec::new(),
             }
         };
@@ -205,7 +207,7 @@ impl FileStorage {
             }
         }
 
-        self.write_session_metadata(&metadata)
+        self.write_session_metadata_file(&metadata)
     }
 
     fn update_session_markdown(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
@@ -250,9 +252,21 @@ impl Storage for FileStorage {
     }
 
     fn read_session(&self, session_id: &str) -> Result<SessionRecord> {
-        let metadata = self.read_session_metadata(session_id)?;
+        let metadata = self.read_session_metadata_file(session_id)?;
         let events = read_jsonl(&self.events_path(session_id))?;
         Ok(SessionRecord { metadata, events })
+    }
+
+    fn read_session_metadata(&self, session_id: &str) -> Result<SessionMetadata> {
+        self.read_session_metadata_file(session_id)
+    }
+
+    fn write_session_metadata(&self, metadata: &SessionMetadata) -> Result<()> {
+        self.ensure_layout()?;
+        if let Some(parent) = self.session_json_path(&metadata.session_id).parent() {
+            fs::create_dir_all(parent)?;
+        }
+        self.write_session_metadata_file(metadata)
     }
 
     fn read_session_archived_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {

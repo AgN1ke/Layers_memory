@@ -199,15 +199,78 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     fn archived_event_ids_for_session(&self, session_id: &str) -> Result<HashSet<String>> {
-        Ok(self
+        self.with_resource_lock(session_lock_key(session_id), || {
+            self.archived_event_ids_for_session_unlocked(session_id)
+        })
+    }
+
+    fn archived_event_ids_for_session_unlocked(&self, session_id: &str) -> Result<HashSet<String>> {
+        let metadata = self.storage.read_session_metadata(session_id)?;
+        if metadata.archived_event_index_complete {
+            return Ok(metadata.archived_event_ids.into_iter().collect());
+        }
+        self.rebuild_archived_event_index_for_session_unlocked(session_id)
+    }
+
+    fn rebuild_archived_event_index_for_session_unlocked(
+        &self,
+        session_id: &str,
+    ) -> Result<HashSet<String>> {
+        let mut archive_ids = BTreeSet::new();
+        let mut event_ids = BTreeSet::new();
+
+        for entry in self
             .storage
             .read_archive(&ArchiveFilters::default())?
             .into_items()
             .into_iter()
             .filter(|entry| entry.source_session_id == session_id)
             .filter(|entry| entry.status == ArchiveStatus::Complete)
-            .flat_map(|entry| entry.source_event_ids)
-            .collect())
+        {
+            archive_ids.insert(entry.archive_id);
+            event_ids.extend(entry.source_event_ids);
+        }
+
+        let mut metadata = self.storage.read_session_metadata(session_id)?;
+        metadata.archived_to = archive_ids.into_iter().collect();
+        metadata.archived_event_ids = event_ids.iter().cloned().collect();
+        metadata.archived_event_index_complete = true;
+        self.storage.write_session_metadata(&metadata)?;
+
+        Ok(event_ids.into_iter().collect())
+    }
+
+    fn record_completed_archive_in_session_metadata_unlocked(
+        &self,
+        session_id: &str,
+        archive_entry: &ArchiveEntry,
+    ) -> Result<HashSet<String>> {
+        if archive_entry.source_session_id != session_id
+            || archive_entry.status != ArchiveStatus::Complete
+        {
+            return self.archived_event_ids_for_session_unlocked(session_id);
+        }
+
+        let mut metadata = self.storage.read_session_metadata(session_id)?;
+        if !metadata.archived_event_index_complete {
+            return self.rebuild_archived_event_index_for_session_unlocked(session_id);
+        }
+
+        let mut archive_ids = metadata.archived_to.into_iter().collect::<BTreeSet<_>>();
+        archive_ids.insert(archive_entry.archive_id.clone());
+
+        let mut event_ids = metadata
+            .archived_event_ids
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        event_ids.extend(archive_entry.source_event_ids.iter().cloned());
+
+        metadata.archived_to = archive_ids.into_iter().collect();
+        metadata.archived_event_ids = event_ids.iter().cloned().collect();
+        metadata.archived_event_index_complete = true;
+        self.storage.write_session_metadata(&metadata)?;
+
+        Ok(event_ids.into_iter().collect())
     }
 
     fn read_session_events_with_archived(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
@@ -464,6 +527,7 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         let created_at = now_rfc3339()?;
+        let archived_event_ids = self.archived_event_ids_for_session(&request.session_id)?;
         let session = self.storage.read_session(&request.session_id)?;
         let recent_limit = if request.session_recent_limit == 0 {
             self.options.context.default_session_recent_limit
@@ -481,8 +545,6 @@ impl<S: Storage> MemoryEngine<S> {
             request.recall_limit
         };
 
-        let archived_event_ids =
-            self.archived_event_ids_for_session(&session.metadata.session_id)?;
         let session_recent = session_context_events(&session, recent_limit, &archived_event_ids);
         let session_trace = session_context_events(&session, trace_limit, &archived_event_ids);
         let query_text = request
@@ -641,7 +703,7 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         let archived_event_ids =
-            self.archived_event_ids_for_session(&session.metadata.session_id)?;
+            self.archived_event_ids_for_session_unlocked(&session.metadata.session_id)?;
         let unarchived_events = session
             .events
             .iter()
@@ -761,7 +823,7 @@ impl<S: Storage> MemoryEngine<S> {
             apply_sleep_run_tags(&mut sleep_result, &run);
 
             let mut archive_entry =
-                self.resume_sleep_compression(&run.sleep_task_id, sleep_result)?;
+                self.resume_sleep_compression_unlocked(&run.sleep_task_id, sleep_result)?;
 
             if let Some(memory_unit_task_id) = run.memory_unit_task_id.clone() {
                 let memory_unit_result = run
@@ -777,7 +839,7 @@ impl<S: Storage> MemoryEngine<S> {
             let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
             let fidelity_requests = self.auto_route_memory_fidelity_requests(&archive_entry)?;
             let covered_event_ids = self
-                .archived_event_ids_for_session(&session_id)?
+                .record_completed_archive_in_session_metadata_unlocked(&session_id, &archive_entry)?
                 .into_iter()
                 .collect::<Vec<_>>();
             let _ = self
@@ -1076,6 +1138,27 @@ impl<S: Storage> MemoryEngine<S> {
         result.validate_basic()?;
         self.ensure_manifest()?;
 
+        let archive_entry = self.storage.read_archive_entry_by_id(&result.archive_id)?;
+        let session_id = archive_entry.source_session_id.clone();
+        self.with_resource_lock(session_lock_key(&session_id), || {
+            self.resume_sleep_compression_unlocked(task_id, result)
+        })
+    }
+
+    fn resume_sleep_compression_unlocked(
+        &self,
+        task_id: &str,
+        result: SleepCompressionResult,
+    ) -> Result<ArchiveEntry> {
+        if result.schema_version != SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION {
+            return Err(MemoryEngineError::IncompatibleSchema {
+                expected: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+                actual: result.schema_version.clone(),
+            });
+        }
+        result.validate_basic()?;
+        self.ensure_manifest()?;
+
         let mut task = self.storage.load_task(task_id)?;
 
         if task.task_type != TaskType::SleepCompression {
@@ -1092,6 +1175,10 @@ impl<S: Storage> MemoryEngine<S> {
             task.updated_at = now;
             task.last_error = None;
             self.storage.save_task(&task)?;
+            self.record_completed_archive_in_session_metadata_unlocked(
+                &archive_entry.source_session_id,
+                &archive_entry,
+            )?;
             return Ok(archive_entry);
         }
 
@@ -1123,6 +1210,10 @@ impl<S: Storage> MemoryEngine<S> {
         task.updated_at = now;
         task.last_error = None;
         self.storage.save_task(&task)?;
+        self.record_completed_archive_in_session_metadata_unlocked(
+            &archive_entry.source_session_id,
+            &archive_entry,
+        )?;
 
         Ok(archive_entry)
     }
