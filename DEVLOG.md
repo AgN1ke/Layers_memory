@@ -4943,3 +4943,24 @@ This intentionally does not implement Markdown exports. The current choice is to
 
 **Conclusion:**
 A7 is closed as a documentation-sync fix. No runtime behavior changed.
+
+## Entry 100 - 2026-06-10 - B4 fix: document the single-writer process model
+
+**Problem:**
+Audit B4 noted that Memory Engine concurrency guarantees are in-process. `LockRegistry` protects many threads/sessions inside one `MemoryEngine` process, but two separate processes pointed at the same `memory/` directory do not share those locks.
+
+**Intent:**
+Make the operational boundary explicit without adding speculative filesystem lock files. The current supported model is one writer process per runtime memory directory.
+
+**What changed:**
+- `docs/local-development.md` now warns not to run `memory_terminal`, local harness, or a live Telegram bot as a second writer over the same `hosts/telegram_gemini_bot/runtime/memory`.
+- `docs/audit-2026-06-10.md` marks B4 closed and notes that architecture §13 already documents the in-process concurrency model.
+
+**Problems or challenges:**
+No lock file was added intentionally. If a future workflow genuinely needs multiple processes over one memory directory, that should become a real feature with explicit read-only/write-lock behavior.
+
+**Checks:**
+- Documentation-only change.
+
+**Conclusion:**
+B4 is closed as an explicit operational rule. No runtime behavior changed.
