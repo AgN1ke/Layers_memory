@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -76,11 +77,20 @@ pub struct MemoryEngine<S> {
     options: EngineOptions,
     manifest_initialized: AtomicBool,
     locks: LockRegistry,
+    recall_stats: Mutex<HashMap<String, RecallStatDelta>>,
+    recall_stats_flush_lock: Mutex<()>,
+    recall_calls_since_flush: AtomicU64,
 }
 
 #[derive(Debug, Default)]
 struct LockRegistry {
     resources: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RecallStatDelta {
+    added_count: u64,
+    last_recalled_at: Option<String>,
 }
 
 impl LockRegistry {
@@ -106,6 +116,9 @@ impl<S> MemoryEngine<S> {
             options,
             manifest_initialized: AtomicBool::new(false),
             locks: LockRegistry::default(),
+            recall_stats: Mutex::new(HashMap::new()),
+            recall_stats_flush_lock: Mutex::new(()),
+            recall_calls_since_flush: AtomicU64::new(0),
         }
     }
 
@@ -207,6 +220,99 @@ impl<S: Storage> MemoryEngine<S> {
                 .then_with(|| left.event_id.cmp(&right.event_id))
         });
         Ok(events)
+    }
+
+    fn recall_stats_snapshot(&self) -> Result<HashMap<String, RecallStatDelta>> {
+        let stats = self.recall_stats.lock().map_err(|_| {
+            MemoryEngineError::Storage("recall stats mutex was poisoned".to_string())
+        })?;
+        Ok(stats.clone())
+    }
+
+    fn record_recall_stats(&self, archive_ids: &[String], recalled_at: &str) -> Result<()> {
+        if archive_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut stats = self.recall_stats.lock().map_err(|_| {
+            MemoryEngineError::Storage("recall stats mutex was poisoned".to_string())
+        })?;
+        for archive_id in archive_ids {
+            let delta = stats.entry(archive_id.clone()).or_default();
+            delta.added_count = delta.added_count.saturating_add(1);
+            delta.last_recalled_at =
+                newest_timestamp(delta.last_recalled_at.as_deref(), Some(recalled_at));
+        }
+        self.recall_calls_since_flush
+            .fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn recall_flush_due(&self) -> bool {
+        let interval = self.options.recall.stats_flush_interval;
+        interval > 0 && self.recall_calls_since_flush.load(Ordering::Relaxed) >= interval
+    }
+
+    fn restore_recall_stats(&self, pending: HashMap<String, RecallStatDelta>) -> Result<()> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let mut stats = self.recall_stats.lock().map_err(|_| {
+            MemoryEngineError::Storage("recall stats mutex was poisoned".to_string())
+        })?;
+        for (archive_id, delta) in pending {
+            let current = stats.entry(archive_id).or_default();
+            current.added_count = current.added_count.saturating_add(delta.added_count);
+            current.last_recalled_at = newest_timestamp(
+                current.last_recalled_at.as_deref(),
+                delta.last_recalled_at.as_deref(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn flush_recall_stats(&self) -> Result<usize> {
+        let _flush_guard = self.recall_stats_flush_lock.lock().map_err(|_| {
+            MemoryEngineError::Storage("recall stats flush mutex was poisoned".to_string())
+        })?;
+
+        let (mut pending, taken_call_count) = {
+            let mut stats = self.recall_stats.lock().map_err(|_| {
+                MemoryEngineError::Storage("recall stats mutex was poisoned".to_string())
+            })?;
+            if stats.is_empty() {
+                self.recall_calls_since_flush.store(0, Ordering::Relaxed);
+                return Ok(0);
+            }
+            let taken_call_count = self.recall_calls_since_flush.swap(0, Ordering::Relaxed);
+            (mem::take(&mut *stats), taken_call_count)
+        };
+
+        let mut flushed = 0usize;
+        for archive_id in pending.keys().cloned().collect::<Vec<_>>() {
+            let Some(delta) = pending.remove(&archive_id) else {
+                continue;
+            };
+            let result = self.with_resource_lock(archive_lock_key(&archive_id), || {
+                let mut entry = self.storage.read_archive_entry_by_id(&archive_id)?;
+                entry.recall_count = entry.recall_count.saturating_add(delta.added_count);
+                entry.last_recalled_at = newest_timestamp(
+                    entry.last_recalled_at.as_deref(),
+                    delta.last_recalled_at.as_deref(),
+                );
+                self.storage.update_archive_entry(&archive_id, &entry)
+            });
+            if let Err(err) = result {
+                pending.insert(archive_id, delta);
+                self.restore_recall_stats(pending)?;
+                self.recall_calls_since_flush
+                    .fetch_add(taken_call_count, Ordering::Relaxed);
+                return Err(err);
+            }
+            flushed += 1;
+        }
+        Ok(flushed)
     }
 
     pub fn upsert_core_fact(&self, input: CoreFactInput) -> Result<CoreFactUpsertResult> {
@@ -668,6 +774,7 @@ impl<S: Storage> MemoryEngine<S> {
             let _ = self
                 .storage
                 .rotate_session_events(&session_id, &covered_event_ids)?;
+            self.flush_recall_stats()?;
             run.stage = SleepRunStage::Finished;
             run.completion_mode = Some(
                 run.completion_mode
@@ -2477,17 +2584,23 @@ impl<S: Storage> MemoryEngine<S> {
         validate_recall_query(&query)?;
         self.ensure_manifest()?;
 
-        if let Some(session_id) = query.session_id.clone() {
+        let result = if let Some(session_id) = query.session_id.clone() {
             self.with_resource_lock(session_lock_key(&session_id), || {
                 self.recall_unlocked(query)
             })
         } else {
             self.with_resource_lock("archive:all".to_string(), || self.recall_unlocked(query))
+        }?;
+
+        if self.recall_flush_due() {
+            self.flush_recall_stats()?;
         }
+        Ok(result)
     }
 
     fn recall_unlocked(&self, query: RecallQuery) -> Result<RecallResult> {
         let created_at = query.created_at.clone().map_or_else(now_rfc3339, Ok)?;
+        let pending_recall_stats = self.recall_stats_snapshot()?;
         let archive_enabled = query.filters.source_layers.is_empty()
             || query
                 .filters
@@ -2514,7 +2627,14 @@ impl<S: Storage> MemoryEngine<S> {
         let mut scored_entries = archive_entries
             .drain(..)
             .filter_map(|entry| {
-                let scored = score_archive_entry(&entry, &query, &created_at, &self.options.recall);
+                let delta = pending_recall_stats.get(&entry.archive_id);
+                let effective_entry = archive_with_pending_recall_stats(entry, delta);
+                let scored = score_archive_entry(
+                    &effective_entry,
+                    &query,
+                    &created_at,
+                    &self.options.recall,
+                );
                 if query
                     .filters
                     .min_freshness
@@ -2522,7 +2642,7 @@ impl<S: Storage> MemoryEngine<S> {
                 {
                     None
                 } else {
-                    Some((entry, scored))
+                    Some((effective_entry, scored))
                 }
             })
             .collect::<Vec<_>>();
@@ -2544,12 +2664,13 @@ impl<S: Storage> MemoryEngine<S> {
 
         let selected_entries = scored_entries.into_iter().take(limit).collect::<Vec<_>>();
         let mut items = Vec::with_capacity(selected_entries.len());
+        let selected_archive_ids = selected_entries
+            .iter()
+            .map(|(entry, _)| entry.archive_id.clone())
+            .collect::<Vec<_>>();
+        self.record_recall_stats(&selected_archive_ids, &created_at)?;
 
-        for (mut entry, score) in selected_entries {
-            entry.recall_count += 1;
-            entry.last_recalled_at = Some(created_at.clone());
-            self.storage
-                .update_archive_entry(&entry.archive_id, &entry)?;
+        for (entry, score) in selected_entries {
             items.push(recall_item_from_archive(entry, score, query.explain));
         }
 
@@ -2623,6 +2744,7 @@ pub struct RecallStage1Config {
     pub recent_recall_bonus: f64,
     pub recent_recall_half_life_days: f64,
     pub max_recall_boost_factor: f64,
+    pub stats_flush_interval: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2674,6 +2796,7 @@ impl Default for RecallStage1Config {
             recent_recall_bonus: 0.10,
             recent_recall_half_life_days: 30.0,
             max_recall_boost_factor: 1.25,
+            stats_flush_interval: 100,
         }
     }
 }
@@ -3705,6 +3828,22 @@ fn score_archive_entry(
     }
 }
 
+fn archive_with_pending_recall_stats(
+    mut entry: ArchiveEntry,
+    delta: Option<&RecallStatDelta>,
+) -> ArchiveEntry {
+    let Some(delta) = delta else {
+        return entry;
+    };
+
+    entry.recall_count = entry.recall_count.saturating_add(delta.added_count);
+    entry.last_recalled_at = newest_timestamp(
+        entry.last_recalled_at.as_deref(),
+        delta.last_recalled_at.as_deref(),
+    );
+    entry
+}
+
 fn archive_age_days(entry: &ArchiveEntry, reference_at: &str) -> Option<f64> {
     timestamp_age_days(&entry.time_range.end, reference_at)
         .or_else(|| timestamp_age_days(&entry.updated_at, reference_at))
@@ -3722,6 +3861,33 @@ fn timestamp_age_days(older_timestamp: &str, newer_timestamp: &str) -> Option<f6
 
 fn parse_rfc3339(timestamp: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(timestamp, &Rfc3339).ok()
+}
+
+fn newest_timestamp(left: Option<&str>, right: Option<&str>) -> Option<String> {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            let left_time = parse_rfc3339(left);
+            let right_time = parse_rfc3339(right);
+            match (left_time, right_time) {
+                (Some(left_time), Some(right_time)) if right_time > left_time => {
+                    Some(right.to_string())
+                }
+                (Some(_), Some(_)) => Some(left.to_string()),
+                (None, Some(_)) => Some(right.to_string()),
+                (Some(_), None) => Some(left.to_string()),
+                (None, None) => {
+                    if right > left {
+                        Some(right.to_string())
+                    } else {
+                        Some(left.to_string())
+                    }
+                }
+            }
+        }
+        (Some(left), None) => Some(left.to_string()),
+        (None, Some(right)) => Some(right.to_string()),
+        (None, None) => None,
+    }
 }
 
 fn half_life_decay_factor(age_days: f64, half_life_days: f64) -> f64 {
@@ -4775,6 +4941,10 @@ fn session_lock_key(session_id: &str) -> String {
 
 fn core_lock_key(category: &str) -> String {
     format!("core:{category}")
+}
+
+fn archive_lock_key(archive_id: &str) -> String {
+    format!("archive:{archive_id}")
 }
 
 fn candidate_lock_key(candidate_id: &str) -> String {

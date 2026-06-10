@@ -274,6 +274,10 @@ impl PyMemoryEngine {
         dump_json(&result, "recall result")
     }
 
+    fn flush_recall_stats(&self, py: Python<'_>) -> PyResult<usize> {
+        run_without_gil(py, || self.inner.flush_recall_stats())
+    }
+
     fn core_context_package(&self, py: Python<'_>, request_json: &str) -> PyResult<String> {
         let request: CoreContextRequest = parse_json(request_json, "core context request")?;
         let package = run_without_gil(py, || self.inner.core_context_package(request))?;

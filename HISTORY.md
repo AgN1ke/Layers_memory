@@ -46,6 +46,33 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - Recall stats are buffered instead of written on every recall
+
+The post-v0.2 audit found that `recall()` rewrote archive entry files on every returned memory just to increment `recall_count` and `last_recalled_at`. That made recall a write-heavy operation and created avoidable write-back races around archive files.
+
+**What changed:**
+- `MemoryEngine` now buffers recall stat deltas in memory.
+- Recall scoring includes pending buffered deltas, so repeated recalls can still protect a memory before the next disk flush.
+- `recall()` no longer calls `update_archive_entry` for every selected archive item.
+- Added `flush_recall_stats()` to write buffered `recall_count` / `last_recalled_at` updates in batches.
+- `finish_sleep_run` calls `flush_recall_stats()` as a natural consolidation point.
+- `RecallStage1Config` now includes `stats_flush_interval` for periodic automatic flushing; `0` disables interval flushing.
+- PyO3 exposes `flush_recall_stats()` for host shutdown or maintenance.
+
+**What is retracted (if applicable):**
+- Nothing is retracted, but the precision of recall counters is explicitly advisory. Unflushed deltas can be lost if the process crashes before a flush.
+
+**What is still true:**
+- Stored archive entries still contain `recall_count` and `last_recalled_at`.
+- Recall ranking still uses the same count/recent-recall boost formula; it now uses persisted values plus pending deltas.
+- Core memory, archive content, and memory units are not affected by losing an unflushed advisory counter delta.
+
+**What we are doing:**
+- Continue the audit queue with engine module split and tolerant collection reads before v0.3 adapter work.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_sleep_recall engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts`
+
 ## 2026-06-10 - Completed sleep rotates archived raw session events
 
 The post-v0.2 audit found that long-lived host sessions kept all raw events in one active `sessions/<session_id>/events.jsonl` file. Even after those events were covered by Complete archives, every `read_session` call still parsed the full raw chat history.
