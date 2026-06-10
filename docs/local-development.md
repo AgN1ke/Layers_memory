@@ -182,6 +182,8 @@ cargo run -p memory_engine --bin memory_terminal -- memory
 
 Plain text без `/` записується як `IngestEvent` у поточну сесію.
 
+**Важливо про одночасний доступ.** Конкурентність Memory Engine у v0.2 є внутрішньопроцесною: один процес може безпечно обробляти багато потоків/сесій через `LockRegistry`, але два окремі процеси над одним `memory/` каталогом не синхронізовані. Не запускай `memory_terminal` проти `hosts/telegram_gemini_bot/runtime/memory`, поки живий Telegram bot пише у цю саму runtime-теку. Для debug використовуй окрему scratch-теку або спершу зупини bot через `run_dev_bot.ps1`.
+
 ## Як Запустити Telegram Gemini Bot
 
 Host-застосунок лежить окремо:
@@ -242,6 +244,8 @@ hosts/telegram_gemini_bot/runtime/memory
 ```
 
 Ця runtime тека ігнорується git.
+
+Не відкривати цю теку другим writer-процесом. Живий bot, local harness і `memory_terminal` мають або працювати по черзі, або використовувати різні memory directories.
 
 Runtime log host-бота:
 
