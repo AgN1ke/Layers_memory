@@ -5200,3 +5200,29 @@ Godot adapter компілюється як GDExtension crate, а headless confo
 
 **Висновок:**
 Godot path перейшов із плану в scaffold: є GDExtension adapter, headless project і conformance command. Але v0.3 Godot acceptance ще не зарахований до реального headless-прогону з Godot binary.
+
+## Entry 109 - 2026-06-10 - Godot headless live conformance fixed and accepted
+
+**Проблематика:**
+Перший Godot scaffold компілювався, але реальний Godot 4.6 headless прогін показав, що compile-check не доводить працездатність GDExtension межі. Живий запуск знайшов версійний mismatch, відсутній import pass, GDScript type errors, декоративний failure-flow і Godot JSON number round-trip (`usize`/`u32` приходили назад як `3000.0`/`3.0`).
+
+**Задум:**
+Закрити саме реальний Godot шлях, а не лише scaffold: adapter має приймати Godot-форму JSON без host-side знання про serde, headless runner має жорстко падати на fail, а Python conformance має сам робити import/cache pass перед script-run.
+
+**Що робили:**
+- `hosts/godot_headless/memory_engine.gdextension` тепер чесно вимагає Godot 4.6, що відповідає godot-rust `0.5.3`.
+- `crates/godot_adapter/src/lib.rs` нормалізує integer-shaped Godot floats у JSON перед `serde_json::from_value`, не чіпаючи дробові ваги на кшталт `0.95`.
+- `hosts/godot_headless/test_runner.gd` отримав явні типи для `_loads` результатів і failure guard, щоб `_fail` не міг завершитись фальшивим `HOST CONFORMANCE PASSED`.
+- `tests/host_conformance/host_conformance.py --host godot-headless` шукає Godot 4.6 console binary у `%TEMP%\godot_conformance`, робить headless editor/import pass, а фінальним gate вважає script-run exit 0 + `HOST CONFORMANCE PASSED`.
+
+**Що зроблено:**
+Реальний Godot 4.6 stable console пройшов повний shared conformance scenario через GDExtension adapter: `HOST CONFORMANCE PASSED`, `memory_units=3`, `core_facts=3`. Це зараховує Godot-headless slice v0.3.
+
+**Проблеми чи виклики:**
+Godot 4.6 console у локальному середовищі може завершувати import/editor pass із crash-code після успішного створення `.godot` cache. Runner не зараховує цей pass як acceptance; він використовує його як cache warm-up, а реальний gate — окремий script-run. Якщо script-run падає, runner показує і stdout import pass-а, і stdout script-run-а.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless` passed.
+
+**Висновок:**
+Godot більше не є лише scaffold. Є перший не-Telegram host, що реально проходить той самий автоматизований memory conformance сценарій через тонкий adapter.

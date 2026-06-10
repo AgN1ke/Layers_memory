@@ -86,6 +86,7 @@ def find_godot_binary(explicit: str | None = None) -> str:
     candidates = [
         explicit,
         os.environ.get("GODOT_BIN"),
+        *discover_temp_godot_binaries(),
         shutil.which("godot4"),
         shutil.which("godot"),
     ]
@@ -95,6 +96,21 @@ def find_godot_binary(explicit: str | None = None) -> str:
     raise ConformanceError(
         "Godot executable not found. Set GODOT_BIN or pass --godot-bin for --host godot-headless."
     )
+
+
+def discover_temp_godot_binaries() -> list[str]:
+    temp_root = Path(tempfile.gettempdir()) / "godot_conformance"
+    if not temp_root.exists():
+        return []
+    binaries = [path for path in temp_root.rglob("*.exe") if "godot" in path.name.lower()]
+
+    def score(path: Path) -> tuple[int, int, str]:
+        name = path.name.lower()
+        version_score = 0 if "4.6" in name else 1
+        console_score = 0 if "console" in name else 1
+        return (version_score, console_score, str(path))
+
+    return [str(path) for path in sorted(binaries, key=score)]
 
 
 def godot_extension_filename() -> str:
@@ -619,6 +635,23 @@ def run_godot_headless(keep_runtime: bool, godot_bin: str | None) -> DriverResul
     shutil.copy2(build_godot_extension(), bin_dir / godot_extension_filename())
 
     try:
+        import_run = subprocess.run(
+            [
+                executable,
+                "--headless",
+                "--editor",
+                "--quit",
+                "--path",
+                str(project_dir),
+            ],
+            cwd=project_dir,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=120,
+        )
+        import_output = import_run.stdout
+
         completed = subprocess.run(
             [
                 executable,
@@ -639,7 +672,9 @@ def run_godot_headless(keep_runtime: bool, godot_bin: str | None) -> DriverResul
         )
         if completed.returncode != 0:
             raise ConformanceError(
-                f"godot-headless exited with {completed.returncode}:\n{completed.stdout}"
+                "godot-headless exited with "
+                f"{completed.returncode}:\n{completed.stdout}\n\n"
+                f"import pass exit={import_run.returncode}:\n{import_output}"
             )
         if "HOST CONFORMANCE PASSED" not in completed.stdout:
             raise ConformanceError(f"godot-headless did not report success:\n{completed.stdout}")
