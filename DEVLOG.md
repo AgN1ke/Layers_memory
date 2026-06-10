@@ -5263,3 +5263,38 @@ Accepted v0.3 hosts are:
 - `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host direct` passed.
 - `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host telegram-local` passed.
 - `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless --godot-bin <Godot 4.6 stable console>` passed: `memory_units=3`, `core_facts=3`.
+
+## Entry 111 - 2026-06-10 - Local Godot binary pinned for repeatable conformance
+
+**Проблематика:**
+Після v0.3 close Godot-headless conformance вже працював, але для локального запуску треба було явно передавати `--godot-bin` або тримати binary у `%TEMP%`. Власник додав Godot у корінь репозиторію, і треба було зробити з цього стабільний dev-шлях без ризику випадково закомітити 170MB executable.
+
+**Задум:**
+Залишити Godot як локальний tool binary, не як частину репозиторію. Runner має сам знаходити repo-local Godot і запускати conformance без ручних env-змінних.
+
+**Що робили:**
+- Перенесено `Godot_v4.6.3-stable_win64.exe` і `Godot_v4.6.3-stable_win64_console.exe` у `tools/godot/`.
+- Додано `tools/godot/` у `.gitignore`, щоб бінарники не потрапили в git.
+- Оновлено `tests/host_conformance/host_conformance.py`: `find_godot_binary()` тепер шукає `tools/godot/*.exe` перед `%TEMP%`, `GODOT_BIN` і PATH fallback.
+- Оновлено `docs/local-development.md` з локальним Godot tool path і командою запуску.
+
+**Що зроблено:**
+Команда Godot conformance тепер працює без `--godot-bin` на цій машині:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless
+```
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile tests\host_conformance\host_conformance.py` passed.
+- `git diff --check` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host direct` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host telegram-local` passed.
+
+**Коміти:**
+- `2a55956 Ignore local Godot tool binaries`
+- `fdf38f8 Discover repo-local Godot tool binary`
+
+**Висновок:**
+Це не змінює memory behavior і не потребує HISTORY-запису. Це закриває локальний dev-loop для Godot: conformance можна запускати повторювано без ручного шляху до binary і без ризику закомітити executable.
