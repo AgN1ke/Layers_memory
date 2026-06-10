@@ -5130,3 +5130,40 @@ Direct conformance доводив Python adapter boundary, але ще не пе
 
 **Висновок:**
 v0.3 тепер має два автоматизовані conformance рівні: direct adapter baseline і Telegram host без Telegram transport. Наступний логічний крок — Godot-headless або Telegram-live smoke, залежно від того, що потрібно довести першим.
+
+## Entry 107 - 2026-06-10 - Session summary: audit close to v0.3 conformance start
+
+**Проблематика:**
+Сесія почалась із зовнішнього audit-verdict від Claude: pre-v0.3 cleanup було перевірено по коду й gates, але додатково знайдено давній mojibake-дефект в українських literals. Після цього власник уточнив, що v0.3 не можна приймати ручним тестуванням у Telegram/Godot, бо це вимагає великої інфраструктури й перекладає acceptance на людину.
+
+**Задум:**
+Закрити останній audit-polish хвіст і перевести v0.3 у режим автоматизованого host-conformance: один сценарій, багато хостів, мінімум ручної перевірки.
+
+**Що робили:**
+- Закрили mojibake-дефект українських стоп-слів і fallback archive prose.
+- Зафіксували поведінкову зміну в `HISTORY.md`.
+- Зафіксували v0.3 acceptance як host conformance у `docs/v0.3-acceptance.md`.
+- Додали deterministic direct driver через Python adapter.
+- Додали Telegram-local driver через реальний `hosts/telegram_gemini_bot/bot.py`, але без Telegram API й без live Gemini.
+- Оновили `docs/roadmap.md` і DEVLOG під новий v0.3 напрям.
+
+**Що зроблено:**
+- PR #13 `Fix Ukrainian fallback literals` merged у `main` як `7849192`.
+- PR #14 `Start v0.3 host conformance` merged у `main` як `4474bc6`.
+- PR #15 `Add Telegram-local host conformance` merged у `main` як `bf703b2`.
+- Команда `python tests\host_conformance\host_conformance.py --host direct` проходить і перевіряє archive, memory units, Core bridge і prompt geometry через public Python adapter.
+- Команда `python tests\host_conformance\host_conformance.py --host telegram-local` проходить той самий сценарій через Telegram host path із fake Telegram/fake Gemini, включно з auto-fidelity 3/3 valid.
+
+**Проблеми чи виклики:**
+Перший варіант Telegram-local runner був занадто слабкий: sleep завершувався, але auto-fidelity failed, а тест цього не ловив. Це виправлено одразу: runner тепер падає при будь-якому fidelity failure, а fake validator читає реальний evidence-pack payload shape. Це підтвердило, що conformance має бути строгим, а не декоративним.
+
+**Перевірки:**
+- `cargo test --workspace` passed для mojibake-фіксу.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed для mojibake-фіксу.
+- `python -m pytest crates\python_adapter\tests -q` passed: 13 tests для mojibake-фіксу.
+- GitHub Security workflow passed для PR #13, #14, #15.
+- `python tests\host_conformance\host_conformance.py --host direct` passed.
+- `python tests\host_conformance\host_conformance.py --host telegram-local` passed.
+
+**Висновок:**
+Починаючи з audit-повідомлення власника, сесія закрила останній pre-v0.3 cleanup-дефект і перевела v0.3 з ручного live-testing підходу на автоматизований host-conformance. Поточний стан: direct і Telegram-local вже покриті; наступний змістовний крок — Godot-headless conformance driver, а Telegram-live лишається коротким smoke, не основним acceptance.
