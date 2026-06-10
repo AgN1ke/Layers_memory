@@ -46,6 +46,30 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - Architecture docs no longer claim Archive/Core Markdown dumps are current storage
+
+The post-v0.2 audit found that `docs/architecture.md` still described `memory/archive/<YYYY>/<MM>/<spogad_id>.md` and `memory/core/store/<category>.md` as current storage files. The implementation writes pretty JSON for Archive/Core and only maintains `session.md` as a Markdown human log.
+
+**What changed:**
+- `docs/architecture.md` now states that Archive/Core use pretty-printed JSON as the current human-inspectable form.
+- `docs/contracts.md` now lists only Archive/Core JSON files as the current storage contract.
+- Archive/Core Markdown exports are explicitly deferred until a real workflow needs them.
+- The architecture document was also synchronized with current v0.2 behavior for host-owned prompt loading, pull-based LLM requests, fine-grained in-process locking, raw-event rotation, tolerant collection reads, and the implemented reflection/forgetting lifecycle.
+- `docs/roadmap.md` now reflects the actual post-v0.2 state and marks implemented partial sleep / active-tail behavior as complete.
+
+**What is retracted (if applicable):**
+- The prior architecture claim that Archive entries have `<spogad_id>.md` files and Core categories have `<category>.md` files as part of the current storage layout is retracted.
+
+**What is still true:**
+- Files remain the source of truth.
+- `session.md` remains the human-readable session journal.
+- Archive/Core remain inspectable without a database through pretty JSON files.
+- Rust core still does not know providers, models, keys, `prompts_dir`, or network I/O.
+
+**What we are doing:**
+- Keep Markdown exports as a deferred derived view, not as a second source of truth.
+- Continue the post-v0.2 audit queue with the remaining scaling/modularity items.
+
 ## 2026-06-10 - Collection reads skip unreadable memory files with visible notes
 
 The post-v0.2 audit found that one malformed JSON file in a collection directory such as `archive/`, `archive/units/`, `core/store/`, `core/candidates/`, `tasks/`, or `runs/sleep/` could make the whole collection read fail. That meant one bad archive file could break recall and context packaging until a human found and repaired it.

@@ -385,8 +385,9 @@ updated_at: 2026-05-17T16:45:00.000Z
 
 Файли:
 
-- `memory/archive/<YYYY>/<MM>/<archive_id>.json`;
-- `memory/archive/<YYYY>/<MM>/<archive_id>.md`.
+- `memory/archive/<YYYY>/<MM>/<archive_id>.json`.
+
+`<archive_id>.json` є pretty-printed JSON і поточною human-inspectable формою ArchiveEntry. Окремий `<archive_id>.md` dump не є частиною v0.2 storage contract; якщо він зʼявиться, це має бути похідний export, не джерело правди.
 
 ### 5.1 JSON
 
@@ -529,9 +530,9 @@ Multi-track поля `emotional_markers`, `topic_thread`, `personal_signals`, `r
 - `embedding_model_id` (на v0.1 завжди `null`);
 - `embedding` (на v0.1 завжди `null`).
 
-### 5.2 Markdown
+### 5.2 Deferred Markdown export
 
-Файл `<archive_id>.md` - людський виклад того самого спогаду.
+Окремий Markdown-виклад архівного спогаду не пишеться у v0.2. Нижче наведено можливу форму майбутнього derived export, якщо зʼявиться реальний workflow ручного читання архіву людиною.
 
 Мінімальна форма:
 
@@ -572,8 +573,9 @@ Core Store - стабільна основа пам'яті.
 
 Файли:
 
-- `memory/core/store/<category>.json`;
-- `memory/core/store/<category>.md`.
+- `memory/core/store/<category>.json`.
+
+`<category>.json` є pretty-printed JSON і поточною human-inspectable формою Core Store. Окремий `<category>.md` dump не є частиною v0.2 storage contract; якщо він зʼявиться, це має бути похідний export, не джерело правди.
 
 ### 6.1 CoreStoreCategory
 
@@ -1323,11 +1325,9 @@ memory/
   archive/
     <YYYY>/<MM>/
       <archive_id>.json
-      <archive_id>.md
   core/
     store/
       <category>.json
-      <category>.md
     candidates/
       <candidate_id>.json
   tasks/
