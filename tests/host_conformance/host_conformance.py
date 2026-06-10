@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -17,7 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[2]
+TELEGRAM_HOST_DIR = ROOT / "hosts" / "telegram_gemini_bot"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(TELEGRAM_HOST_DIR) not in sys.path:
+    sys.path.insert(0, str(TELEGRAM_HOST_DIR))
+
 import memory_engine
+import bot as telegram_bot
 
 
 SESSION_ID = "host_conformance_direct"
@@ -328,6 +337,188 @@ class DirectHostDriver:
         self.engine.submit_memory_fidelity_response(request["task_id"], dumps(response))
 
 
+class FakeTelegram:
+    def __init__(self) -> None:
+        self.messages: list[tuple[int, str]] = []
+
+    def send_message(self, chat_id: int, text: str) -> None:
+        self.messages.append((chat_id, text))
+
+
+class FakeGemini:
+    def generate_text(
+        self,
+        model: str,
+        system_instruction: str,
+        prompt: str,
+        response_mime_type: str | None = None,
+        operation: str = "generate_text",
+        model_role: str | None = None,
+        telemetry: dict[str, Any] | None = None,
+    ) -> telegram_bot.GeminiTextResponse:
+        del system_instruction, response_mime_type, model_role, telemetry
+        if operation == "chat_reply":
+            text = "ACK telegram-local: відповідь з fake Gemini без Telegram transport."
+        elif operation == "sleep_consolidator":
+            text = (
+                "GIST: Telegram-local host зберіг ім'я Микити, кішку Іржу "
+                "і космічний інтерес.\n\n"
+                "Локальний Telegram host пройшов sleep без реального Telegram API, "
+                "використовуючи той самий bot.py шлях і fake LLM."
+            )
+        elif operation == "memory_fidelity_pass":
+            text = dumps(self._fidelity_payload(prompt))
+        else:
+            inputs = self._prompt_inputs(prompt)
+            text = dumps(self._sleep_payload(operation, inputs))
+        return telegram_bot.GeminiTextResponse(text=text, usage={}, model=model, operation=operation)
+
+    def _prompt_inputs(self, prompt: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(prompt)
+        except json.JSONDecodeError as err:
+            raise ConformanceError(f"fake Gemini received non-JSON prompt for operation: {err}") from err
+        if not isinstance(payload, dict):
+            raise ConformanceError("fake Gemini prompt payload is not an object")
+        return payload
+
+    def _sleep_events(self, inputs: dict[str, Any]) -> list[dict[str, Any]]:
+        sleep_task = inputs.get("sleep_task")
+        if isinstance(sleep_task, dict) and isinstance(sleep_task.get("events"), list):
+            return [event for event in sleep_task["events"] if isinstance(event, dict)]
+        return []
+
+    def _sleep_payload(self, operation: str, inputs: dict[str, Any]) -> dict[str, Any]:
+        events = [event for event in self._sleep_events(inputs) if event_kind(event) == "user_message"]
+        if not events:
+            events = self._sleep_events(inputs)
+
+        if operation == "memory_unit_pass":
+            return {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": inputs.get("sleep_task", {}).get("archive_id", ""),
+                "memory_units": self._memory_units_for_events(events),
+            }
+        if operation == "sleep_emotional_pass":
+            return {"emotional_markers": self._emotional_markers_for_events(events)}
+        if operation == "sleep_topic_thread_pass":
+            return {
+                "topic_thread": [
+                    {
+                        "topic": "telegram_local_conformance",
+                        "summary": "Локальний Telegram host перевіряє ім'я, Іржу і космос.",
+                        "source_event_ids": [event_id(event) for event in events[:3]],
+                    }
+                ]
+            }
+        if operation == "sleep_personal_signal_pass":
+            return {"personal_signals": self._personal_signals_for_events(events)}
+        if operation == "sleep_relational_pass":
+            return {"relational_tone": None}
+        raise ConformanceError(f"fake Gemini got unexpected operation={operation!r}")
+
+    def _memory_units_for_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return DirectHostDriver._memory_units_for_events(self, events)
+
+    def _personal_signals_for_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return DirectHostDriver._personal_signals_for_events(self, events)
+
+    def _emotional_markers_for_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return DirectHostDriver._emotional_markers_for_events(self, events)
+
+    def _fidelity_payload(self, prompt: str) -> dict[str, Any]:
+        inputs = self._prompt_inputs(prompt)
+        evidence = inputs.get("evidence_pack") if isinstance(inputs.get("evidence_pack"), dict) else inputs
+        return {
+            "schema_version": "fidelity_review.v1",
+            "memory_unit_id": evidence.get("memory_unit_id", ""),
+            "archive_id": evidence.get("archive_id", ""),
+            "status": "valid",
+            "confidence": 0.95,
+            "explanation": "Telegram-local fake validator accepts the source-backed unit.",
+            "revised_thesis": None,
+            "missing_detail": None,
+        }
+
+
+class TelegramLocalHostDriver:
+    def __init__(self, runtime_dir: Path) -> None:
+        self.runtime_dir = runtime_dir
+        self.chat_id = 93001001
+        self.session_id = f"telegram_{self.chat_id}"
+        self.engine = memory_engine.MemoryEngine(str(runtime_dir / "memory"), host_id="telegram_local_conformance")
+        self.telegram = FakeTelegram()
+        self.gemini = FakeGemini()
+        self.llm_config = telegram_bot.HostLlmConfig(
+            reasoning=telegram_bot.ModelSelection("fake", "fake-reasoning"),
+            balanced=telegram_bot.ModelSelection("fake", "fake-balanced"),
+            fast=telegram_bot.ModelSelection("fake", "fake-fast"),
+            chat_role="balanced",
+        )
+        self.sleep_runner = telegram_bot.SleepRunner(self.engine, self.gemini, self.llm_config)
+        self.turn_index = 0
+        self._patch_runtime_paths()
+
+    def _patch_runtime_paths(self) -> None:
+        telegram_bot.MEMORY_DIR = self.runtime_dir / "memory"
+        telegram_bot.ARCHIVE_DIR = telegram_bot.MEMORY_DIR / "archive"
+        telegram_bot.LOG_DIR = self.runtime_dir / "logs"
+        telegram_bot.LOG_PATH = telegram_bot.LOG_DIR / "bot.log"
+        telegram_bot.TOKEN_USAGE_PATH = telegram_bot.LOG_DIR / "token_usage.jsonl"
+        telegram_bot.STATE_DIR = self.runtime_dir / "state"
+        telegram_bot.OFFSET_PATH = telegram_bot.STATE_DIR / "telegram_offset.json"
+        telegram_bot.SLEEP_SCHEDULER_STATE_PATH = telegram_bot.STATE_DIR / "sleep_scheduler_state.json"
+        telegram_bot.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        telegram_bot.STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def send_user_message(self, text: str) -> str:
+        self.turn_index += 1
+        before = len(self.telegram.messages)
+        update = {
+            "update_id": self.turn_index,
+            "message": {
+                "message_id": self.turn_index,
+                "date": 1781080000 + self.turn_index,
+                "chat": {"id": self.chat_id, "type": "private"},
+                "from": {"id": 311422683, "first_name": "Mykyta"},
+                "text": text,
+            },
+        }
+        telegram_bot.handle_update(
+            update,
+            telegram=self.telegram,
+            gemini=self.gemini,
+            engine=self.engine,
+            llm_config=self.llm_config,
+            sleep_runner=self.sleep_runner,
+        )
+        if len(self.telegram.messages) <= before:
+            raise ConformanceError("telegram-local host did not send a reply")
+        return self.telegram.messages[-1][1]
+
+    def run_sleep(self) -> dict[str, Any]:
+        summary = telegram_bot.run_sleep(self.engine, self.gemini, self.llm_config, self.session_id)
+        if "Archive:" not in summary:
+            raise ConformanceError(f"telegram-local sleep returned unexpected summary:\n{summary}")
+        if re.search(r"\b[1-9]\d* failed\b", summary):
+            raise ConformanceError(f"telegram-local sleep had failed fidelity tasks:\n{summary}")
+        archives = self._completed_archives()
+        if not archives:
+            raise ConformanceError("telegram-local sleep produced no completed archive")
+        return {"archive_entry": archives[-1], "summary": summary}
+
+    def context_package(self, current_text: str) -> dict[str, Any]:
+        return telegram_bot.context_package(self.engine, self.session_id, self.chat_id, current_text)
+
+    def render_memory_view(self, current_text: str) -> str:
+        package = self.context_package(current_text)
+        return telegram_bot.chat_prompt(self.engine, package, current_text)
+
+    def _completed_archives(self) -> list[dict[str, Any]]:
+        archives = telegram_bot.complete_archives()
+        return [archive for archive in archives if archive.get("source_session_id") == self.session_id]
+
+
 def run_direct(keep_runtime: bool) -> DriverResult:
     runtime = Path(tempfile.mkdtemp(prefix="memory_engine_host_conformance_"))
     driver = DirectHostDriver(runtime)
@@ -352,16 +543,45 @@ def run_direct(keep_runtime: bool) -> DriverResult:
             shutil.rmtree(runtime, ignore_errors=True)
 
 
+def run_telegram_local(keep_runtime: bool) -> DriverResult:
+    runtime = Path(tempfile.mkdtemp(prefix="memory_engine_telegram_local_conformance_"))
+    driver = TelegramLocalHostDriver(runtime)
+    try:
+        driver.send_user_message("Мене звати Микита.")
+        driver.send_user_message("У мене є кішка Іржа.")
+        driver.send_user_message("Я люблю космос і хочу, щоб Telegram host не мав власної memory logic.")
+        outcome = driver.run_sleep()
+        archive = outcome["archive_entry"]
+        assert_sleep_archive(archive)
+        view = driver.render_memory_view("Що ти пам'ятаєш про Іржу?")
+        assert_memory_view(view)
+        package = driver.context_package("Що ти пам'ятаєш про Іржу?")
+        assert_core(package)
+        return DriverResult(
+            runtime_dir=runtime,
+            archive_id=archive["archive_id"],
+            memory_unit_count=len(archive.get("memory_units", [])),
+            core_fact_count=len(package.get("core_facts", [])),
+        )
+    finally:
+        if not keep_runtime:
+            shutil.rmtree(runtime, ignore_errors=True)
+
+
 def assert_sleep_outcome(outcome: dict[str, Any]) -> None:
     archive = outcome.get("archive_entry", {})
+    assert_sleep_archive(archive)
+    core_summary = outcome.get("core_summary", {})
+    if core_summary.get("created", 0) < 2:
+        raise ConformanceError(f"expected core bridge to create facts, got {core_summary!r}")
+
+
+def assert_sleep_archive(archive: dict[str, Any]) -> None:
     if archive.get("status") != "complete":
         raise ConformanceError(f"sleep did not complete: {archive.get('status')!r}")
     units = archive.get("memory_units", [])
     if len(units) < 2:
         raise ConformanceError(f"expected at least two memory units, got {len(units)}")
-    core_summary = outcome.get("core_summary", {})
-    if core_summary.get("created", 0) < 2:
-        raise ConformanceError(f"expected core bridge to create facts, got {core_summary!r}")
 
 
 def assert_memory_view(view: str) -> None:
@@ -390,13 +610,15 @@ def assert_core(package: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run host conformance scenarios.")
-    parser.add_argument("--host", choices=["direct"], default="direct")
+    parser.add_argument("--host", choices=["direct", "telegram-local"], default="direct")
     parser.add_argument("--keep-runtime", action="store_true")
     args = parser.parse_args()
 
     try:
         if args.host == "direct":
             result = run_direct(args.keep_runtime)
+        elif args.host == "telegram-local":
+            result = run_telegram_local(args.keep_runtime)
         else:
             raise ConformanceError(f"unsupported host: {args.host}")
     except Exception as err:
@@ -415,4 +637,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

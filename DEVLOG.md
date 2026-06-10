@@ -5101,3 +5101,32 @@ Direct driver використовує тільки public Python adapter surfac
 
 **Висновок:**
 v0.3 розпочато як reusable-host verification. Наступний крок — підключити Telegram-local driver до цього самого conformance контракту, а вже після нього Godot-headless.
+
+## Entry 106 - 2026-06-10 - Telegram-local conformance driver
+
+**Проблематика:**
+Direct conformance доводив Python adapter boundary, але ще не перевіряв реальний Telegram host path. Для v0.3 потрібно довести, що `bot.py` може бути тонким transport/prompt executor без ручного Telegram-клікання.
+
+**Задум:**
+Додати `telegram-local` driver до того самого conformance runner: fake Telegram transport, fake Gemini, реальний `hosts/telegram_gemini_bot/bot.py` для ingest/context/chat/sleep/fidelity.
+
+**Що робили:**
+- Розширили `tests/host_conformance/host_conformance.py` опцією `--host telegram-local`.
+- Додали `FakeTelegram`, що збирає replies без Telegram API.
+- Додали `FakeGemini`, що відповідає на `chat_reply`, sleep passes, consolidator і `memory_fidelity_pass`.
+- Ізолювали runtime paths Telegram host-а у temp-директорію, щоб conformance не читав і не писав live runtime.
+- Посилили assertion: якщо auto-fidelity має будь-який failed task, `telegram-local` conformance падає.
+
+**Що зроблено:**
+`telegram-local` проходить той самий сценарій, що direct driver: три user turns, chat replies через host path, sleep через `bot.run_sleep`, Complete archive, 3 memory units, 3 Core facts, auto-fidelity 3/3 valid, prompt view з коректною геометрією.
+
+**Проблеми чи виклики:**
+Перший прогін показав слабкий assertion: sleep завершувався, але auto-fidelity failed через неправильний fake payload shape. Це виправлено до merge-підготовки: fake validator читає evidence-pack payload, а runner валить тест при будь-якому fidelity failure.
+
+**Перевірки:**
+- `python tests\host_conformance\host_conformance.py --host direct` passed.
+- `python tests\host_conformance\host_conformance.py --host telegram-local` passed.
+- `git diff --check` passed.
+
+**Висновок:**
+v0.3 тепер має два автоматизовані conformance рівні: direct adapter baseline і Telegram host без Telegram transport. Наступний логічний крок — Godot-headless або Telegram-live smoke, залежно від того, що потрібно довести першим.
