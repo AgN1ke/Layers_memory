@@ -46,6 +46,29 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - Runtime sleep does not use the journal primitive yet
+
+The post-v0.2 audit found that the architecture described `memory/journal/` as an active crash-safety mechanism for multi-file sleep operations, while the runtime implementation actually relies on atomic single-file writes, durable `SleepRun` checkpoints, and idempotent Complete-archive event coverage.
+
+**What changed:**
+- `docs/architecture.md` now states that the journal is a reserved storage primitive and future target for migration/recovery-heavy operations, not the active runtime sleep transaction layer.
+- `docs/contracts.md` clarifies that `JournalOperation` is a reserved contract in v0.2: the schema and FileStorage methods exist, but runtime sleep/recovery do not consume journal records.
+- `docs/audit-2026-06-10.md` marks A3 closed as a scope decision rather than an open ambiguity.
+- `docs/roadmap.md` removes A3 from the pre-v0.3 open cleanup list.
+
+**What is retracted (if applicable):**
+- The earlier architecture claim that runtime sleep currently creates and replays `memory/journal/` records for crash safety is retracted.
+
+**What is still true:**
+- `JournalOperation` remains a valid schema and Storage primitive.
+- `manifest.json` still tracks the journal schema version.
+- Runtime sleep remains crash-resilient through persisted `SleepRun` cursors, pending tasks, atomic file writes, and idempotent event coverage.
+- Journal-based recover/rollback remains appropriate for future schema migrations or operations that need explicit transaction policy.
+
+**What we are doing:**
+- Defer wiring journal replay until a concrete migration or recovery-heavy operation needs it.
+- Avoid presenting unused primitives as active guarantees.
+
 ## 2026-06-10 - Session metadata now caches Complete-archive event coverage
 
 The post-v0.2 audit found that `core_context_package` and sleep selection still scanned all archive files just to know which raw session events were already covered by Complete archives. That made every turn pay for the full archive history even after raw-event rotation moved old events out of active `events.jsonl`.
