@@ -5,29 +5,49 @@ const CORE_SCOPE := SESSION_ID
 
 var engine: MemoryEngineGodot
 var turn_index := 0
+var failed := false
 
 func _init() -> void:
     var runtime_dir := _arg_value("--runtime-dir")
     if runtime_dir == "":
         _fail("missing --runtime-dir")
+        return
 
     engine = MemoryEngineGodot.new()
     _expect_ok(engine.open(runtime_dir.path_join("memory"), "godot_headless_conformance"))
+    if failed:
+        return
 
     _send_user_message("Мене звати Микита.")
+    if failed:
+        return
     _send_user_message("У мене є кішка Іржа.")
+    if failed:
+        return
     _send_user_message("Я люблю космос і хочу, щоб Godot host не мав власної memory logic.")
+    if failed:
+        return
 
-    var outcome := _run_sleep()
+    var outcome: Dictionary = _run_sleep()
+    if failed:
+        return
     var archive: Dictionary = outcome.get("archive_entry", {})
     _assert_sleep_archive(archive)
+    if failed:
+        return
 
     var current_text := "Що ти пам'ятаєш про Іржу?"
     var view := _render_memory_view(current_text)
     _assert_memory_view(view, current_text)
+    if failed:
+        return
 
-    var package := _context_package(current_text)
+    var package: Dictionary = _context_package(current_text)
+    if failed:
+        return
     _assert_core(package)
+    if failed:
+        return
 
     print("HOST CONFORMANCE PASSED")
     print("host=godot-headless")
@@ -48,18 +68,27 @@ func _arg_value(name: String) -> String:
 func _send_user_message(text: String) -> String:
     turn_index += 1
     _ingest("user_message", "godot_user", text, ["host_conformance"])
-    var package := _context_package(text)
+    if failed:
+        return ""
+    var package: Dictionary = _context_package(text)
+    if failed:
+        return ""
     var view := engine.render_memory_view(_dumps(package), text)
     if not view.contains("<current_user_message>"):
         _fail("rendered memory view missed current_user_message")
+        return ""
     var reply := "ACK %s: %s" % [turn_index, text.substr(0, 48)]
     _ingest("assistant_message", "godot_assistant", reply, ["host_conformance_reply"])
     return reply
 
 func _run_sleep() -> Dictionary:
-    var run := _loads(engine.begin_sleep_run(SESSION_ID))
+    var run: Dictionary = _loads(engine.begin_sleep_run(SESSION_ID))
+    if failed:
+        return {}
     while true:
-        var step := _loads(engine.next_sleep_batch(_dumps(run)))
+        var step: Dictionary = _loads(engine.next_sleep_batch(_dumps(run)))
+        if failed:
+            return {}
         run = step["run"]
         var batch = step.get("batch")
         if batch == null:
@@ -67,11 +96,19 @@ func _run_sleep() -> Dictionary:
         var responses := []
         for request in batch["requests"]:
             responses.append(_response_for_request(run, request))
+            if failed:
+                return {}
         step = _loads(engine.submit_sleep_batch(_dumps(run), _dumps(responses)))
+        if failed:
+            return {}
         run = step["run"]
-    var outcome := _loads(engine.finish_sleep_run(_dumps(run)))
+    var outcome: Dictionary = _loads(engine.finish_sleep_run(_dumps(run)))
+    if failed:
+        return {}
     for request in outcome.get("fidelity_requests", []):
         _submit_valid_fidelity(request)
+        if failed:
+            return {}
     return outcome
 
 func _context_package(current_text: String) -> Dictionary:
@@ -150,6 +187,7 @@ func _response_for_request(run: Dictionary, request: Dictionary) -> Dictionary:
         payload = {"relational_tone": null}
     else:
         _fail("unexpected LLM request prompt_id=%s" % prompt_id)
+        return {}
 
     return {"status": "ok", "request_id": request["request_id"], "text": _dumps(payload)}
 
@@ -265,7 +303,7 @@ func _submit_valid_fidelity(request: Dictionary) -> void:
         }),
     }
     var raw := engine.submit_memory_fidelity_response(request["task_id"], _dumps(response))
-    var parsed := _loads(raw)
+    var parsed: Dictionary = _loads(raw)
     if parsed.has("error"):
         _fail("fidelity submit failed: %s" % raw)
 
@@ -309,23 +347,30 @@ func _event_id(event: Dictionary) -> String:
     var value = event.get("event_id")
     if not (value is String) or value == "":
         _fail("event has no event_id")
+        return ""
     return value
 
 func _expect_ok(raw: String) -> void:
-    var parsed := _loads(raw)
+    var parsed: Dictionary = _loads(raw)
+    if failed:
+        return
     if parsed.has("error"):
         _fail(raw)
 
-func _loads(raw: String):
+func _loads(raw: String) -> Variant:
     var parsed = JSON.parse_string(raw)
     if parsed == null:
         _fail("invalid JSON: %s" % raw)
+        return null
     return parsed
 
-func _dumps(value) -> String:
+func _dumps(value: Variant) -> String:
     return JSON.stringify(value)
 
 func _fail(message: String) -> void:
+    if failed:
+        return
+    failed = true
     push_error(message)
     printerr("HOST CONFORMANCE FAILED: %s" % message)
     quit(1)

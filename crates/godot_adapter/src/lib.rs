@@ -21,6 +21,7 @@ use memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde_json::Value;
 
 #[derive(GodotClass)]
 #[class(base=RefCounted)]
@@ -357,11 +358,43 @@ fn optional_gstring(value: GString) -> Option<String> {
 }
 
 fn parse_json<T: DeserializeOwned>(raw: &str, label: &str) -> Result<T, String> {
-    serde_json::from_str(raw).map_err(|err| format!("invalid {label} JSON: {err}"))
+    let mut value: Value =
+        serde_json::from_str(raw).map_err(|err| format!("invalid {label} JSON: {err}"))?;
+    normalize_godot_numbers(&mut value);
+    serde_json::from_value(value).map_err(|err| format!("invalid {label} JSON: {err}"))
 }
 
 fn dump_json<T: Serialize>(value: &T, label: &str) -> Result<String, String> {
     serde_json::to_string(value).map_err(|err| format!("failed to serialize {label}: {err}"))
+}
+
+fn normalize_godot_numbers(value: &mut Value) {
+    match value {
+        Value::Number(number) if number.is_f64() => {
+            if let Some(number) = number.as_f64() {
+                const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_992.0;
+                if number.is_finite() && number.fract() == 0.0 && number.abs() <= MAX_EXACT_INTEGER
+                {
+                    *value = if number >= 0.0 {
+                        Value::from(number as u64)
+                    } else {
+                        Value::from(number as i64)
+                    };
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_godot_numbers(item);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                normalize_godot_numbers(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn ok_json(status: &str) -> GString {
@@ -380,3 +413,37 @@ struct MemoryEngineGodotExtension;
 
 #[gdextension]
 unsafe impl ExtensionLibrary for MemoryEngineGodotExtension {}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+
+    use super::parse_json;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct GodotNumberPayload {
+        count: usize,
+        retry_limit: u32,
+        weight: f64,
+        nested: Vec<usize>,
+    }
+
+    #[test]
+    fn parse_json_normalizes_godot_integer_floats() {
+        let parsed: GodotNumberPayload = parse_json(
+            r#"{"count":3000.0,"retry_limit":3.0,"weight":0.95,"nested":[1.0,2.0]}"#,
+            "godot number payload",
+        )
+        .expect("Godot integer-shaped floats should deserialize into integer fields");
+
+        assert_eq!(
+            parsed,
+            GodotNumberPayload {
+                count: 3000,
+                retry_limit: 3,
+                weight: 0.95,
+                nested: vec![1, 2],
+            }
+        );
+    }
+}

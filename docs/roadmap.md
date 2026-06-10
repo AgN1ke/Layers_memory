@@ -255,7 +255,7 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [x] Direct/local conformance driver через Python adapter із deterministic fake LLM: `tests/host_conformance/host_conformance.py --host direct`. Це baseline для всіх наступних хостів. — 2026-06-10.
 - [x] Telegram-local driver має пройти той самий сценарій без Telegram transport. — 2026-06-10, `tests/host_conformance/host_conformance.py --host telegram-local`.
 - [ ] Telegram-live smoke driver має перевіряти тільки транспорт і один короткий live-LLM шлях, не повний memory acceptance руками.
-- [ ] Godot-headless driver має пройти той самий conformance scenario до будь-якого polished Godot UI. — 2026-06-10: додано `crates/godot_adapter/`, `hosts/godot_headless/` і `tests/host_conformance/host_conformance.py --host godot-headless`; acceptance лишається відкритим до реального headless-прогону з Godot binary.
+- [x] Godot-headless driver має пройти той самий conformance scenario до будь-якого polished Godot UI. — 2026-06-10: `tests/host_conformance/host_conformance.py --host godot-headless` passed with real Godot 4.6 stable console, `memory_units=3`, `core_facts=3`.
 - [ ] v0.3 не закривається, доки кожен прийнятий host не проходить однаковий сценарій і не доводить, що memory policy лишається в Rust core.
 
 ### Адаптери
