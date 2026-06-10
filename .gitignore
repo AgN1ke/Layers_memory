@@ -27,6 +27,9 @@ __pycache__/
 *.pyc
 *.log
 
+# Local tool binaries
+tools/godot/
+
 # Python adapter local builds
 crates/python_adapter/.venv/
 crates/python_adapter/*.egg-info/
