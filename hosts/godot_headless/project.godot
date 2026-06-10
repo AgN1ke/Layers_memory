@@ -1,0 +1,12 @@
+; Minimal headless project used by tests/host_conformance/host_conformance.py.
+
+config_version=5
+
+[application]
+
+config/name="Memory Engine Headless Conformance"
+run/main_scene=""
+
+[editor_plugins]
+
+enabled=PackedStringArray()

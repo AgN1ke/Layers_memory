@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/memory_engine",
+    "crates/godot_adapter",
     "crates/python_adapter",
 ]
 resolver = "2"
