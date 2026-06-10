@@ -86,6 +86,7 @@ def find_godot_binary(explicit: str | None = None) -> str:
     candidates = [
         explicit,
         os.environ.get("GODOT_BIN"),
+        *discover_repo_godot_binaries(),
         *discover_temp_godot_binaries(),
         shutil.which("godot4"),
         shutil.which("godot"),
@@ -98,19 +99,27 @@ def find_godot_binary(explicit: str | None = None) -> str:
     )
 
 
+def discover_repo_godot_binaries() -> list[str]:
+    tools_root = ROOT / "tools" / "godot"
+    if not tools_root.exists():
+        return []
+    binaries = [path for path in tools_root.glob("*.exe") if "godot" in path.name.lower()]
+    return [str(path) for path in sorted(binaries, key=godot_binary_score)]
+
+
 def discover_temp_godot_binaries() -> list[str]:
     temp_root = Path(tempfile.gettempdir()) / "godot_conformance"
     if not temp_root.exists():
         return []
     binaries = [path for path in temp_root.rglob("*.exe") if "godot" in path.name.lower()]
+    return [str(path) for path in sorted(binaries, key=godot_binary_score)]
 
-    def score(path: Path) -> tuple[int, int, str]:
-        name = path.name.lower()
-        version_score = 0 if "4.6" in name else 1
-        console_score = 0 if "console" in name else 1
-        return (version_score, console_score, str(path))
 
-    return [str(path) for path in sorted(binaries, key=score)]
+def godot_binary_score(path: Path) -> tuple[int, int, str]:
+    name = path.name.lower()
+    version_score = 0 if "4.6" in name else 1
+    console_score = 0 if "console" in name else 1
+    return (version_score, console_score, str(path))
 
 
 def godot_extension_filename() -> str:

@@ -89,6 +89,30 @@ pre-commit install
 pre-commit run --all-files
 ```
 
+## Local Godot Tool Binary
+
+Godot conformance can run without installing Godot globally. Put the Windows
+Godot 4.6 console build here:
+
+```text
+tools/godot/Godot_v4.6.3-stable_win64_console.exe
+```
+
+Keep the matching non-console executable beside it if the distribution ships both
+files:
+
+```text
+tools/godot/Godot_v4.6.3-stable_win64.exe
+```
+
+`tools/godot/` is gitignored. The conformance runner checks this directory before
+`%TEMP%`, `GODOT_BIN`, and PATH fallbacks, so this command should work on this
+machine without extra environment variables:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless
+```
+
 Перевірити Rust:
 
 ```powershell
