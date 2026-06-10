@@ -4990,3 +4990,27 @@ The metadata cache can be stale if edited manually or if old runtime data predat
 
 **Conclusion:**
 A4 step 3 is fixed in code. Ordinary context and sleep selection no longer need a full archive scan just to filter already-archived session events; the rebuild scan remains as a legacy/self-healing path.
+
+## Entry 102 - 2026-06-10 - A3 fix: journal scope made explicit
+
+**Problem:**
+Audit A3 found a trust/documentation mismatch. The architecture described `memory/journal/` as an active crash-safety layer for multi-file sleep operations, but the v0.2 runtime actually uses atomic file writes, durable `SleepRun` checkpoints, and idempotent Complete-archive coverage. The journal schema and FileStorage methods exist, but runtime sleep does not consume them.
+
+**Intent:**
+Close A3 as an explicit scope decision, not as a half-implemented feature. The project should not claim a crash-safety mechanism that is present only as a storage primitive.
+
+**What changed:**
+- `HISTORY.md` now retracts the active runtime-journal claim.
+- `docs/architecture.md` says journal is reserved for future migration/recovery-heavy operations and that runtime sleep currently uses `SleepRun` checkpoints.
+- `docs/contracts.md` clarifies `JournalOperation` as a reserved v0.2 contract, not active sleep replay machinery.
+- `docs/audit-2026-06-10.md` marks A3 closed.
+- `docs/roadmap.md` removes A3 from the pre-v0.3 open cleanup list.
+
+**Problems or challenges:**
+No runtime code changed. The storage primitive remains intentionally available because migrations and future recovery-heavy operations are likely to need it.
+
+**Checks:**
+- Documentation-only change.
+
+**Conclusion:**
+A3 is closed as a trust/documentation correction. The remaining pre-v0.3 cleanup item is B2: splitting the large `engine.rs` module.

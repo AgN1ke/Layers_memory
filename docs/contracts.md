@@ -1264,7 +1264,7 @@ PendingTask - спосіб, яким ядро системи просить хо
 
 ## 13. JournalOperation
 
-JournalOperation описує мульти-файлову операцію, яку потрібно або завершити, або безпечно розібрати після обриву.
+JournalOperation описує мульти-файлову операцію, яку потрібно або завершити, або безпечно розібрати після обриву. На v0.2 це зарезервований storage primitive: схема і FileStorage-операції існують, але runtime sleep/recovery поки не використовують journal як transaction layer.
 
 Файл: `memory/journal/<op_id>.json`.
 
@@ -1382,6 +1382,6 @@ memory/
 8. Оновити той самий `ArchiveEntry`.
 9. Повернути `RecallResult` за `RecallQuery` через stage1 recall.
 10. Повернути `CoreContextPackage` за `CoreContextRequest`.
-11. Тримати `manifest.json` і `journal/` для версій та crash safety.
+11. Тримати `manifest.json` для версій; `journal/` існує як зарезервований storage primitive для майбутніх migration/recovery-heavy операцій, а поточний runtime sleep покладається на durable `SleepRun` checkpoints та ідемпотентні coverage rules.
 
 Це достатній контракт для старту Rust-коду без розпливання архітектури.
