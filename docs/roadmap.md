@@ -249,6 +249,15 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 
 Мета: довести, що ядро **справді** повторно використовуване — інший хост інтегрується через тонкий адаптер, не дублюючи логіки. Плюс інструменти для людини, що обслуговує живу пам'ять.
 
+### Host conformance
+
+- [~] Зафіксувати v0.3 acceptance як host-conformance, а не ручне клікання власником. Перший документ: `docs/v0.3-acceptance.md`.
+- [~] Direct/local conformance driver через Python adapter із deterministic fake LLM: `tests/host_conformance/host_conformance.py --host direct`. Це baseline для всіх наступних хостів.
+- [ ] Telegram-local driver має пройти той самий сценарій без Telegram transport.
+- [ ] Telegram-live smoke driver має перевіряти тільки транспорт і один короткий live-LLM шлях, не повний memory acceptance руками.
+- [ ] Godot-headless driver має пройти той самий conformance scenario до будь-якого polished Godot UI.
+- [ ] v0.3 не закривається, доки кожен прийнятий host не проходить однаковий сценарій і не доводить, що memory policy лишається в Rust core.
+
 ### Адаптери
 
 - [ ] Godot-адаптер через GDExtension (`crates/godot_adapter/`). Перший хост, що **не** Telegram-бот.
