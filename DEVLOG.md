@@ -4917,3 +4917,29 @@ Make collection reads resilient without hiding corruption. Healthy files should 
 
 **Conclusion:**
 A5 is fixed in code. Memory reads now degrade softly when one collection member is corrupted, while the corrupted file stays visible for manual repair.
+
+## Entry 99 - 2026-06-10 - A7 fix: synchronize docs with current v0.2 behavior
+
+**Problem:**
+Audit A7 showed that key project documents had drifted from the implementation. `docs/roadmap.md` still described v0.1 as nearly complete even though v0.2 was closed. It also left partial sleep unchecked and used the old `tail_keep_ratio` name. `docs/architecture.md` still promised Archive/Core Markdown dump files that `FileStorage` does not write, and still described old prompt-loading and locking models.
+
+**Intent:**
+Fix documentation trust without changing runtime behavior. The docs should guide the next agent from the actual current state, not from stale v0.1 assumptions.
+
+**What changed:**
+- Updated `docs/roadmap.md` to the post-v0.2 state and marked implemented partial sleep / active-tail behavior as complete.
+- Split active-tail partial sleep from raw-event rotation in roadmap terminology.
+- Updated `docs/architecture.md` to say Archive/Core currently use pretty JSON as the human-inspectable form; only `session.md` is maintained as Markdown.
+- Updated `docs/contracts.md` so the storage contract no longer lists Archive/Core `.md` files.
+- Updated architecture sections for host-owned prompt loading, pull-based `LlmRequest` execution, fine-grained in-process locking, raw-event rotation, tolerant collection reads, and the implemented reflection/forgetting lifecycle.
+- Added a `HISTORY.md` retraction for the prior Archive/Core `.md` storage claim.
+- Marked A7 closed in `docs/audit-2026-06-10.md` and updated the audit queue after A4/B3/A5 closure.
+
+**Problems or challenges:**
+This intentionally does not implement Markdown exports. The current choice is to avoid derived files until a real human workflow needs them. Pretty JSON remains the inspectable Archive/Core form.
+
+**Checks:**
+- Documentation consistency checks: no remaining current-claim references to `<spogad_id>.md`, `tail_keep_ratio`, or a global `RwLock` model.
+
+**Conclusion:**
+A7 is closed as a documentation-sync fix. No runtime behavior changed.
