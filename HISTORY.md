@@ -46,6 +46,38 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - v0.3 host conformance closed
+
+v0.3 closes the reusable-host proof: Memory Engine now has automated conformance for the direct/local Python boundary, the Telegram bot host path without Telegram transport, and a real Godot 4.6 headless GDExtension host.
+
+**What changed:**
+- `docs/v0.3-acceptance.md` now records the accepted v0.3 scope: direct/local, Telegram-local, and Godot-headless.
+- `tests/host_conformance/host_conformance.py` provides the shared scenario for all accepted hosts.
+- The Godot slice uses `crates/godot_adapter/` plus `hosts/godot_headless/` and was accepted with real Godot 4.6 stable console.
+- `docs/research/vector-recall.md` is tracked as a research draft for opt-in vector recall, not an implementation-ready spec.
+
+**What is retracted (if applicable):**
+- Nothing is retracted. Telegram-live smoke and Telegram userbot support are clarified as deferred work, not v0.3 closure gates.
+
+**What is still true:**
+- The Rust core remains provider-agnostic and owns memory policy.
+- Hosts may dispatch events, render/load prompts, execute `LlmRequest -> text`, and display results, but they do not decide memory extraction, validation, Core promotion, forgetting, or prompt-facing memory structure.
+- v0.3 does not claim vector recall, benchmarked memory quality, polished Godot/Chibigochi integration, or Telegram userbot support.
+
+**What we are doing:**
+- Treat Telegram-live smoke as an operations/regression task, not a manual memory acceptance gate.
+- Keep vector recall in research/alignment until it is rewritten around validated active `MemoryUnit`s, host-produced embeddings, core vector inputs, and buffered recall stats.
+- Plan the next product-level work from the v0.3 menu: Chibigochi/Godot integration, diagnostics/backup, reviewer-pass, or vector-recall alignment.
+
+**Reproducibility anchor:**
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo fmt --check`
+- `python -m pytest crates/python_adapter/tests -q`
+- `python tests/host_conformance/host_conformance.py --host direct`
+- `python tests/host_conformance/host_conformance.py --host telegram-local`
+- `python tests/host_conformance/host_conformance.py --host godot-headless` with Godot 4.6 stable console
+
 ## 2026-06-10 - Ukrainian fallback literals and stop words restored
 
 The post-audit review found that a small set of Ukrainian string literals had been mojibaked in an earlier Windows editing session. The broken literals affected Ukrainian stop-word filtering in recall/core near-duplicate checks and the human-readable fallback/preliminary archive prose used when LLM enrichment is unavailable.

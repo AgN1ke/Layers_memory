@@ -5226,3 +5226,40 @@ Godot 4.6 console у локальному середовищі може заве
 
 **Висновок:**
 Godot більше не є лише scaffold. Є перший не-Telegram host, що реально проходить той самий автоматизований memory conformance сценарій через тонкий adapter.
+
+## Entry 110 - 2026-06-10 - v0.3 host conformance closed
+
+**Problem:**
+After Godot-headless passed with real Godot 4.6, the code state was ahead of the docs: `docs/v0.3-acceptance.md` still treated Telegram-live smoke and every possible host as closure gates, while the accepted v0.3 scope was already direct/local, Telegram-local, and Godot-headless. The owner also added `docs/research/vector-recall.md`, which needed to be recorded without starting embeddings implementation before v0.3 close.
+
+**Intent:**
+Close v0.3 as a host-conformance milestone, not as a new feature branch. Keep the claim narrow: Memory Engine is reusable through thin adapters for accepted hosts. Do not claim vector recall, Telegram userbot support, polished Godot gameplay, or benchmarked memory quality.
+
+**What changed:**
+- `docs/v0.3-acceptance.md` now records accepted scope and close status.
+- `docs/roadmap.md` marks v0.3 host conformance closed and moves Telegram-live smoke to deferred regression/operations work.
+- `docs/research/vector-recall.md` is tracked as a research draft with explicit alignment requirements before implementation.
+- `HISTORY.md` has a trust entry for v0.3 closure and its reproducibility anchors.
+
+**What is done:**
+Accepted v0.3 hosts are:
+- direct/local through `tests/host_conformance/host_conformance.py --host direct`;
+- Telegram bot host path through `--host telegram-local`;
+- Godot through `--host godot-headless` with real Godot 4.6 stable console.
+
+**Open work after v0.3:**
+- Telegram-live smoke driver as transport regression, not memory acceptance.
+- Chibigochi/Godot product integration.
+- Diagnostics and backup/restore tools.
+- Vector recall alignment before any embedding implementation.
+- Optional reviewer-pass, unit-level recall counters, and JSON contract stabilization.
+
+**Checks:**
+- `git diff --check` passed.
+- `cargo fmt --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest crates\python_adapter\tests -q` passed: 13 tests.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host direct` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host telegram-local` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless --godot-bin <Godot 4.6 stable console>` passed: `memory_units=3`, `core_facts=3`.
