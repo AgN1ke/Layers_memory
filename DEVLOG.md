@@ -5014,3 +5014,32 @@ No runtime code changed. The storage primitive remains intentionally available b
 
 **Conclusion:**
 A3 is closed as a trust/documentation correction. The remaining pre-v0.3 cleanup item is B2: splitting the large `engine.rs` module.
+
+## Entry 103 - 2026-06-10 - B2 fix: split MemoryEngine module surface
+
+**Problem:**
+Audit B2 identified `crates/memory_engine/src/engine.rs` as the last large pre-v0.3 maintenance hazard. The file had accumulated core facts, context budgeting, sleep orchestration, recall, fidelity, reflection, forgetting, validation, and helper code in one place, making future feature work more conflict-prone than necessary.
+
+**Intent:**
+Make the engine easier to navigate before v0.3 work starts, without changing behavior or public API. This is a mechanical module split only.
+
+**What changed:**
+- `engine.rs` is now a small module root with the `MemoryEngine` struct, lock registry, public re-exports, and local consolidator parser tests.
+- Domain code moved into child modules under `crates/memory_engine/src/engine/`:
+  `session_ops`, `core_context`, `context_budget`, `sleep_flow`, `sleep_driver`,
+  `recall_api`, `recall_stage1`, `fidelity_flow`, `reflection_flow`,
+  `forgetting_flow`, `validation`, and `options`.
+- Public paths remain stable through `crate::engine::*` re-exports.
+
+**Problems or challenges:**
+Rust privacy required internal helper functions and DTO fields that cross sibling modules to become `pub(super)`. That widens visibility only inside the `engine` module tree, not the crate API.
+
+**Checks:**
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `cargo fmt --check` passed.
+- `python -m maturin develop --manifest-path crates/python_adapter/Cargo.toml` passed with the local venv.
+- `pytest crates/python_adapter/tests -q` passed: 13 tests.
+
+**Conclusion:**
+B2 is closed as a mechanical refactor. The pre-v0.3 audit cleanup is now complete; no runtime behavior changed.
