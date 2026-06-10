@@ -32,6 +32,10 @@ pub struct SessionMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_to: Vec<Id>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived_event_ids: Vec<Id>,
+    #[serde(default)]
+    pub archived_event_index_complete: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 

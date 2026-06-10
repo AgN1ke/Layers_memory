@@ -46,6 +46,34 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-06-10 - Session metadata now caches Complete-archive event coverage
+
+The post-v0.2 audit found that `core_context_package` and sleep selection still scanned all archive files just to know which raw session events were already covered by Complete archives. That made every turn pay for the full archive history even after raw-event rotation moved old events out of active `events.jsonl`.
+
+**What changed:**
+- `SessionMetadata` now includes `archived_event_ids` and `archived_event_index_complete` alongside `archived_to`.
+- Successful sleep completion records the Complete archive id and covered raw `event_id`s in `session.json`.
+- `core_context_package` and sleep selection read the session metadata cache instead of scanning all archive entries on the hot path.
+- Legacy or incomplete metadata self-heals: when `archived_event_index_complete` is false, the engine rebuilds the cache from Complete archive entries and writes it back.
+- `Storage` exposes `read_session_metadata` and `write_session_metadata` so the engine, not hosts, owns this cache.
+
+**What is retracted (if applicable):**
+- Nothing is retracted. The raw event files and Complete archive entries remain the source of truth; the new fields are a rebuildable cache.
+
+**What is still true:**
+- `events.jsonl` remains the active raw-event tail.
+- `archived/events-<NNN>.jsonl` remains the archived raw-event source for evidence/audit paths.
+- Complete `ArchiveEntry.source_event_ids` remains the canonical coverage record.
+- `session.md` remains the full human-readable session journal.
+
+**What we are doing:**
+- Treat missing or incomplete archived-event cache fields as legacy metadata and rebuild them from archive files.
+- Keep future indexed storage as a separate scaling decision if archive volume demands it.
+
+**Reproducibility anchor:**
+- `engine_context_rebuilds_legacy_archived_event_index`
+- `engine_sleep_run_driver_finishes_archive_and_seeds_core`
+
 ## 2026-06-10 - Architecture docs no longer claim Archive/Core Markdown dumps are current storage
 
 The post-v0.2 audit found that `docs/architecture.md` still described `memory/archive/<YYYY>/<MM>/<spogad_id>.md` and `memory/core/store/<category>.md` as current storage files. The implementation writes pretty JSON for Archive/Core and only maintains `session.md` as a Markdown human log.
