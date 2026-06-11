@@ -5420,3 +5420,47 @@ Fidelity request shape у реальному engine path може приходи
 
 **Висновок:**
 Chibigochi має production-shaped LLM boundary: Godot може виконувати LLM через HTTP proxy без memory policy у сцені чи host object. Це ще не реальна модель/секрети/production UX, але це правильний інтеграційний шов для них.
+
+## Entry 115 - 2026-06-11 - Chibigochi Gemini bridge executor
+
+**Проблематика:**
+`chibigochi_http_llm_bridge.gd` already proved that Godot can call an external
+LLM executor over HTTP, but the checked conformance path still used a fake
+Python proxy. The next practical step was to connect the same bridge contract to
+the cached Gemini credentials without moving provider keys or prompt rendering
+into Godot.
+
+**Задум:**
+Add a local Gemini-backed HTTP executor that reads the existing gitignored
+secrets cache, owns provider/model selection, renders prompts, and returns the
+same response objects expected by `chibigochi_http_llm_bridge.gd`. Godot remains
+a thin host: it sends chat/sleep/fidelity requests and receives text.
+
+**Що робили:**
+- Added `hosts/chibigochi_spike/chibigochi_gemini_proxy.py`.
+- Added `hosts/chibigochi_spike/chibigochi_chat_system.md` so Chibigochi chat
+  no longer reuses the Telegram-specific system prompt.
+- The proxy supports both a long-running local endpoint and
+  `--run-conformance`, which starts a temporary proxy and runs the real Godot
+  HTTP bridge scenario.
+- The proxy reads `gemini_api_key`, model mapping, and `chat_role` from
+  `hosts/telegram_gemini_bot/runtime/state/secrets.local.json` unless env vars
+  override them.
+- Token usage is logged under `hosts/chibigochi_spike/runtime/logs/`, which is
+  gitignored.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe hosts\chibigochi_spike\chibigochi_gemini_proxy.py --run-conformance --validate-key` passed with real Gemini:
+  `host=chibigochi-gemini-bridge`, `memory_units=3`, `core_facts=4`.
+- First real run exposed two host-edge issues and both were fixed:
+  `secrets.local.json` may have a UTF-8 BOM, so the proxy reads it with
+  `utf-8-sig`; and the Godot runner now accepts either `space` or `космос`
+  in Core facts because Gemini may formulate the space interest in Ukrainian.
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile hosts\chibigochi_spike\chibigochi_gemini_proxy.py tests\host_conformance\host_conformance.py` passed.
+- `git diff --check` passed.
+
+**Висновок:**
+Chibigochi now has a production-shaped real-provider seam for local development:
+Godot -> HTTP bridge -> Gemini proxy -> core-owned LLM request responses. The
+proxy is intentionally outside Godot and outside Rust core, preserving the
+provider boundary.
