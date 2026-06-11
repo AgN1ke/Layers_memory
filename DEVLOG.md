@@ -5383,3 +5383,40 @@ core_facts=3
 
 **Висновок:**
 Chibigochi integration тепер має перший мінімальний Godot scene/UI wrapper. Це все ще не production character loop і не polished game UI, але доводить, що сцена гри може користуватись Memory Engine через тонкий Godot host object без дублювання memory policy.
+
+## Entry 114 - 2026-06-11 - Chibigochi HTTP LLM bridge boundary
+
+**Проблематика:**
+Після UI-spike `chibigochi_memory_host.gd` усе ще містив fake LLM logic всередині самого host object. Для тесту це працювало, але для production-shape це неправильна межа: Godot host має виконувати `LlmRequest -> text`, а не знати, як створювати memory units, personal signals чи fidelity verdicts.
+
+**Задум:**
+Винести LLM-виконавця в injectable bridge object. Fake bridge лишається deterministic test implementation; HTTP bridge стає production-shaped boundary для локального або серверного LLM proxy. Memory policy лишається в Rust core.
+
+**Що робили:**
+- Додано `chibigochi_fake_llm_bridge.gd`: тестовий bridge для deterministic headless сценаріїв.
+- Додано `chibigochi_http_llm_bridge.gd`: синхронний HTTP bridge поверх Godot `HTTPClient`, який POST-ить `chat_reply`, `memory_request` і `memory_fidelity_pass` payloads у зовнішній executor і повертає engine-compatible response objects.
+- `chibigochi_memory_host.gd` більше не формує fake LLM outputs сам; він має `set_llm_bridge(...)` і делегує chat/sleep/fidelity calls у bridge.
+- `main_scene.gd` може прийняти bridge перед `open_memory(...)`, щоб майбутній game scene міг підставити HTTP bridge.
+- Додано `llm_bridge_runner.gd`: headless Godot runner, що підключає `chibigochi_http_llm_bridge.gd`.
+- Розширено `tests/host_conformance/host_conformance.py --host chibigochi-llm-bridge`: Python піднімає локальний HTTP proxy, Godot проходить повний `user text -> HTTP chat -> sleep LlmRequest batches -> HTTP responses -> Core -> restart recall`.
+- Додано `docs/chibigochi-llm-bridge.md` з payload contract для `chat_reply`, `memory_request` і `memory_fidelity_pass`.
+
+**Проблеми чи виклики:**
+Fidelity request shape у реальному engine path може приходити через `prompt_inputs.evidence_pack`, а не тільки `prompt_inputs.memory_unit`; fake bridge підтримує обидва. HTTP bridge зроблено синхронним, щоб поточний Godot host loop не вимагав async-переписування. Це прийнятно для spike/bridge boundary; polished product loop може винести HTTP calls у async UX пізніше.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-llm-bridge` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-ui` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-spike` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host direct` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host telegram-local` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile tests\host_conformance\host_conformance.py` passed.
+- `git diff --check` passed.
+- `cargo fmt --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest crates\python_adapter\tests -q` passed.
+
+**Висновок:**
+Chibigochi має production-shaped LLM boundary: Godot може виконувати LLM через HTTP proxy без memory policy у сцені чи host object. Це ще не реальна модель/секрети/production UX, але це правильний інтеграційний шов для них.

@@ -127,6 +127,14 @@ The minimal scene/UI wrapper can be smoke-tested headlessly as well:
 crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-ui
 ```
 
+The Chibigochi LLM bridge path starts a local HTTP LLM proxy and verifies that
+Godot can execute chat/sleep/fidelity requests through that bridge instead of
+using in-process fake responses:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-llm-bridge
+```
+
 Перевірити Rust:
 
 ```powershell

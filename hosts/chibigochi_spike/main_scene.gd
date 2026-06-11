@@ -13,6 +13,7 @@ var conversation_lines: Array[String] = []
 var last_error := ""
 var last_reply := ""
 var ui_built := false
+var configured_llm_bridge: Variant
 
 func _ready() -> void:
     _ensure_ui()
@@ -23,6 +24,8 @@ func open_memory(memory_dir: String) -> bool:
     _ensure_ui()
     last_error = ""
     memory_host = ChibigochiMemoryHostScript.new()
+    if configured_llm_bridge != null:
+        memory_host.set_llm_bridge(configured_llm_bridge)
     if not memory_host.open(memory_dir):
         _set_error(memory_host.last_error)
         return false
@@ -81,6 +84,11 @@ func context_package(current_text: String) -> Dictionary:
     if memory_host == null:
         return {}
     return memory_host.context_package(current_text)
+
+func set_llm_bridge(bridge: Variant) -> void:
+    configured_llm_bridge = bridge
+    if memory_host != null:
+        memory_host.set_llm_bridge(bridge)
 
 func core_fact_texts(current_text: String) -> String:
     if memory_host == null:
