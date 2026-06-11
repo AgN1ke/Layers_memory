@@ -135,6 +135,31 @@ using in-process fake responses:
 crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-llm-bridge
 ```
 
+To run the same Chibigochi HTTP bridge against the cached Gemini key instead of
+the deterministic fake proxy:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe hosts\chibigochi_spike\chibigochi_gemini_proxy.py --run-conformance --validate-key
+```
+
+For manual Godot experiments, start the proxy as a local endpoint:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe hosts\chibigochi_spike\chibigochi_gemini_proxy.py --host 127.0.0.1 --port 8765 --validate-key
+```
+
+Secrets are read from the existing gitignored cache:
+
+```text
+hosts/telegram_gemini_bot/runtime/state/secrets.local.json
+```
+
+Proxy logs and token telemetry are written under gitignored runtime state:
+
+```text
+hosts/chibigochi_spike/runtime/logs/
+```
+
 Перевірити Rust:
 
 ```powershell

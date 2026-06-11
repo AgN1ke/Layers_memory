@@ -95,12 +95,18 @@ func _assert_core_texts(texts: String) -> void:
         _fail("HTTP bridge Core facts missed player name:\n%s" % texts)
     if not texts.contains("Irzha"):
         _fail("HTTP bridge Core facts missed cat Irzha:\n%s" % texts)
-    if not texts.contains("space"):
+    if not _contains_any(texts, ["space", "космос"]):
         _fail("HTTP bridge Core facts missed space interest:\n%s" % texts)
 
 func _assert_host_ok(host: Node) -> void:
     if host.last_error != "":
         _fail(host.last_error)
+
+func _contains_any(text: String, needles: Array) -> bool:
+    for needle in needles:
+        if text.contains(str(needle)):
+            return true
+    return false
 
 func _fail(message: String) -> void:
     if failed:
