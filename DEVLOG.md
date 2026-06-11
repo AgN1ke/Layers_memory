@@ -5344,3 +5344,42 @@ core_facts=3
 
 **Висновок:**
 Перший product-host spike є. Він не є повною Chibigochi integration, але доводить практичний Godot host loop і restart persistence поверх того самого core. Наступний крок для цього напряму — або real Godot scene/UI wrapper, або production LLM bridge для Chibigochi; не додавати memory policy в Godot.
+
+## Entry 113 - 2026-06-11 - Chibigochi minimal Godot scene wrapper
+
+**Проблематика:**
+`hosts/chibigochi_spike/` уже доводив Godot product-host loop через headless script, але це ще не було навіть мінімальною Godot-сценою. Наступний крок мав показати, що game-facing wrapper може мати власний UI і все одно лишатись тонким хостом над тим самим core.
+
+**Задум:**
+Додати мінімальну Godot scene/UI wrapper без production LLM: поле вводу, conversation log, memory snapshot і sleep button. UI має викликати `chibigochi_memory_host.gd`, а не містити memory policy.
+
+**Що робили:**
+- Додано `hosts/chibigochi_spike/main_scene.tscn` і `main_scene.gd`.
+- `project.godot` тепер відкриває `res://main_scene.tscn` як main scene.
+- UI wrapper експонує тестові методи `send_text`, `run_sleep_now`, `memory_view`, `context_package`, `core_fact_texts`, але делегує всю memory роботу в `chibigochi_memory_host.gd`.
+- Додано `hosts/chibigochi_spike/ui_runner.gd`: headless smoke, який інстанціює сцену, симулює повідомлення, запускає sleep, створює нову сцену над тим самим memory dir і перевіряє persisted Core/context recall.
+- Розширено host conformance: `tests/host_conformance/host_conformance.py --host chibigochi-ui`.
+- Оновлено roadmap і local-development docs.
+
+**Проблеми чи виклики:**
+Перший запуск зловив два реальні Godot-ordering дефекти:
+- headless runner викликав сцену до `_ready`, тому UI-ноди були `null`; `open_memory()` тепер гарантує `_ensure_ui()`.
+- UI намагався рендерити context package до першої події, що залишало error state для нового session; стартовий memory snapshot тепер порожній до першого turn.
+
+Також runner спочатку викликав `context_package` на сцені, хоча wrapper його не експонував. Додано тонкі scene-level wrappers без обходу `chibigochi_memory_host.gd`.
+
+**Перевірки:**
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-ui` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-spike` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host godot-headless` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host direct` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host telegram-local` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe -m py_compile tests\host_conformance\host_conformance.py` passed.
+- `git diff --check` passed.
+- `cargo fmt --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe -m pytest crates\python_adapter\tests -q` passed.
+
+**Висновок:**
+Chibigochi integration тепер має перший мінімальний Godot scene/UI wrapper. Це все ще не production character loop і не polished game UI, але доводить, що сцена гри може користуватись Memory Engine через тонкий Godot host object без дублювання memory policy.

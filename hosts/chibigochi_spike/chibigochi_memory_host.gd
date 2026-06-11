@@ -8,6 +8,10 @@ var turn_index := 0
 var last_error := ""
 
 func open(memory_dir: String) -> bool:
+    var dir_error := DirAccess.make_dir_recursive_absolute(memory_dir)
+    if dir_error != OK:
+        _set_error("could not create memory directory: %s" % dir_error)
+        return false
     engine = MemoryEngineGodot.new()
     var opened: Variant = _loads(engine.open(memory_dir, "chibigochi_spike"))
     if _has_error(opened):

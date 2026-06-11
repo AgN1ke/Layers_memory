@@ -121,6 +121,12 @@ Chibigochi-style memory loop: user text -> context -> reply -> sleep -> restart
 crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-spike
 ```
 
+The minimal scene/UI wrapper can be smoke-tested headlessly as well:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-ui
+```
+
 Перевірити Rust:
 
 ```powershell

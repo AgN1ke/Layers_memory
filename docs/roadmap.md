@@ -263,7 +263,7 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 ### Адаптери
 
 - [x] Godot-адаптер через GDExtension (`crates/godot_adapter/`). Перший хост, що **не** Telegram-бот. — 2026-06-10, thin JSON-boundary GDExtension crate compiles with `cargo check -p godot_adapter`; live Godot runtime acceptance tracked in Host conformance above.
-- [~] Chibigochi-інтеграція: героїня використовує memory engine для довготривалої особистості. Перший headless product-host spike є в `hosts/chibigochi_spike/`: Godot host object проходить `user text -> context -> reply -> sleep -> restart -> persisted Core/context recall` через `tests/host_conformance/host_conformance.py --host chibigochi-spike`. Real scene/UI і production LLM loop ще відкриті.
+- [~] Chibigochi-інтеграція: героїня використовує memory engine для довготривалої особистості. Перший headless product-host spike є в `hosts/chibigochi_spike/`: Godot host object проходить `user text -> context -> reply -> sleep -> restart -> persisted Core/context recall` через `tests/host_conformance/host_conformance.py --host chibigochi-spike`. Мінімальна Godot scene/UI wrapper також є (`main_scene.tscn`, `main_scene.gd`) і проходить `--host chibigochi-ui`. Production LLM loop ще відкритий.
 - [ ] Третій проєкт (поки безіменний). Третій хост робить foundation truly universal.
 - [ ] MCP-facade як alternative обгортка над тим самим ядром. Для зовнішніх агентів (Claude Code, OpenAI Agents SDK), що хочуть користуватись memory як tool.
 - [ ] Стабілізувати JSON contracts: зафіксувати v1 для всіх schemas, прописати migration policy для v2+.
