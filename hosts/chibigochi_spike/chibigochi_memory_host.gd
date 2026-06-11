@@ -1,17 +1,24 @@
 extends Node
 
+const FakeLlmBridgeScript = preload("res://chibigochi_fake_llm_bridge.gd")
 const SESSION_ID := "chibigochi_spike"
 const CORE_SCOPE := SESSION_ID
 
 var engine: MemoryEngineGodot
+var llm_bridge: Variant
 var turn_index := 0
 var last_error := ""
+
+func set_llm_bridge(bridge: Variant) -> void:
+    llm_bridge = bridge
 
 func open(memory_dir: String) -> bool:
     var dir_error := DirAccess.make_dir_recursive_absolute(memory_dir)
     if dir_error != OK:
         _set_error("could not create memory directory: %s" % dir_error)
         return false
+    if llm_bridge == null:
+        llm_bridge = FakeLlmBridgeScript.new()
     engine = MemoryEngineGodot.new()
     var opened: Variant = _loads(engine.open(memory_dir, "chibigochi_spike"))
     if _has_error(opened):
@@ -32,7 +39,9 @@ func send_user_message(text: String) -> String:
         _set_error("rendered memory view missed current_user_message")
         return ""
 
-    var reply := _fake_assistant_reply(text, view)
+    var reply: String = llm_bridge.generate_chat_reply(text, view)
+    if _bridge_failed():
+        return ""
     _ingest("assistant_message", "chibigochi_heroine", reply, ["chibigochi_reply"])
     return reply
 
@@ -67,9 +76,10 @@ func run_sleep() -> Dictionary:
             break
         var responses: Array = []
         for request in batch["requests"]:
-            responses.append(_response_for_request(run, request))
-            if last_error != "":
+            var response: Dictionary = llm_bridge.execute_memory_request(run, request)
+            if _bridge_failed():
                 return {}
+            responses.append(response)
         step = _loads(engine.submit_sleep_batch(_dumps(run), _dumps(responses)))
         if last_error != "":
             return {}
@@ -79,7 +89,7 @@ func run_sleep() -> Dictionary:
     if last_error != "":
         return {}
     for request in outcome.get("fidelity_requests", []):
-        _submit_valid_fidelity(request)
+        _submit_fidelity(request)
         if last_error != "":
             return {}
     return outcome
@@ -91,13 +101,11 @@ func core_fact_texts(current_text: String) -> String:
         texts += str(fact.get("text", "")) + "\n"
     return texts
 
-func _fake_assistant_reply(text: String, view: String) -> String:
-    var lower := text.to_lower()
-    if lower.contains("cat") and view.contains("Irzha"):
-        return "I remember Irzha: your cat is part of my long-term memory."
-    if lower.contains("name") and view.contains("Mykyta"):
-        return "I remember your name is Mykyta."
-    return "Chibigochi heard you: %s" % text.substr(0, 80)
+func _submit_fidelity(request: Dictionary) -> void:
+    var response: Dictionary = llm_bridge.execute_fidelity_request(request)
+    if _bridge_failed():
+        return
+    _loads(engine.submit_memory_fidelity_response(request["task_id"], _dumps(response)))
 
 func _ingest(event_type: String, source: String, text: String, tags: Array) -> Dictionary:
     var timestamp := "2026-06-10T12:%02d:00.000Z" % turn_index
@@ -113,182 +121,11 @@ func _ingest(event_type: String, source: String, text: String, tags: Array) -> D
         "importance_hint": "high" if event_type == "user_message" else "normal",
     })))
 
-func _response_for_request(run: Dictionary, request: Dictionary) -> Dictionary:
-    var prompt_id: String = request["prompt_id"]
-    if prompt_id == "sleep_consolidator":
-        return {
-            "status": "ok",
-            "request_id": request["request_id"],
-            "text": (
-                "GIST: Chibigochi learned the player's name, cat, and space interest.\n\n"
-                + "The player introduced themselves as Mykyta, said they have a cat named Irzha, "
-                + "and shared an interest in space. This should survive a Godot host restart."
-            ),
-        }
-
-    var events := _sleep_events(request)
-    var user_events := []
-    for event in events:
-        if _event_kind(event) == "user_message":
-            user_events.append(event)
-    if user_events.is_empty():
-        user_events = events
-
-    var payload := {}
-    if prompt_id == "memory_unit_pass":
-        payload = {
-            "schema_version": "memory_units_result.v1",
-            "archive_id": run["archive_id"],
-            "memory_units": _memory_units_for_events(user_events),
-        }
-    elif prompt_id == "sleep_emotional_pass":
-        payload = {"emotional_markers": _emotional_markers_for_events(user_events)}
-    elif prompt_id == "sleep_topic_thread_pass":
-        payload = {"topic_thread": [{
-            "topic": "chibigochi_memory_spike",
-            "summary": "The player introduced durable facts for a Godot product host spike.",
-            "source_event_ids": _source_ids(user_events.slice(0, 3)),
-        }]}
-    elif prompt_id == "sleep_personal_signal_pass":
-        payload = {"personal_signals": _personal_signals_for_events(user_events)}
-    elif prompt_id == "sleep_relational_pass":
-        payload = {"relational_tone": null}
-    else:
-        _set_error("unexpected LLM request prompt_id=%s" % prompt_id)
-        return {}
-
-    return {"status": "ok", "request_id": request["request_id"], "text": _dumps(payload)}
-
-func _memory_units_for_events(events: Array) -> Array:
-    var units := []
-    for event in events:
-        var text := _event_text(event)
-        var source_id := _event_id(event)
-        if text.contains("My name is Mykyta"):
-            units.append({
-                "thesis": "Name -> the player is named Mykyta.",
-                "source_event_ids": [source_id],
-                "evidence": text,
-                "tags": ["name", "profile"],
-                "weight": 0.95,
-            })
-        if text.contains("Irzha") or text.to_lower().contains("cat"):
-            units.append({
-                "thesis": "Cat -> the player has a cat named Irzha.",
-                "source_event_ids": [source_id],
-                "evidence": text,
-                "tags": ["pet", "personal_memory"],
-                "weight": 0.95,
-            })
-        if text.to_lower().contains("space"):
-            units.append({
-                "thesis": "Space -> the player likes space.",
-                "source_event_ids": [source_id],
-                "evidence": text,
-                "tags": ["interest"],
-                "weight": 0.9,
-            })
-    return units
-
-func _personal_signals_for_events(events: Array) -> Array:
-    var signals := []
-    for event in events:
-        var text := _event_text(event)
-        var source_id := _event_id(event)
-        if text.contains("My name is Mykyta"):
-            signals.append({
-                "text": "The player's name is Mykyta.",
-                "category": "name",
-                "confidence": 0.95,
-                "source_event_ids": [source_id],
-            })
-        if text.contains("Irzha") or text.to_lower().contains("cat"):
-            signals.append({
-                "text": "The player has a cat named Irzha.",
-                "category": "pet",
-                "confidence": 0.95,
-                "source_event_ids": [source_id],
-            })
-        if text.to_lower().contains("space"):
-            signals.append({
-                "text": "The player likes space.",
-                "category": "interest",
-                "confidence": 0.92,
-                "source_event_ids": [source_id],
-            })
-    return signals
-
-func _emotional_markers_for_events(events: Array) -> Array:
-    var markers := []
-    for event in events:
-        var text := _event_text(event)
-        if text.contains("Irzha") or text.to_lower().contains("cat"):
-            markers.append({
-                "target": "cat_irzha",
-                "affect": "warmth",
-                "strength": 0.9,
-                "source_event_ids": [_event_id(event)],
-                "quote": text,
-            })
-    return markers
-
-func _submit_valid_fidelity(request: Dictionary) -> void:
-    var unit: Dictionary = request.get("prompt_inputs", {}).get("memory_unit", {})
-    var memory_unit_id = unit.get("memory_unit_id")
-    var archive_id = unit.get("archive_id")
-    if not (memory_unit_id is String) or not (archive_id is String):
-        return
-    var response := {
-        "status": "ok",
-        "request_id": request["request_id"],
-        "text": _dumps({
-            "schema_version": "fidelity_review.v1",
-            "memory_unit_id": memory_unit_id,
-            "archive_id": archive_id,
-            "status": "valid",
-            "confidence": 0.95,
-            "explanation": "Chibigochi spike validator accepts source-backed unit.",
-            "revised_thesis": null,
-            "missing_detail": null,
-        }),
-    }
-    _loads(engine.submit_memory_fidelity_response(request["task_id"], _dumps(response)))
-
-func _sleep_events(request: Dictionary) -> Array:
-    var inputs: Dictionary = request.get("prompt_inputs", {})
-    var sleep_task: Variant = inputs.get("sleep_task")
-    if sleep_task is Dictionary and sleep_task.get("events") is Array:
-        return sleep_task["events"]
-    if inputs.get("events") is Array:
-        return inputs["events"]
-    _set_error("request has no sleep events")
-    return []
-
-func _source_ids(events: Array) -> Array:
-    var ids := []
-    for event in events:
-        ids.append(_event_id(event))
-    return ids
-
-func _event_text(event: Dictionary) -> String:
-    var text: Variant = event.get("text")
-    if text is String:
-        return text
-    var payload: Variant = event.get("payload")
-    if payload is Dictionary and payload.get("text") is String:
-        return payload["text"]
-    return ""
-
-func _event_kind(event: Dictionary) -> String:
-    var value: Variant = event.get("event_type", event.get("type", ""))
-    return value if value is String else ""
-
-func _event_id(event: Dictionary) -> String:
-    var value: Variant = event.get("event_id")
-    if not (value is String) or value == "":
-        _set_error("event has no event_id")
-        return ""
-    return value
+func _bridge_failed() -> bool:
+    if llm_bridge != null and llm_bridge.get("last_error") is String and llm_bridge.last_error != "":
+        _set_error(llm_bridge.last_error)
+        return true
+    return false
 
 func _loads(raw: String) -> Variant:
     var parsed: Variant = JSON.parse_string(raw)

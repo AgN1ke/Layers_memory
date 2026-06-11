@@ -9,6 +9,7 @@ same scenario without owning memory policy.
 from __future__ import annotations
 
 import argparse
+import http.server
 import importlib
 import json
 import os
@@ -17,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -241,6 +243,223 @@ def emotional_markers_for_events(events: list[dict[str, Any]]) -> list[dict[str,
                 }
             )
     return markers
+
+
+def english_memory_units_for_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    units: list[dict[str, Any]] = []
+    for event in events:
+        text = event_text(event)
+        source_id = event_id(event)
+        if "My name is Mykyta" in text:
+            units.append(
+                {
+                    "thesis": "Name -> the player is named Mykyta.",
+                    "source_event_ids": [source_id],
+                    "evidence": text,
+                    "tags": ["name", "profile"],
+                    "weight": 0.95,
+                }
+            )
+        if "Irzha" in text or "cat" in text.lower():
+            units.append(
+                {
+                    "thesis": "Cat -> the player has a cat named Irzha.",
+                    "source_event_ids": [source_id],
+                    "evidence": text,
+                    "tags": ["pet", "personal_memory"],
+                    "weight": 0.95,
+                }
+            )
+        if "space" in text.lower():
+            units.append(
+                {
+                    "thesis": "Space -> the player likes space.",
+                    "source_event_ids": [source_id],
+                    "evidence": text,
+                    "tags": ["interest"],
+                    "weight": 0.9,
+                }
+            )
+    return units
+
+
+def english_personal_signals_for_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    for event in events:
+        text = event_text(event)
+        source_id = event_id(event)
+        if "My name is Mykyta" in text:
+            signals.append(
+                {
+                    "text": "The player's name is Mykyta.",
+                    "category": "name",
+                    "confidence": 0.95,
+                    "source_event_ids": [source_id],
+                }
+            )
+        if "Irzha" in text or "cat" in text.lower():
+            signals.append(
+                {
+                    "text": "The player has a cat named Irzha.",
+                    "category": "pet",
+                    "confidence": 0.95,
+                    "source_event_ids": [source_id],
+                }
+            )
+        if "space" in text.lower():
+            signals.append(
+                {
+                    "text": "The player likes space.",
+                    "category": "interest",
+                    "confidence": 0.92,
+                    "source_event_ids": [source_id],
+                }
+            )
+    return signals
+
+
+def english_emotional_markers_for_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    for event in events:
+        text = event_text(event)
+        if "Irzha" in text or "cat" in text.lower():
+            markers.append(
+                {
+                    "target": "cat_irzha",
+                    "affect": "warmth",
+                    "strength": 0.9,
+                    "source_event_ids": [event_id(event)],
+                    "quote": text,
+                }
+            )
+    return markers
+
+
+def sleep_events_from_request(request: dict[str, Any]) -> list[dict[str, Any]]:
+    inputs = request.get("prompt_inputs")
+    if not isinstance(inputs, dict):
+        raise ConformanceError(f"request has no prompt_inputs: {request!r}")
+    sleep_task = inputs.get("sleep_task")
+    if isinstance(sleep_task, dict) and isinstance(sleep_task.get("events"), list):
+        return [event for event in sleep_task["events"] if isinstance(event, dict)]
+    events = inputs.get("events")
+    if isinstance(events, list):
+        return [event for event in events if isinstance(event, dict)]
+    raise ConformanceError(f"request has no sleep events: {request!r}")
+
+
+def chibigochi_llm_proxy_response(payload: dict[str, Any]) -> dict[str, Any]:
+    operation = payload.get("operation")
+    if operation == "chat_reply":
+        text = str(payload.get("input_text", ""))
+        memory_view = str(payload.get("memory_view", ""))
+        lower = text.lower()
+        if "cat" in lower and "Irzha" in memory_view:
+            return {"text": "I remember Irzha: your cat is part of my long-term memory."}
+        if "name" in lower and "Mykyta" in memory_view:
+            return {"text": "I remember your name is Mykyta."}
+        return {"text": f"Chibigochi heard you: {text[:80]}"}
+
+    if operation == "memory_request":
+        request = payload.get("request")
+        run = payload.get("run")
+        if not isinstance(request, dict) or not isinstance(run, dict):
+            raise ConformanceError("memory_request payload missed request/run")
+        prompt_id = request.get("prompt_id")
+        if prompt_id == "sleep_consolidator":
+            return {
+                "status": "ok",
+                "request_id": request.get("request_id", ""),
+                "text": (
+                    "GIST: Chibigochi HTTP bridge learned the player's name, cat, and space interest.\n\n"
+                    "The player introduced themselves as Mykyta, said they have a cat named Irzha, "
+                    "and shared an interest in space through the HTTP LLM bridge path."
+                ),
+            }
+        events = [event for event in sleep_events_from_request(request) if event_kind(event) == "user_message"]
+        if not events:
+            events = sleep_events_from_request(request)
+        if prompt_id == "memory_unit_pass":
+            response_payload = {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": run.get("archive_id", ""),
+                "memory_units": english_memory_units_for_events(events),
+            }
+        elif prompt_id == "sleep_emotional_pass":
+            response_payload = {"emotional_markers": english_emotional_markers_for_events(events)}
+        elif prompt_id == "sleep_topic_thread_pass":
+            response_payload = {
+                "topic_thread": [
+                    {
+                        "topic": "chibigochi_http_bridge",
+                        "summary": "The player introduced durable facts through the HTTP LLM bridge.",
+                        "source_event_ids": [event_id(event) for event in events[:3]],
+                    }
+                ]
+            }
+        elif prompt_id == "sleep_personal_signal_pass":
+            response_payload = {"personal_signals": english_personal_signals_for_events(events)}
+        elif prompt_id == "sleep_relational_pass":
+            response_payload = {"relational_tone": None}
+        else:
+            raise ConformanceError(f"unexpected HTTP bridge prompt_id={prompt_id!r}")
+        return {
+            "status": "ok",
+            "request_id": request.get("request_id", ""),
+            "text": dumps(response_payload),
+        }
+
+    if operation == "memory_fidelity_pass":
+        request = payload.get("request")
+        if not isinstance(request, dict):
+            raise ConformanceError("memory_fidelity_pass payload missed request")
+        inputs = request.get("prompt_inputs") if isinstance(request.get("prompt_inputs"), dict) else {}
+        evidence = inputs.get("evidence_pack") if isinstance(inputs.get("evidence_pack"), dict) else {}
+        unit = inputs.get("memory_unit") if isinstance(inputs.get("memory_unit"), dict) else evidence
+        return {
+            "status": "ok",
+            "request_id": request.get("request_id", ""),
+            "text": dumps(
+                {
+                    "schema_version": "fidelity_review.v1",
+                    "memory_unit_id": unit.get("memory_unit_id", ""),
+                    "archive_id": unit.get("archive_id", ""),
+                    "status": "valid",
+                    "confidence": 0.95,
+                    "explanation": "HTTP bridge fake validator accepts the source-backed unit.",
+                    "revised_thesis": None,
+                    "missing_detail": None,
+                }
+            ),
+        }
+
+    raise ConformanceError(f"unexpected HTTP bridge operation={operation!r}")
+
+
+class ChibigochiLlmProxyHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802 - http.server API
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ConformanceError("HTTP bridge payload is not an object")
+            response = chibigochi_llm_proxy_response(payload)
+            raw = dumps(response).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        except Exception as err:
+            raw = dumps({"error": f"{type(err).__name__}: {err}"}).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - http.server API
+        return
 
 
 class DirectHostDriver:
@@ -664,12 +883,32 @@ def run_chibigochi_ui(keep_runtime: bool, godot_bin: str | None) -> DriverResult
     )
 
 
+def run_chibigochi_llm_bridge(keep_runtime: bool, godot_bin: str | None) -> DriverResult:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ChibigochiLlmProxyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = f"http://127.0.0.1:{server.server_port}/llm"
+    try:
+        return run_godot_script(
+            keep_runtime=keep_runtime,
+            godot_bin=godot_bin,
+            project_source=CHIBIGOCHI_SPIKE_DIR,
+            script="res://llm_bridge_runner.gd",
+            success_marker="CHIBIGOCHI LLM BRIDGE PASSED",
+            script_args=["--llm-endpoint", endpoint],
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def run_godot_script(
     keep_runtime: bool,
     godot_bin: str | None,
     project_source: Path,
     script: str,
     success_marker: str,
+    script_args: list[str] | None = None,
 ) -> DriverResult:
     executable = find_godot_binary(godot_bin)
     runtime = Path(tempfile.mkdtemp(prefix="memory_engine_godot_headless_conformance_"))
@@ -710,6 +949,7 @@ def run_godot_script(
                     "--",
                     "--runtime-dir",
                     str(driver_runtime),
+                    *(script_args or []),
                 ],
                 cwd=project_dir,
                 text=True,
@@ -797,7 +1037,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run host conformance scenarios.")
     parser.add_argument(
         "--host",
-        choices=["direct", "telegram-local", "godot-headless", "chibigochi-spike", "chibigochi-ui"],
+        choices=[
+            "direct",
+            "telegram-local",
+            "godot-headless",
+            "chibigochi-spike",
+            "chibigochi-ui",
+            "chibigochi-llm-bridge",
+        ],
         default="direct",
     )
     parser.add_argument("--godot-bin", help="Godot executable for --host godot-headless")
@@ -815,6 +1062,8 @@ def main() -> int:
             result = run_chibigochi_spike(args.keep_runtime, args.godot_bin)
         elif args.host == "chibigochi-ui":
             result = run_chibigochi_ui(args.keep_runtime, args.godot_bin)
+        elif args.host == "chibigochi-llm-bridge":
+            result = run_chibigochi_llm_bridge(args.keep_runtime, args.godot_bin)
         else:
             raise ConformanceError(f"unsupported host: {args.host}")
     except Exception as err:
