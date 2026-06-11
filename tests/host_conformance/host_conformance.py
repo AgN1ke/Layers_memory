@@ -654,6 +654,16 @@ def run_chibigochi_spike(keep_runtime: bool, godot_bin: str | None) -> DriverRes
     )
 
 
+def run_chibigochi_ui(keep_runtime: bool, godot_bin: str | None) -> DriverResult:
+    return run_godot_script(
+        keep_runtime=keep_runtime,
+        godot_bin=godot_bin,
+        project_source=CHIBIGOCHI_SPIKE_DIR,
+        script="res://ui_runner.gd",
+        success_marker="CHIBIGOCHI UI PASSED",
+    )
+
+
 def run_godot_script(
     keep_runtime: bool,
     godot_bin: str | None,
@@ -787,7 +797,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run host conformance scenarios.")
     parser.add_argument(
         "--host",
-        choices=["direct", "telegram-local", "godot-headless", "chibigochi-spike"],
+        choices=["direct", "telegram-local", "godot-headless", "chibigochi-spike", "chibigochi-ui"],
         default="direct",
     )
     parser.add_argument("--godot-bin", help="Godot executable for --host godot-headless")
@@ -803,6 +813,8 @@ def main() -> int:
             result = run_godot_headless(args.keep_runtime, args.godot_bin)
         elif args.host == "chibigochi-spike":
             result = run_chibigochi_spike(args.keep_runtime, args.godot_bin)
+        elif args.host == "chibigochi-ui":
+            result = run_chibigochi_ui(args.keep_runtime, args.godot_bin)
         else:
             raise ConformanceError(f"unsupported host: {args.host}")
     except Exception as err:
