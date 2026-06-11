@@ -5464,3 +5464,38 @@ Chibigochi now has a production-shaped real-provider seam for local development:
 Godot -> HTTP bridge -> Gemini proxy -> core-owned LLM request responses. The
 proxy is intentionally outside Godot and outside Rust core, preserving the
 provider boundary.
+
+## Entry 116 - 2026-06-11 - Stabilize Chibigochi Gemini bridge live assertions
+
+**Проблематика:**
+The real Gemini Chibigochi bridge conformance could fail depending on whether
+Gemini formulated remembered facts in English or Ukrainian. The memory path was
+working, but `llm_bridge_runner.gd` asserted prose with English-only substrings
+(`Mykyta`, `Irzha`) while Gemini may write `Микита`, `Іржа`, or inflected forms
+such as `Микити` and `Іржу`.
+
+**Задум:**
+Keep the live gate focused on engine state and durable memory, not on one exact
+LLM phrasing. Use minimal bilingual stems for expected facts while keeping the
+assertions strict enough to catch missing memory.
+
+**Що робили:**
+- Replaced English-only checks in `hosts/chibigochi_spike/llm_bridge_runner.gd`
+  with `_assert_contains_any(...)`.
+- First reply accepts `Mykyta` or the Ukrainian stem `Микит`.
+- Restart reply and Core cat checks accept `Irzha` or the Ukrainian stem `Ірж`.
+- Space interest accepts `space` or `космос`.
+- Rewrote the runner file to remove the old mojibake `космос` literal in that
+  assertion.
+
+**Перевірки:**
+- `git diff --check` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-llm-bridge` passed.
+- `crates\python_adapter\.venv\Scripts\python.exe hosts\chibigochi_spike\chibigochi_gemini_proxy.py --run-conformance --validate-key` passed with real Gemini:
+  `host=chibigochi-gemini-bridge`, `memory_units=3`, `core_facts=4`.
+
+**Висновок:**
+The Chibigochi real-Gemini bridge gate is less flaky while still proving the
+same boundary: Godot uses HTTP, the proxy owns Gemini, and Rust core owns memory
+policy. This is a prerequisite cleanup before building the async/product UI
+loop.

@@ -29,8 +29,12 @@ func _init() -> void:
     _assert_host_ok(host)
     if failed:
         return
-    if not first_reply.contains("Mykyta"):
-        _fail("HTTP bridge first reply did not acknowledge current user text")
+    _assert_contains_any(
+        first_reply,
+        ["Mykyta", "Микит"],
+        "HTTP bridge first reply did not acknowledge current user text: %s" % first_reply,
+    )
+    if failed:
         return
 
     host.send_user_message("I have a cat named Irzha.")
@@ -63,8 +67,12 @@ func _init() -> void:
     _assert_host_ok(restarted)
     if failed:
         return
-    if not restart_reply.contains("Irzha"):
-        _fail("HTTP bridge restart reply did not use persisted memory: %s" % restart_reply)
+    _assert_contains_any(
+        restart_reply,
+        ["Irzha", "Ірж"],
+        "HTTP bridge restart reply did not use persisted memory: %s" % restart_reply,
+    )
+    if failed:
         return
 
     print("CHIBIGOCHI LLM BRIDGE PASSED")
@@ -91,12 +99,9 @@ func _assert_archive(archive: Dictionary) -> void:
         _fail("HTTP bridge expected at least three memory units, got %s" % units.size())
 
 func _assert_core_texts(texts: String) -> void:
-    if not texts.contains("Mykyta"):
-        _fail("HTTP bridge Core facts missed player name:\n%s" % texts)
-    if not texts.contains("Irzha"):
-        _fail("HTTP bridge Core facts missed cat Irzha:\n%s" % texts)
-    if not _contains_any(texts, ["space", "космос"]):
-        _fail("HTTP bridge Core facts missed space interest:\n%s" % texts)
+    _assert_contains_any(texts, ["Mykyta", "Микит"], "HTTP bridge Core facts missed player name:\n%s" % texts)
+    _assert_contains_any(texts, ["Irzha", "Ірж"], "HTTP bridge Core facts missed cat Irzha:\n%s" % texts)
+    _assert_contains_any(texts, ["space", "космос"], "HTTP bridge Core facts missed space interest:\n%s" % texts)
 
 func _assert_host_ok(host: Node) -> void:
     if host.last_error != "":
@@ -107,6 +112,10 @@ func _contains_any(text: String, needles: Array) -> bool:
         if text.contains(str(needle)):
             return true
     return false
+
+func _assert_contains_any(text: String, needles: Array, message: String) -> void:
+    if not _contains_any(text, needles):
+        _fail(message)
 
 func _fail(message: String) -> void:
     if failed:
