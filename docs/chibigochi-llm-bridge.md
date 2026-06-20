@@ -18,6 +18,10 @@ core.
   - HTTP bridge for a local or remote LLM executor;
   - uses Godot `HTTPClient`;
   - sends JSON requests and expects JSON response objects.
+- `hosts/chibigochi_spike/chibigochi_async_http_llm_bridge.gd`
+  - async HTTP bridge for the Godot scene/product loop;
+  - uses Godot `HTTPRequest` and returns through `await`;
+  - keeps provider keys out of Godot exactly like the synchronous bridge.
 - `hosts/chibigochi_spike/chibigochi_gemini_proxy.py`
   - local Gemini-backed HTTP executor for development;
   - reads the existing gitignored secrets cache from
@@ -118,6 +122,12 @@ The bridge path is tested by a local HTTP proxy:
 crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-llm-bridge
 ```
 
+The async scene/product loop is tested with the same local HTTP proxy:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-product-loop
+```
+
 That scenario proves:
 
 - Godot uses `chibigochi_http_llm_bridge.gd`, not in-process fake responses.
@@ -125,6 +135,8 @@ That scenario proves:
 - The Rust core still owns sleep orchestration, Core promotion, fidelity state,
   and persistence.
 - Restart recall works from persisted Core/context memory.
+- The async scene path disables input while sending/sleeping, surfaces errors in
+  UI state, and returns to `idle` after successful reply/sleep.
 
 ## Local Gemini Proxy
 

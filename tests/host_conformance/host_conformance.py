@@ -902,6 +902,25 @@ def run_chibigochi_llm_bridge(keep_runtime: bool, godot_bin: str | None) -> Driv
         server.server_close()
 
 
+def run_chibigochi_product_loop(keep_runtime: bool, godot_bin: str | None) -> DriverResult:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ChibigochiLlmProxyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = f"http://127.0.0.1:{server.server_port}/llm"
+    try:
+        return run_godot_script(
+            keep_runtime=keep_runtime,
+            godot_bin=godot_bin,
+            project_source=CHIBIGOCHI_SPIKE_DIR,
+            script="res://async_ui_runner.gd",
+            success_marker="CHIBIGOCHI ASYNC UI PASSED",
+            script_args=["--llm-endpoint", endpoint],
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def run_godot_script(
     keep_runtime: bool,
     godot_bin: str | None,
@@ -1044,6 +1063,7 @@ def main() -> int:
             "chibigochi-spike",
             "chibigochi-ui",
             "chibigochi-llm-bridge",
+            "chibigochi-product-loop",
         ],
         default="direct",
     )
@@ -1064,6 +1084,8 @@ def main() -> int:
             result = run_chibigochi_ui(args.keep_runtime, args.godot_bin)
         elif args.host == "chibigochi-llm-bridge":
             result = run_chibigochi_llm_bridge(args.keep_runtime, args.godot_bin)
+        elif args.host == "chibigochi-product-loop":
+            result = run_chibigochi_product_loop(args.keep_runtime, args.godot_bin)
         else:
             raise ConformanceError(f"unsupported host: {args.host}")
     except Exception as err:
