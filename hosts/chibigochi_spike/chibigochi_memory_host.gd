@@ -45,6 +45,30 @@ func send_user_message(text: String) -> String:
     _ingest("assistant_message", "chibigochi_heroine", reply, ["chibigochi_reply"])
     return reply
 
+func send_user_message_async(text: String) -> String:
+    turn_index += 1
+    _ingest("user_message", "chibigochi_player", text, ["chibigochi_spike"])
+    if last_error != "":
+        return ""
+
+    var package := context_package(text)
+    if last_error != "":
+        return ""
+    var view := engine.render_memory_view(_dumps(package), text)
+    if not view.contains("<current_user_message>"):
+        _set_error("rendered memory view missed current_user_message")
+        return ""
+
+    var reply := ""
+    if llm_bridge != null and llm_bridge.has_method("generate_chat_reply_async"):
+        reply = await llm_bridge.generate_chat_reply_async(text, view)
+    else:
+        reply = llm_bridge.generate_chat_reply(text, view)
+    if _bridge_failed():
+        return ""
+    _ingest("assistant_message", "chibigochi_heroine", reply, ["chibigochi_reply"])
+    return reply
+
 func context_package(current_text: String) -> Dictionary:
     return _loads(engine.core_context_package(_dumps({
         "schema_version": "core_context_request.v1",
@@ -94,6 +118,43 @@ func run_sleep() -> Dictionary:
             return {}
     return outcome
 
+func run_sleep_async() -> Dictionary:
+    var run: Dictionary = _loads(engine.begin_sleep_run(SESSION_ID))
+    if last_error != "":
+        return {}
+
+    while true:
+        var step: Dictionary = _loads(engine.next_sleep_batch(_dumps(run)))
+        if last_error != "":
+            return {}
+        run = step["run"]
+        var batch: Variant = step.get("batch")
+        if batch == null:
+            break
+        var responses: Array = []
+        for request in batch["requests"]:
+            var response: Dictionary
+            if llm_bridge != null and llm_bridge.has_method("execute_memory_request_async"):
+                response = await llm_bridge.execute_memory_request_async(run, request)
+            else:
+                response = llm_bridge.execute_memory_request(run, request)
+            if _bridge_failed():
+                return {}
+            responses.append(response)
+        step = _loads(engine.submit_sleep_batch(_dumps(run), _dumps(responses)))
+        if last_error != "":
+            return {}
+        run = step["run"]
+
+    var outcome: Dictionary = _loads(engine.finish_sleep_run(_dumps(run)))
+    if last_error != "":
+        return {}
+    for request in outcome.get("fidelity_requests", []):
+        await _submit_fidelity_async(request)
+        if last_error != "":
+            return {}
+    return outcome
+
 func core_fact_texts(current_text: String) -> String:
     var package: Dictionary = context_package(current_text)
     var texts: String = ""
@@ -103,6 +164,16 @@ func core_fact_texts(current_text: String) -> String:
 
 func _submit_fidelity(request: Dictionary) -> void:
     var response: Dictionary = llm_bridge.execute_fidelity_request(request)
+    if _bridge_failed():
+        return
+    _loads(engine.submit_memory_fidelity_response(request["task_id"], _dumps(response)))
+
+func _submit_fidelity_async(request: Dictionary) -> void:
+    var response: Dictionary
+    if llm_bridge != null and llm_bridge.has_method("execute_fidelity_request_async"):
+        response = await llm_bridge.execute_fidelity_request_async(request)
+    else:
+        response = llm_bridge.execute_fidelity_request(request)
     if _bridge_failed():
         return
     _loads(engine.submit_memory_fidelity_response(request["task_id"], _dumps(response)))

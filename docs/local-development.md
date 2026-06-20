@@ -135,6 +135,13 @@ using in-process fake responses:
 crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-llm-bridge
 ```
 
+The async Chibigochi product-loop smoke uses the Godot scene/UI wrapper with an
+async HTTP bridge, loading/error states, sleep, and restart recall:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe tests\host_conformance\host_conformance.py --host chibigochi-product-loop
+```
+
 To run the same Chibigochi HTTP bridge against the cached Gemini key instead of
 the deterministic fake proxy:
 
