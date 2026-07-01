@@ -2,7 +2,7 @@
 name = "godot_adapter"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "Godot GDExtension adapter for Memory Engine"
 
 [lib]
