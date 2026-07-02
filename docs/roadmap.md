@@ -113,7 +113,7 @@ v0.3 host-conformance також закрито: direct/local, Telegram-local і
 
 - [x] Git workspace, `.gitattributes`, `.gitignore` під runtime memory і secrets.
 - [x] Orphan-гілка `github-code` для публікації без внутрішніх docs.
-- [x] Ліцензія проєкту (MIT) + `LICENSE.md` у корені.
+- [x] Ліцензія Memory Engine Non-Commercial Public License v0.2 + `LICENSE.md` у корені.
 - [x] `cargo fmt --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `pytest crates/python_adapter/tests` як обов'язкові gates.
 - [x] Unit і integration тести: 17+ у `memory_engine`, 9+ у Python adapter.
 - [x] Local conversation harness без Telegram: сценарії `mixed_short`, `topic_switching`, `identity_noise` проганяють живий Gemini chat через той самий prompt/context/sleep шлях, пишуть markdown-звіти і ловлять mid-dialog greeting / stale archive contamination. Це preflight, не заміна live Telegram acceptance. — 2026-05-22, `hosts/telegram_gemini_bot/local_harness.py`.

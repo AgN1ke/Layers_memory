@@ -2,7 +2,7 @@
 name = "memory_engine"
 version.workspace = true
 edition.workspace = true
-license = "MIT"
+license-file.workspace = true
 description = "Reusable three-layer memory engine core"
 
 [lib]
