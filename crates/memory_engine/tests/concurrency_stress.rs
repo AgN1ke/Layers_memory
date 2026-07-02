@@ -57,6 +57,7 @@ fn run_parallel_session_and_core_stress(thread_count: usize, events_per_session:
                         tags: vec!["stress".to_string()],
                         theme: Some("concurrency".to_string()),
                         emotional_tone: None,
+                        speaker: None,
                         links: vec![],
                         importance_hint: Default::default(),
                         processing_mode: Default::default(),

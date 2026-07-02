@@ -291,14 +291,14 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 
 **Гілка 1 — контракти + рендер + recall за подією:**
 
-- [ ] Опціональний `speaker: { id, name }` в `IngestEvent`/`StoredEvent` (serde default; відсутність = поточна бінарна поведінка). `links` вже типізовані — для `reply_to` потрібна лише конвенція kind у `contracts.md` + HISTORY.
-- [ ] `render_memory_view`: події зі speaker рендеряться імʼям (`Жека: ...`) замість `user:`; без speaker — байтово поточна поведінка.
+- [x] Опціональний `speaker: { id, name }` в `IngestEvent`/`StoredEvent`/`CoreContextEvent` (serde default; відсутність = поточна бінарна поведінка). `reply_to` kind-конвенція задокументована в `contracts.md`. — 2026-07-03, HISTORY-запис.
+- [x] `render_memory_view`: події зі speaker рендеряться імʼям (`Жека: ...`) замість `user:`; без speaker — байтово поточна поведінка; dedup current message працює для будь-якої не-assistant ролі. — 2026-07-03, `memory_view_attributes_speakers_and_drops_current_speaker_duplicate`.
 - [ ] Рендер сирого матеріалу sleep-пасів: імена спікерів + компактні reply-маркери (`[Жека, у відповідь на №12]`, локальні номери вікна).
 - [ ] Evidence pack теж рендерить speaker (`evidence_event_from_stored`) — інакше fidelity validator не може перевірити авторство (Запис 117, п.1).
 - [ ] `recall_by_event_id(session_id, event_id)`: покрита подія → архівний запис через metadata cache; жива → ознака «в активному хвості». Перед цим закрити storage-гальмо: `archive_entry_path_by_id` сканує весь каталог — потрібен path-hint або map `event_id -> archive_id` у `SessionMetadata` (перебудовний кеш; Запис 117, п.4).
-- [ ] Фаза 1 захисту Core: auto-bridge вимикається для сесій із кількома speaker — **у ядрі**, не в хості («що потрапляє в Core» — у списку заборон хоста; Запис 117, п.3).
+- [x] Фаза 1 захисту Core: auto-bridge і автоматичний Core-fidelity-path вимикаються для сесій із ≥2 speaker.id — **у ядрі** (`session_is_multi_speaker` в `engine/sleep_flow.rs`). — 2026-07-03, `engine_multi_speaker.rs`.
 - [ ] Host-рішення: бот у групі ingest-ить УСІ повідомлення, адресація керує лише відповіддю; Telegram privacy mode off (Запис 117, п.5).
-- [ ] Детермінований мультиспікерний conformance-сценарій (direct-варіант із атрибутованими тезами від fake LLM); лінійні сценарії не чіпати (Запис 117, п.8).
+- [x] Детермінований мультиспікерний conformance-сценарій: `tests/host_conformance/host_conformance.py --host direct-multispeaker` (speaker через PyO3, атрибутований transcript, атрибутовані тези, gossip-сигнал 0.95 не потрапляє в Core); лінійні сценарії без змін. — 2026-07-03.
 
 **Гілка 2 — промпти пасів (окремо, бо змінює якість Archive; власний HISTORY-слід):**
 

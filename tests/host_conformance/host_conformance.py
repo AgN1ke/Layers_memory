@@ -1052,12 +1052,218 @@ def assert_core(package: dict[str, Any]) -> None:
         raise ConformanceError(f"core facts do not include Irzha:\n{texts}")
 
 
+MULTISPEAKER_SESSION = "host_conformance_multispeaker"
+
+
+def run_direct_multispeaker(keep_runtime: bool) -> DriverResult:
+    """Deterministic multi-speaker scenario over the public adapter surface.
+
+    Proves that `speaker` survives the PyO3 JSON boundary, that the transcript
+    is attributed by name, and that the Phase-1 gate keeps high-confidence
+    gossip signals out of Core for multi-speaker sessions.
+    """
+    runtime = Path(tempfile.mkdtemp(prefix="memory_engine_multispeaker_conformance_"))
+    engine = memory_engine.MemoryEngine(str(runtime), host_id="host_conformance_multispeaker")
+    try:
+        turns = [
+            ("tg_101", "Жека", "Я нарешті купив мотоцикл!"),
+            ("tg_202", "Антон", "А я на рибалці був, клювало на світанку."),
+            ("tg_101", "Жека", "Завтра заберу мотоцикл із салону."),
+        ]
+        for index, (speaker_id, speaker_name, text) in enumerate(turns, start=1):
+            engine.ingest(
+                dumps(
+                    {
+                        "schema_version": "event.v1",
+                        "type": "user_message",
+                        "source": "group_chat",
+                        "timestamp": f"2026-07-02T10:{index:02}:00.000Z",
+                        "session_id": MULTISPEAKER_SESSION,
+                        "payload": {"text": text},
+                        "tags": ["group_chat"],
+                        "theme": "group_chat",
+                        "speaker": {"id": speaker_id, "name": speaker_name},
+                        "importance_hint": "high",
+                    }
+                )
+            )
+
+        current_text = "Жека, коли забираєш мотоцикл?"
+        live_package = loads(
+            engine.core_context_package(
+                dumps(
+                    {
+                        "schema_version": "core_context_request.v1",
+                        "session_id": MULTISPEAKER_SESSION,
+                        "domain_state": {"current_text": current_text},
+                        "core_scope": MULTISPEAKER_SESSION,
+                        "query_text": current_text,
+                        "recall_limit": 5,
+                        "session_recent_limit": 8,
+                        "session_trace_event_limit": 20,
+                        "include_core": True,
+                    }
+                )
+            )
+        )
+        live_view = engine.render_memory_view(dumps(live_package), current_text)
+        for marker in ["Жека: Я нарешті купив мотоцикл!", "Антон: А я на рибалці був"]:
+            if marker not in live_view:
+                raise ConformanceError(f"attributed memory view missing {marker!r}\n{live_view}")
+        if "user: Я нарешті купив мотоцикл!" in live_view:
+            raise ConformanceError("speaker event fell back to the legacy `user:` role")
+
+        run = loads(engine.begin_sleep_run(MULTISPEAKER_SESSION))
+        while True:
+            step = loads(engine.next_sleep_batch(dumps(run)))
+            run = step["run"]
+            batch = step.get("batch")
+            if not batch:
+                break
+            responses = [
+                multispeaker_response_for_request(run, request)
+                for request in batch["requests"]
+            ]
+            step = loads(engine.submit_sleep_batch(dumps(run), dumps(responses)))
+            run = step["run"]
+        outcome = loads(engine.finish_sleep_run(dumps(run)))
+
+        archive = outcome.get("archive_entry", {})
+        if archive.get("status") != "complete":
+            raise ConformanceError(f"multi-speaker sleep did not complete: {archive.get('status')!r}")
+        theses = "\n".join(
+            str(unit.get("thesis", "")) for unit in archive.get("memory_units", [])
+        )
+        if "Жека" not in theses:
+            raise ConformanceError(f"memory unit theses are not attributed:\n{theses}")
+
+        core_summary = outcome.get("core_summary", {})
+        if core_summary.get("created", 0) != 0:
+            raise ConformanceError(
+                f"multi-speaker gate failed: bridge created Core facts {core_summary!r}"
+            )
+        if core_summary.get("skipped", 0) < 1:
+            raise ConformanceError(
+                f"multi-speaker gate did not report skipped signals: {core_summary!r}"
+            )
+        if outcome.get("fidelity_requests"):
+            raise ConformanceError(
+                "no unit should be on the automatic Core path in a multi-speaker session"
+            )
+
+        package = loads(
+            engine.core_context_package(
+                dumps(
+                    {
+                        "schema_version": "core_context_request.v1",
+                        "session_id": MULTISPEAKER_SESSION,
+                        "domain_state": {"current_text": current_text},
+                        "core_scope": MULTISPEAKER_SESSION,
+                        "query_text": current_text,
+                        "recall_limit": 5,
+                        "session_recent_limit": 8,
+                        "session_trace_event_limit": 20,
+                        "include_core": True,
+                    }
+                )
+            )
+        )
+        if package.get("core_facts"):
+            raise ConformanceError(
+                f"multi-speaker Core must stay empty without review: {package.get('core_facts')!r}"
+            )
+        view = engine.render_memory_view(dumps(package), current_text)
+        for marker in ["<memory_context>", "<long_memory>", "Жека"]:
+            if marker not in view:
+                raise ConformanceError(f"post-sleep memory view missing {marker!r}\n{view}")
+
+        return DriverResult(
+            runtime_dir=runtime,
+            archive_id=archive.get("archive_id", ""),
+            memory_unit_count=len(archive.get("memory_units", [])),
+            core_fact_count=len(package.get("core_facts", [])),
+        )
+    finally:
+        if not keep_runtime:
+            shutil.rmtree(runtime, ignore_errors=True)
+
+
+def multispeaker_response_for_request(run: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    prompt_id = request["prompt_id"]
+    if prompt_id == "sleep_consolidator":
+        return {
+            "status": "ok",
+            "request_id": request["request_id"],
+            "text": (
+                "GIST: Жека купив мотоцикл, Антон розповів про рибалку.\n\n"
+                "У груповому чаті переплелися дві теми: мотоцикл Жеки і рибалка Антона."
+            ),
+        }
+
+    inputs = request.get("prompt_inputs", {})
+    sleep_task = inputs.get("sleep_task", {}) if isinstance(inputs, dict) else {}
+    events = sleep_task.get("events", []) if isinstance(sleep_task, dict) else []
+    first_event_id = event_id(events[0]) if events else ""
+
+    if prompt_id == "memory_unit_pass":
+        payload: dict[str, Any] = {
+            "schema_version": "memory_units_result.v1",
+            "archive_id": run["archive_id"],
+            "memory_units": [
+                {
+                    "thesis": "Мотоцикл -> Жека купив мотоцикл і забирає його завтра.",
+                    "source_event_ids": [first_event_id],
+                    "evidence": "Жека сам повідомив про покупку в чаті.",
+                    "tags": ["group_chat"],
+                    "weight": 0.6,
+                },
+                {
+                    "thesis": "Рибалка -> Антон рибалив на світанку.",
+                    "source_event_ids": [first_event_id],
+                    "evidence": "Антон розповів про кльов на світанку.",
+                    "tags": ["group_chat"],
+                    "weight": 0.5,
+                },
+            ],
+        }
+    elif prompt_id == "sleep_emotional_pass":
+        payload = {"emotional_markers": []}
+    elif prompt_id == "sleep_topic_thread_pass":
+        payload = {
+            "topic_thread": [
+                {
+                    "topic": "group_chat",
+                    "summary": "Мотоцикл Жеки і рибалка Антона.",
+                    "source_event_ids": [first_event_id] if first_event_id else [],
+                }
+            ]
+        }
+    elif prompt_id == "sleep_personal_signal_pass":
+        payload = {
+            "personal_signals": [
+                {
+                    "text": "У Жеки є мотоцикл.",
+                    "category": "vehicle",
+                    "confidence": 0.95,
+                    "source_event_ids": [first_event_id],
+                }
+            ]
+        }
+    elif prompt_id == "sleep_relational_pass":
+        payload = {"relational_tone": None}
+    else:
+        raise ConformanceError(f"unexpected multi-speaker LLM request prompt_id={prompt_id!r}")
+
+    return {"status": "ok", "request_id": request["request_id"], "text": dumps(payload)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run host conformance scenarios.")
     parser.add_argument(
         "--host",
         choices=[
             "direct",
+            "direct-multispeaker",
             "telegram-local",
             "godot-headless",
             "chibigochi-spike",
@@ -1074,6 +1280,8 @@ def main() -> int:
     try:
         if args.host == "direct":
             result = run_direct(args.keep_runtime)
+        elif args.host == "direct-multispeaker":
+            result = run_direct_multispeaker(args.keep_runtime)
         elif args.host == "telegram-local":
             result = run_telegram_local(args.keep_runtime)
         elif args.host == "godot-headless":

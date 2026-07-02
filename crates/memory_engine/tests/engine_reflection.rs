@@ -381,6 +381,7 @@ fn ingest_text(engine: &MemoryEngine<FileStorage>, timestamp: &str, text: &str) 
             tags: vec!["reflection_test".to_string()],
             theme: Some("space".to_string()),
             emotional_tone: None,
+            speaker: None,
             links: vec![],
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),

@@ -213,7 +213,7 @@ pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &s
 struct DialogueEvent {
     event_id: String,
     timestamp: String,
-    role: &'static str,
+    role: String,
     text: String,
 }
 
@@ -225,15 +225,27 @@ fn normalized_context_events(events: &[CoreContextEvent]) -> Vec<DialogueEvent> 
             (!text.is_empty()).then(|| DialogueEvent {
                 event_id: clean_string(&event.event_id).to_string(),
                 timestamp: clean_string(&event.timestamp).to_string(),
-                role: if event.event_type == "assistant_message" {
-                    "assistant"
-                } else {
-                    "user"
-                },
+                role: dialogue_role(event),
                 text: text.to_string(),
             })
         })
         .collect()
+}
+
+/// Attributed transcript role: assistant events stay `assistant`; a user-side
+/// event with a `speaker` renders under the speaker's name (multi-speaker
+/// chats), otherwise under the legacy `user` role.
+fn dialogue_role(event: &CoreContextEvent) -> String {
+    if event.event_type == "assistant_message" {
+        return "assistant".to_string();
+    }
+    event
+        .speaker
+        .as_ref()
+        .map(|speaker| clean_string(&speaker.name))
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "user".to_string())
 }
 
 fn drop_current_user_message(
@@ -243,7 +255,7 @@ fn drop_current_user_message(
     let current = clean_string(current_user_message);
     if events
         .last()
-        .is_some_and(|event| event.role == "user" && event.text == current)
+        .is_some_and(|event| event.role != "assistant" && event.text == current)
     {
         events.pop();
     }
@@ -366,11 +378,7 @@ pub fn render_context_event_prompt_line(
     if text.is_empty() {
         return None;
     }
-    let role = if event.event_type == "assistant_message" {
-        "assistant"
-    } else {
-        "user"
-    };
+    let role = dialogue_role(event);
     Some(format!(
         "{role}: {}",
         xml_escape(&truncate_text(text, max_text_chars))
@@ -465,6 +473,7 @@ mod tests {
                     timestamp: "2026-05-30T10:00:00Z".to_string(),
                     event_type: "assistant_message".to_string(),
                     source: "bot".to_string(),
+                    speaker: None,
                     text: Some("We talked about the cat Irzha.".to_string()),
                     tags: vec![],
                     theme: None,
@@ -474,6 +483,7 @@ mod tests {
                     timestamp: "2026-05-30T10:01:00Z".to_string(),
                     event_type: "user_message".to_string(),
                     source: "user".to_string(),
+                    speaker: None,
                     text: Some("Do you remember Irzha?".to_string()),
                     tags: vec![],
                     theme: None,
@@ -528,6 +538,7 @@ mod tests {
                 timestamp: created_at.to_string(),
                 event_type: "user_message".to_string(),
                 source: "user".to_string(),
+                speaker: None,
                 text: Some("Fresh line.".to_string()),
                 tags: vec![],
                 theme: None,
@@ -538,6 +549,7 @@ mod tests {
                     timestamp: "2026-07-01T09:00:00Z".to_string(),
                     event_type: "user_message".to_string(),
                     source: "user".to_string(),
+                    speaker: None,
                     text: Some("Older line.".to_string()),
                     tags: vec![],
                     theme: None,
@@ -547,6 +559,7 @@ mod tests {
                     timestamp: created_at.to_string(),
                     event_type: "user_message".to_string(),
                     source: "user".to_string(),
+                    speaker: None,
                     text: Some("Fresh line.".to_string()),
                     tags: vec![],
                     theme: None,
@@ -653,5 +666,64 @@ mod tests {
             utc_same_pair.age_label("2026-07-01T20:00:00Z").as_deref(),
             Some("today")
         );
+    }
+
+    #[test]
+    fn memory_view_attributes_speakers_and_drops_current_speaker_duplicate() {
+        use crate::types::Speaker;
+
+        let mut package = labeled_package("2026-07-02T10:00:00Z", false);
+        package.archive_relevant = vec![];
+        package.session_trace = vec![];
+        package.session_recent = vec![
+            CoreContextEvent {
+                event_id: "event_zheka".to_string(),
+                timestamp: "2026-07-02T09:58:00Z".to_string(),
+                event_type: "user_message".to_string(),
+                source: "group_chat".to_string(),
+                speaker: Some(Speaker {
+                    id: "tg_101".to_string(),
+                    name: "Жека".to_string(),
+                }),
+                text: Some("Купив мотоцикл!".to_string()),
+                tags: vec![],
+                theme: None,
+            },
+            CoreContextEvent {
+                event_id: "event_bot".to_string(),
+                timestamp: "2026-07-02T09:59:00Z".to_string(),
+                event_type: "assistant_message".to_string(),
+                source: "bot".to_string(),
+                speaker: None,
+                text: Some("Вітаю з покупкою!".to_string()),
+                tags: vec![],
+                theme: None,
+            },
+            CoreContextEvent {
+                event_id: "event_anton".to_string(),
+                timestamp: "2026-07-02T10:00:00Z".to_string(),
+                event_type: "user_message".to_string(),
+                source: "group_chat".to_string(),
+                speaker: Some(Speaker {
+                    id: "tg_202".to_string(),
+                    name: "Антон".to_string(),
+                }),
+                text: Some("А клюло сьогодні на світанку?".to_string()),
+                tags: vec![],
+                theme: None,
+            },
+        ];
+
+        let view = render_memory_view(&package, "А клюло сьогодні на світанку?");
+
+        assert!(view.contains("Жека: Купив мотоцикл!"));
+        assert!(view.contains("assistant: Вітаю з покупкою!"));
+        assert!(
+            !view.contains("Антон: А клюло сьогодні на світанку?"),
+            "current speaker message must not be duplicated into short memory"
+        );
+        assert!(view.contains(
+            "<current_user_message>\nА клюло сьогодні на світанку?\n</current_user_message>"
+        ));
     }
 }

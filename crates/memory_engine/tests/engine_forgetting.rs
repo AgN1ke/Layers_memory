@@ -261,6 +261,7 @@ fn create_archive_with_units(
             tags: vec!["routine".to_string()],
             theme: Some("routine".to_string()),
             emotional_tone: None,
+            speaker: None,
             links: vec![],
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),
