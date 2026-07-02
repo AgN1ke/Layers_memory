@@ -73,6 +73,8 @@ fn living_memory_cycle_closes_v02_end_to_end() {
             session_recent_limit: 5,
             session_trace_event_limit: 10,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("context package");
@@ -259,6 +261,8 @@ fn living_memory_cycle_closes_v02_end_to_end() {
             session_recent_limit: 0,
             session_trace_event_limit: 0,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("location context");

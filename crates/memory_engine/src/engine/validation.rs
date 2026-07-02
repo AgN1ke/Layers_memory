@@ -60,6 +60,12 @@ pub(super) fn validate_core_context_request(request: &CoreContextRequest) -> Res
         ));
     }
 
+    if request.utc_offset_minutes.abs() > 18 * 60 {
+        return Err(MemoryEngineError::Validation(
+            "core context request utc_offset_minutes must be within +/-18 hours".to_string(),
+        ));
+    }
+
     Ok(())
 }
 

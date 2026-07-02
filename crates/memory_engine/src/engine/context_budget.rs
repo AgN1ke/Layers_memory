@@ -48,6 +48,7 @@ pub(super) fn apply_context_token_budget(
     archive_relevant: Vec<RecallItem>,
     domain_state: &Value,
     budget: CoreContextTokenBudget,
+    time_labels: &TimeLabelContext,
 ) -> BudgetedContextPackage {
     let estimated_domain_state_tokens = estimate_json_tokens(domain_state);
 
@@ -86,7 +87,7 @@ pub(super) fn apply_context_token_budget(
         keep_front_within_budget_by(
             archive_relevant,
             budget.compressed_memory_tokens,
-            estimate_archive_prompt_tokens,
+            |archive| estimate_archive_prompt_tokens(archive, time_labels),
         );
     let dropped_archive_relevant = dropped_by_prompt_archive_limit + dropped_by_compressed_budget;
 
@@ -208,8 +209,11 @@ pub(super) fn estimate_core_fact_prompt_tokens(fact: &CoreContextFact) -> usize 
         .unwrap_or(0)
 }
 
-pub(super) fn estimate_archive_prompt_tokens(archive: &RecallItem) -> usize {
-    estimate_text_tokens(&render_archive_memory_prompt_lines(archive).join("\n"))
+pub(super) fn estimate_archive_prompt_tokens(
+    archive: &RecallItem,
+    time_labels: &TimeLabelContext,
+) -> usize {
+    estimate_text_tokens(&render_archive_memory_prompt_lines(archive, time_labels).join("\n"))
 }
 
 pub(super) fn estimate_recent_event_prompt_tokens(event: &CoreContextEvent) -> usize {

@@ -46,6 +46,34 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-02 - Prompt view gains derived time labels; relative time is never stored
+
+The rendered memory view previously carried no notion of time: the model saw neither "now" nor the age of memories, so questions like "when did we talk about this?" were unanswerable and any "yesterday/today" in replies was hallucinated. This change adds prompt-facing time perception while keeping storage unchanged.
+
+**What changed:**
+- `render_memory_view` now emits a `current_time:` line inside `<state>` (local date, time, weekday, UTC offset) as the model's reference point.
+- Archive items in `<long_memory>` carry a derived age label from `RecallItem.time_range.end`: `- [yesterday | 0.88] ...`; ladder: today / yesterday / N days ago / earlier this month / last month / N months ago / over a year ago (calendar-day buckets, not 24h windows).
+- Older active dialogue in `<short_memory>` gets one `[yesterday]`-style day marker per calendar-day group; the fresh recent tail stays unlabeled.
+- `CoreContextRequest` and `CoreContextPackage` gain optional `utc_offset_minutes` (default 0) and `clock_untrusted` (default false); serde defaults, no migration. The Telegram host now passes its local offset.
+- With an untrusted clock, an unparseable `created_at`, or a timestamp in the future relative to now, labels are omitted instead of rendered wrong; future timestamps add a package note.
+- Relative labels are never persisted: they are computed at render time from stored absolute timestamps and package `created_at`, so a long-idle store needs no startup refresh (same derive-don't-store principle as query-time effective freshness).
+
+**What is retracted (if applicable):**
+- Nothing is retracted. Prior renders were time-blind by design gap, not by claim.
+
+**What is still true:**
+- Storage formats are unchanged; all timestamps were already absolute UTC.
+- The core still performs no network I/O; time is the injected package `created_at` or the system UTC clock. Any network-time correction is a host concern (opportunistic `Date`-header comparison on traffic the host already makes), never a library one.
+- Token budget stays honest automatically: budget estimators share the same prompt-line render functions, so label costs are counted.
+
+**What we are doing:**
+- Live check on the Telegram host ("when did I tell you about X?") is the owner's next step; deterministic behavior is covered by unit tests and host conformance.
+- Design record: `docs/research/memory-time-perception-2026-07-02.md`.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine` — `age_labels_follow_calendar_buckets_and_local_offset`, `memory_view_labels_archive_age_and_marks_older_dialogue_days`, `memory_view_relabels_same_package_when_rendered_later`, `memory_view_omits_labels_when_clock_is_untrusted`.
+- All six host conformance scenarios pass unchanged.
+
 ## 2026-06-10 - v0.3 host conformance closed
 
 v0.3 closes the reusable-host proof: Memory Engine now has automated conformance for the direct/local Python boundary, the Telegram bot host path without Telegram transport, and a real Godot 4.6 headless GDExtension host.

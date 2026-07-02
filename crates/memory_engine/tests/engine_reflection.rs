@@ -355,6 +355,8 @@ fn confirming_contradicting_candidate_marks_existing_core_fact_contested() {
             session_recent_limit: 0,
             session_trace_event_limit: 0,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("context package");

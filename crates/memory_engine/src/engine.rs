@@ -32,8 +32,8 @@ use crate::llm::{
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
 use crate::prompt_view::{
     render_archive_memory_prompt_lines, render_context_event_prompt_line,
-    render_core_fact_prompt_line, ARCHIVE_MEMORY_PROMPT_LIMIT, OLDER_TRACE_MAX_TEXT_CHARS,
-    RECENT_MAX_TEXT_CHARS,
+    render_core_fact_prompt_line, TimeLabelContext, ARCHIVE_MEMORY_PROMPT_LIMIT,
+    OLDER_TRACE_MAX_TEXT_CHARS, RECENT_MAX_TEXT_CHARS,
 };
 use crate::recall::{
     RecallDebug, RecallFilters, RecallItem, RecallQuery, RecallResult, RecallSourceLayer,
