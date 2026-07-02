@@ -5563,3 +5563,29 @@ loop.
 
 **Наступні кроки:**
 Кодекс: пункти 1–2 (гігієна), потім гілка часу (пункт 3) з live-перевіркою «коли я тобі казав про X?» на Telegram host.
+
+## Запис 119 — 2026-07-02 — Реалізовано derived time labels у prompt view (Claude, гілка feature/memory-time-labels)
+
+**Проблематика:**
+Власник дав команду виконувати весь список Запису 118. Пункти 1–2 закриті: license-гілку влито в main (`f780cb5`), research-доки + записи 117–118 + `inner_thought` закомічені й запушені. Далі — гілка часу за `docs/research/memory-time-perception-2026-07-02.md`.
+
+**Що зроблено:**
+- `CoreContextRequest`/`CoreContextPackage`: опціональні `utc_offset_minutes` (default 0, валідація ±18h) і `clock_untrusted` (default false); serde default, без міграцій; пакет копіює значення із запиту.
+- `prompt_view.rs`: новий `TimeLabelContext` (`from_package`, `age_label`, `current_time_line`) + чиста `bucket_label` по календарних днях: today / yesterday / N days ago / earlier this month / last month / N months ago / over a year ago. Драбину продовжено за «last month», інакше старі спогади брехали б.
+- Рендер: `current_time: 2026-07-02 10:00 Thursday (UTC+3)` у `<state>`; `- [yesterday | 0.88] ...` на archive items із `RecallItem.time_range.end`; денні маркери `[yesterday]` по групах у older trace; recent tail без міток.
+- Деградація: `clock_untrusted`, битий `created_at` або майбутній timestamp → мітка опускається; майбутні timestamps додають package note (`timestamp_is_future` у `core_context.rs`).
+- Budget лишився чесним автоматично: `estimate_archive_prompt_tokens` тепер приймає `TimeLabelContext` і рахує ті самі рядки, що рендер (властивість Запису 82 збережена). Денні маркери older trace в estimator не входять (кілька токенів на групу — свідомий undercount, зафіксований тут).
+- Telegram host: `context_package` передає `local_utc_offset_minutes()` (локальний зсув системи).
+- Контракти: поля описані в `docs/contracts.md` §6.4/§6.5; HISTORY-запис 2026-07-02; roadmap — нова секція «Час у памʼяті» + оновлений «Поточний стан».
+
+**Перевірки:**
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` — зелені.
+- `cargo test --workspace` — зелений; нові тести: `age_labels_follow_calendar_buckets_and_local_offset` (межі бакетів, зміна місяця, Київський offset перетинає північ), `memory_view_labels_archive_age_and_marks_older_dialogue_days`, `memory_view_relabels_same_package_when_rendered_later` (той самий пакет через тиждень — інша мітка, нічого не «оновлюється»), `memory_view_omits_labels_when_clock_is_untrusted`.
+- `maturin develop` + `pytest` — 13 passed.
+- Усі шість conformance-хостів — PASS без правок сценаріїв (direct, telegram-local, godot-headless, chibigochi-spike, chibigochi-ui, chibigochi-llm-bridge).
+
+**Проблеми чи виклики:**
+Live-перевірка на реальному Telegram-чаті («коли я тобі казав про X?» через кілька днів історії) лишається за власником — детермінована поведінка покрита тестами. Попутно в цій же гілці перенесено мультиспікерну геометрію в roadmap (гілки 1–3 + доповнення Запису 117 + explicit-залежність vector storage від атрибуції) — це docs-частина пункту 4 списку Запису 118.
+
+**Наступні кроки:**
+Мультиспікерна гілка 1 (speaker у контракті, атрибутований рендер, core-side gating auto-bridge, мультиспікерний conformance-сценарій).

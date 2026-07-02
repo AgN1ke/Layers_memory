@@ -1420,10 +1420,18 @@ def context_package(
         "session_recent_limit": RECENT_CONTEXT_LIMIT,
         "session_trace_event_limit": SESSION_TRACE_EVENT_LIMIT,
         "include_core": True,
+        "utc_offset_minutes": local_utc_offset_minutes(),
     }
     package = json.loads(engine.core_context_package(json.dumps(request, ensure_ascii=False)))
     log_context_budget(package, session_id)
     return package
+
+
+def local_utc_offset_minutes() -> int:
+    offset = datetime.now(timezone.utc).astimezone().utcoffset()
+    if offset is None:
+        return 0
+    return int(offset.total_seconds() // 60)
 
 
 def read_saved_offset() -> int | None:

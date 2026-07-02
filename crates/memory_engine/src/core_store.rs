@@ -149,6 +149,14 @@ pub struct CoreContextRequest {
     pub include_core: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<CoreContextTokenBudget>,
+    /// Host-local UTC offset in minutes for calendar-day time labels
+    /// ("yesterday" is a local-calendar concept while storage is UTC).
+    #[serde(default)]
+    pub utc_offset_minutes: i32,
+    /// Host may mark its clock as untrusted; time labels are then omitted
+    /// instead of rendering wrong ones.
+    #[serde(default)]
+    pub clock_untrusted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -170,6 +178,10 @@ pub struct CoreContextEvent {
 pub struct CoreContextPackage {
     pub schema_version: String,
     pub created_at: Timestamp,
+    #[serde(default)]
+    pub utc_offset_minutes: i32,
+    #[serde(default)]
+    pub clock_untrusted: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub core_facts: Vec<CoreContextFact>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

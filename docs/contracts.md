@@ -732,11 +732,15 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
     "current_memory_tokens": 7000,
     "compressed_memory_tokens": 3000,
     "core_tokens": 1000
-  }
+  },
+  "utc_offset_minutes": 180,
+  "clock_untrusted": false
 }
 ```
 
 `domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
+
+`utc_offset_minutes` (default `0`) — локальний зсув хоста для календарних часових міток у prompt view («вчора» — локальне поняття, сховище лишається в UTC). `clock_untrusted` (default `false`) — хост може позначити свій годинник ненадійним; тоді prompt view опускає часові мітки замість рендерити хибні. Відносні мітки ніколи не зберігаються у файлах — вони обчислюються при рендері з абсолютних timestamp-ів і `created_at` пакета, тому не «гниють» після простою.
 
 `session_recent` і `session_trace` у відповіді містять тільки active tail: події поточної сесії, які ще не покриті жодним archive entry через `source_event_ids`. Події, які вже пройшли sleep, повертаються через `archive_relevant`, а не дублюються як raw session events. Default rolling sleep лишає приблизно 30% найсвіжіших unarchived events active, якщо window досяг `partial_sleep_min_events`.
 
@@ -754,6 +758,8 @@ Core Context Package не обов'язково зберігається на д
 {
   "schema_version": "core_context_package.v1",
   "created_at": "2026-05-17T17:25:00.000Z",
+  "utc_offset_minutes": 180,
+  "clock_untrusted": false,
   "core_facts": [
     {
       "category": "location",

@@ -117,6 +117,8 @@ fn engine_context_keeps_preliminary_sleep_events_active() {
             session_recent_limit: 5,
             session_trace_event_limit: 5,
             include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("core context package");
@@ -176,6 +178,8 @@ fn engine_context_rebuilds_legacy_archived_event_index() {
             session_recent_limit: 5,
             session_trace_event_limit: 5,
             include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("core context package");
@@ -287,6 +291,8 @@ fn engine_sleep_preserves_configured_active_tail() {
             session_recent_limit: 10,
             session_trace_event_limit: 10,
             include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("core context package");
@@ -666,6 +672,8 @@ fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
             session_recent_limit: 5,
             session_trace_event_limit: 5,
             include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("context with broken archive");
@@ -718,6 +726,8 @@ fn engine_context_skips_unreadable_core_store_files_with_notes() {
             session_recent_limit: 5,
             session_trace_event_limit: 5,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("context with broken core store");
@@ -1113,6 +1123,8 @@ fn engine_recall_with_session_id_does_not_leak_other_sessions() {
             session_recent_limit: 5,
             session_trace_event_limit: 5,
             include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("core context package");
@@ -1197,6 +1209,8 @@ fn engine_core_context_package_combines_session_and_archive_context() {
             session_recent_limit: 2,
             session_trace_event_limit: 10,
             include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("core context package");
@@ -1259,6 +1273,8 @@ fn engine_upsert_core_fact_adds_stable_fact_to_context_package() {
             session_recent_limit: 2,
             session_trace_event_limit: 10,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("core context package");
@@ -1325,6 +1341,8 @@ fn engine_core_context_package_filters_core_facts_by_scope() {
             session_recent_limit: 2,
             session_trace_event_limit: 10,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("core context package");
@@ -1428,6 +1446,8 @@ fn engine_core_context_package_enforces_token_budget_by_layer() {
             session_recent_limit: 12,
             session_trace_event_limit: 12,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: Some(CoreContextTokenBudget {
                 total_tokens: 1_600,
                 current_memory_tokens: 700,
@@ -1516,6 +1536,8 @@ fn engine_core_context_package_keeps_query_relevant_core_fact_under_budget() {
             session_recent_limit: 1,
             session_trace_event_limit: 0,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: Some(CoreContextTokenBudget {
                 total_tokens: 760,
                 current_memory_tokens: 300,
@@ -1579,6 +1601,8 @@ fn engine_core_budget_uses_prompt_shape_not_storage_json() {
             session_recent_limit: 0,
             session_trace_event_limit: 0,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: Some(CoreContextTokenBudget {
                 total_tokens: 900,
                 current_memory_tokens: 200,
@@ -1666,6 +1690,8 @@ fn engine_patch_core_fact_updates_text_and_deprecates_fact() {
             session_recent_limit: 2,
             session_trace_event_limit: 10,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("core context package");
@@ -1998,6 +2024,8 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
             session_recent_limit: 5,
             session_trace_event_limit: 10,
             include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             token_budget: None,
         })
         .expect("context package");

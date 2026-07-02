@@ -1,3 +1,6 @@
+use time::format_description::well_known::Rfc3339;
+use time::{Date, OffsetDateTime, UtcOffset};
+
 use crate::core_store::{CoreContextEvent, CoreContextFact, CoreContextPackage, CoreFactStatus};
 use crate::recall::RecallItem;
 
@@ -7,7 +10,112 @@ pub const OLDER_TRACE_MAX_TEXT_CHARS: usize = 180;
 pub const RECENT_MAX_TEXT_CHARS: usize = 900;
 pub const CORE_FACT_MAX_TEXT_CHARS: usize = 260;
 
+/// Prompt-facing time context. Relative labels ("yesterday", "3 days ago")
+/// are never stored; they are derived at render time from stored absolute
+/// timestamps and the package `created_at`, so they can never go stale.
+#[derive(Debug, Clone, Copy)]
+pub struct TimeLabelContext {
+    now: Option<OffsetDateTime>,
+    offset: UtcOffset,
+}
+
+impl TimeLabelContext {
+    pub fn new(now_rfc3339: &str, utc_offset_minutes: i32, clock_untrusted: bool) -> Self {
+        let offset = UtcOffset::from_whole_seconds(utc_offset_minutes.saturating_mul(60))
+            .unwrap_or(UtcOffset::UTC);
+        let now = if clock_untrusted {
+            None
+        } else {
+            OffsetDateTime::parse(now_rfc3339, &Rfc3339).ok()
+        };
+        Self { now, offset }
+    }
+
+    pub fn from_package(package: &CoreContextPackage) -> Self {
+        Self::new(
+            &package.created_at,
+            package.utc_offset_minutes,
+            package.clock_untrusted,
+        )
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            now: None,
+            offset: UtcOffset::UTC,
+        }
+    }
+
+    fn local_now(&self) -> Option<OffsetDateTime> {
+        Some(self.now?.to_offset(self.offset))
+    }
+
+    /// One line for `<state>`: the model's reference point for every
+    /// relative label below it.
+    fn current_time_line(&self) -> Option<String> {
+        let local = self.local_now()?;
+        Some(format!(
+            "current_time: {:04}-{:02}-{:02} {:02}:{:02} {} ({})",
+            local.year(),
+            u8::from(local.month()),
+            local.day(),
+            local.hour(),
+            local.minute(),
+            local.weekday(),
+            offset_label(self.offset),
+        ))
+    }
+
+    /// Relative age label for a stored timestamp, or None when time is
+    /// untrusted, unparseable, or in the future relative to `now`.
+    fn age_label(&self, timestamp: &str) -> Option<String> {
+        let local_now = self.local_now()?;
+        let then = OffsetDateTime::parse(timestamp, &Rfc3339)
+            .ok()?
+            .to_offset(self.offset);
+        if then > local_now {
+            return None;
+        }
+        Some(bucket_label(then.date(), local_now.date()))
+    }
+}
+
+fn bucket_label(then: Date, now: Date) -> String {
+    let days = (now - then).whole_days();
+    match days {
+        days if days <= 0 => "today".to_string(),
+        1 => "yesterday".to_string(),
+        2..=6 => format!("{days} days ago"),
+        _ => {
+            let months = i64::from(now.year()) * 12 + i64::from(u8::from(now.month()))
+                - (i64::from(then.year()) * 12 + i64::from(u8::from(then.month())));
+            match months {
+                months if months <= 0 => "earlier this month".to_string(),
+                1 => "last month".to_string(),
+                2..=11 => format!("{months} months ago"),
+                _ => "over a year ago".to_string(),
+            }
+        }
+    }
+}
+
+fn offset_label(offset: UtcOffset) -> String {
+    let total_minutes = offset.whole_seconds() / 60;
+    if total_minutes == 0 {
+        return "UTC".to_string();
+    }
+    let sign = if total_minutes > 0 { '+' } else { '-' };
+    let hours = total_minutes.abs() / 60;
+    let minutes = total_minutes.abs() % 60;
+    if minutes == 0 {
+        format!("UTC{sign}{hours}")
+    } else {
+        format!("UTC{sign}{hours}:{minutes:02}")
+    }
+}
+
 pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &str) -> String {
+    let time = TimeLabelContext::from_package(package);
     let recent_events = normalized_context_events(&package.session_recent);
     let trace_events = normalized_context_events(&package.session_trace);
     let prior_recent = drop_current_user_message(recent_events.clone(), current_user_message);
@@ -43,6 +151,9 @@ pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &s
                 .to_string(),
         );
     }
+    if let Some(line) = time.current_time_line() {
+        lines.push(line);
+    }
     lines.push("</state>".to_string());
 
     lines.push(String::new());
@@ -57,7 +168,7 @@ pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &s
 
     lines.push(String::new());
     lines.push("<long_memory>".to_string());
-    let archive_lines = render_archive_memories(&package.archive_relevant);
+    let archive_lines = render_archive_memories(&package.archive_relevant, &time);
     if archive_lines.is_empty() {
         lines.push("(empty)".to_string());
     } else {
@@ -69,9 +180,10 @@ pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &s
     lines.push("<short_memory>".to_string());
     if !older_trace.is_empty() {
         lines.push("<older_active_dialogue>".to_string());
-        lines.extend(render_dialogue_lines(
+        lines.extend(render_dialogue_lines_with_day_markers(
             &older_trace,
             OLDER_TRACE_MAX_TEXT_CHARS,
+            &time,
         ));
         lines.push("</older_active_dialogue>".to_string());
     }
@@ -100,6 +212,7 @@ pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &s
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DialogueEvent {
     event_id: String,
+    timestamp: String,
     role: &'static str,
     text: String,
 }
@@ -111,6 +224,7 @@ fn normalized_context_events(events: &[CoreContextEvent]) -> Vec<DialogueEvent> 
             let text = clean_string(event.text.as_deref()?);
             (!text.is_empty()).then(|| DialogueEvent {
                 event_id: clean_string(&event.event_id).to_string(),
+                timestamp: clean_string(&event.timestamp).to_string(),
                 role: if event.event_type == "assistant_message" {
                     "assistant"
                 } else {
@@ -143,11 +257,11 @@ fn render_core_facts(facts: &[CoreContextFact]) -> Vec<String> {
         .collect()
 }
 
-fn render_archive_memories(archives: &[RecallItem]) -> Vec<String> {
+fn render_archive_memories(archives: &[RecallItem], time: &TimeLabelContext) -> Vec<String> {
     archives
         .iter()
         .take(ARCHIVE_MEMORY_PROMPT_LIMIT)
-        .flat_map(render_archive_memory_prompt_lines)
+        .flat_map(|archive| render_archive_memory_prompt_lines(archive, time))
         .collect()
 }
 
@@ -159,6 +273,32 @@ fn render_dialogue_lines(events: &[DialogueEvent], max_text_chars: usize) -> Vec
             (!text.is_empty()).then(|| format!("{}: {}", event.role, xml_escape(&text)))
         })
         .collect()
+}
+
+/// Older-trace rendering with day markers: one `[yesterday]`-style line per
+/// calendar-day group instead of a label on every line. Without a trusted
+/// clock this renders exactly like `render_dialogue_lines`.
+fn render_dialogue_lines_with_day_markers(
+    events: &[DialogueEvent],
+    max_text_chars: usize,
+    time: &TimeLabelContext,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current_marker: Option<String> = None;
+    for event in events {
+        let text = truncate_text(&event.text, max_text_chars);
+        if text.is_empty() {
+            continue;
+        }
+        if let Some(label) = time.age_label(&event.timestamp) {
+            if current_marker.as_deref() != Some(label.as_str()) {
+                lines.push(format!("[{label}]"));
+                current_marker = Some(label);
+            }
+        }
+        lines.push(format!("{}: {}", event.role, xml_escape(&text)));
+    }
+    lines
 }
 
 pub fn render_core_fact_prompt_line(fact: &CoreContextFact) -> Option<String> {
@@ -185,7 +325,10 @@ pub fn render_core_fact_prompt_line(fact: &CoreContextFact) -> Option<String> {
     ))
 }
 
-pub fn render_archive_memory_prompt_lines(archive: &RecallItem) -> Vec<String> {
+pub fn render_archive_memory_prompt_lines(
+    archive: &RecallItem,
+    time: &TimeLabelContext,
+) -> Vec<String> {
     let memory = archive
         .compact_memory
         .as_deref()
@@ -196,7 +339,14 @@ pub fn render_archive_memory_prompt_lines(archive: &RecallItem) -> Vec<String> {
         return Vec::new();
     }
 
-    let prefix = format!("- [{}] ", format_score(archive.relevance_score));
+    let age = archive
+        .time_range
+        .as_ref()
+        .and_then(|range| time.age_label(&range.end));
+    let prefix = match age {
+        Some(age) => format!("- [{age} | {}] ", format_score(archive.relevance_score)),
+        None => format!("- [{}] ", format_score(archive.relevance_score)),
+    };
     let mut lines = Vec::new();
     for (index, memory_line) in memory.lines().map(str::trim).enumerate() {
         if memory_line.is_empty() {
@@ -286,17 +436,20 @@ fn xml_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::render_memory_view;
+    use super::{render_memory_view, TimeLabelContext};
     use crate::core_store::{
         CoreContextEvent, CoreContextFact, CoreContextPackage, CoreFactStatus,
     };
     use crate::recall::{RecallItem, RecallSourceLayer};
+    use crate::types::TimeRange;
 
     #[test]
     fn memory_view_keeps_layers_separate_and_drops_current_duplicate() {
         let package = CoreContextPackage {
             schema_version: "core_context_package.v1".to_string(),
             created_at: "2026-05-30T10:00:00Z".to_string(),
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
             core_facts: vec![CoreContextFact {
                 category: "profile".to_string(),
                 core_fact_id: "core_fact_1".to_string(),
@@ -360,5 +513,145 @@ mod tests {
         assert!(!view.contains("user: Do you remember Irzha?"));
         assert!(view
             .contains("<current_user_message>\nDo you remember Irzha?\n</current_user_message>"));
+        assert!(view.contains("current_time: 2026-05-30 10:00 Saturday (UTC)"));
+    }
+
+    fn labeled_package(created_at: &str, clock_untrusted: bool) -> CoreContextPackage {
+        CoreContextPackage {
+            schema_version: "core_context_package.v1".to_string(),
+            created_at: created_at.to_string(),
+            utc_offset_minutes: 0,
+            clock_untrusted,
+            core_facts: vec![],
+            session_recent: vec![CoreContextEvent {
+                event_id: "event_recent".to_string(),
+                timestamp: created_at.to_string(),
+                event_type: "user_message".to_string(),
+                source: "user".to_string(),
+                text: Some("Fresh line.".to_string()),
+                tags: vec![],
+                theme: None,
+            }],
+            session_trace: vec![
+                CoreContextEvent {
+                    event_id: "event_old".to_string(),
+                    timestamp: "2026-07-01T09:00:00Z".to_string(),
+                    event_type: "user_message".to_string(),
+                    source: "user".to_string(),
+                    text: Some("Older line.".to_string()),
+                    tags: vec![],
+                    theme: None,
+                },
+                CoreContextEvent {
+                    event_id: "event_recent".to_string(),
+                    timestamp: created_at.to_string(),
+                    event_type: "user_message".to_string(),
+                    source: "user".to_string(),
+                    text: Some("Fresh line.".to_string()),
+                    tags: vec![],
+                    theme: None,
+                },
+            ],
+            archive_relevant: vec![RecallItem {
+                source_layer: RecallSourceLayer::Archive,
+                id: "archive_1".to_string(),
+                gist: "Motorcycle purchase discussion.".to_string(),
+                compact_memory: Some("Zheka -> bought a motorcycle.".to_string()),
+                narrative: None,
+                facts: vec![],
+                quotes: vec![],
+                source_session_id: Some("chat_1".to_string()),
+                time_range: Some(TimeRange {
+                    start: "2026-07-01T08:00:00Z".to_string(),
+                    end: "2026-07-01T09:30:00Z".to_string(),
+                }),
+                tags: vec![],
+                theme: None,
+                weight: 0.9,
+                freshness: 1.0,
+                relevance_score: 0.876,
+                relevance_explanation: None,
+            }],
+            domain_state: serde_json::json!({}),
+            budget: None,
+            notes: vec![],
+        }
+    }
+
+    #[test]
+    fn memory_view_labels_archive_age_and_marks_older_dialogue_days() {
+        let view = render_memory_view(&labeled_package("2026-07-02T10:00:00Z", false), "Next?");
+
+        assert!(view.contains("current_time: 2026-07-02 10:00 Thursday (UTC)"));
+        assert!(view.contains("- [yesterday | 0.88] Zheka -&gt; bought a motorcycle."));
+        assert!(view.contains("[yesterday]\nuser: Older line."));
+    }
+
+    #[test]
+    fn memory_view_relabels_same_package_when_rendered_later() {
+        let view = render_memory_view(&labeled_package("2026-07-09T10:00:00Z", false), "Next?");
+
+        assert!(view.contains("- [earlier this month | 0.88] Zheka -&gt; bought a motorcycle."));
+    }
+
+    #[test]
+    fn memory_view_omits_labels_when_clock_is_untrusted() {
+        let view = render_memory_view(&labeled_package("2026-07-02T10:00:00Z", true), "Next?");
+
+        assert!(!view.contains("current_time:"));
+        assert!(view.contains("- [0.88] Zheka -&gt; bought a motorcycle."));
+        assert!(!view.contains("[yesterday]"));
+    }
+
+    #[test]
+    fn age_labels_follow_calendar_buckets_and_local_offset() {
+        let utc = TimeLabelContext::new("2026-07-02T10:00:00Z", 0, false);
+        assert_eq!(
+            utc.age_label("2026-07-02T00:30:00Z").as_deref(),
+            Some("today")
+        );
+        assert_eq!(
+            utc.age_label("2026-07-01T23:59:00Z").as_deref(),
+            Some("yesterday")
+        );
+        assert_eq!(
+            utc.age_label("2026-06-30T10:00:00Z").as_deref(),
+            Some("2 days ago")
+        );
+        assert_eq!(
+            utc.age_label("2026-06-26T10:00:00Z").as_deref(),
+            Some("6 days ago")
+        );
+        assert_eq!(
+            utc.age_label("2026-06-25T10:00:00Z").as_deref(),
+            Some("last month")
+        );
+        assert_eq!(utc.age_label("2026-07-03T10:00:00Z"), None);
+
+        let mid_month = TimeLabelContext::new("2026-07-20T10:00:00Z", 0, false);
+        assert_eq!(
+            mid_month.age_label("2026-07-10T10:00:00Z").as_deref(),
+            Some("earlier this month")
+        );
+        assert_eq!(
+            mid_month.age_label("2026-03-10T10:00:00Z").as_deref(),
+            Some("4 months ago")
+        );
+        assert_eq!(
+            mid_month.age_label("2025-05-10T10:00:00Z").as_deref(),
+            Some("over a year ago")
+        );
+
+        let kyiv = TimeLabelContext::new("2026-07-01T22:30:00Z", 180, false);
+        assert_eq!(
+            kyiv.age_label("2026-07-01T20:00:00Z").as_deref(),
+            Some("yesterday"),
+            "local midnight already passed in UTC+3"
+        );
+        let utc_same_pair = TimeLabelContext::new("2026-07-01T22:30:00Z", 0, false);
+        assert_eq!(
+            utc_same_pair.age_label("2026-07-01T20:00:00Z").as_deref(),
+            Some("today")
+        );
     }
 }

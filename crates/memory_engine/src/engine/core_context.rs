@@ -224,6 +224,11 @@ impl<S: Storage> MemoryEngine<S> {
         let budget_config = request
             .token_budget
             .unwrap_or(self.options.context.token_budget);
+        let time_labels = TimeLabelContext::new(
+            &created_at,
+            request.utc_offset_minutes,
+            request.clock_untrusted,
+        );
         let budgeted = apply_context_token_budget(
             core_facts,
             session_recent,
@@ -231,12 +236,40 @@ impl<S: Storage> MemoryEngine<S> {
             archive_relevant,
             &request.domain_state,
             budget_config,
+            &time_labels,
         );
         notes.extend(budgeted.notes);
+
+        let future_timestamps = budgeted
+            .archive_relevant
+            .iter()
+            .filter_map(|item| item.time_range.as_ref())
+            .map(|range| range.end.as_str())
+            .chain(
+                budgeted
+                    .session_recent
+                    .iter()
+                    .map(|event| event.timestamp.as_str()),
+            )
+            .chain(
+                budgeted
+                    .session_trace
+                    .iter()
+                    .map(|event| event.timestamp.as_str()),
+            )
+            .filter(|timestamp| timestamp_is_future(timestamp, &created_at))
+            .count();
+        if future_timestamps > 0 {
+            notes.push(format!(
+                "{future_timestamps} memory timestamp(s) are in the future relative to now; their time labels are omitted."
+            ));
+        }
 
         Ok(CoreContextPackage {
             schema_version: CORE_CONTEXT_PACKAGE_SCHEMA_VERSION.to_string(),
             created_at,
+            utc_offset_minutes: request.utc_offset_minutes,
+            clock_untrusted: request.clock_untrusted,
             core_facts: budgeted.core_facts,
             session_recent: budgeted.session_recent,
             session_trace: budgeted.session_trace,
@@ -284,5 +317,12 @@ impl<S: Storage> MemoryEngine<S> {
                 .then_with(|| left.core_fact_id.cmp(&right.core_fact_id))
         });
         Ok((facts, warnings))
+    }
+}
+
+fn timestamp_is_future(timestamp: &str, reference_at: &str) -> bool {
+    match (parse_rfc3339(timestamp), parse_rfc3339(reference_at)) {
+        (Some(then), Some(now)) => then > now,
+        _ => false,
     }
 }
