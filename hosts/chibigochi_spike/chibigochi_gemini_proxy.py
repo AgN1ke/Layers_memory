@@ -42,6 +42,15 @@ DEFAULT_BALANCED_MODEL = "gemini-2.5-flash"
 DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CHAT_ROLE = "balanced"
 
+INNER_THOUGHT_SYSTEM = (
+    "Ти — Чібі, чібі-дівчина, що живе у квартирі-студії. Тобі дають твій поточний "
+    "фізичний/емоційний стан і де ти стоїш. Сформулюй ОДНУ коротку природну думку "
+    "від першої особи — чого тобі ЗАРАЗ хочеться і як ти почуваєшся, як справжня "
+    "людина. НЕ згадуй шкали, цифри чи назви станів (не «ситість низька», а «дуже "
+    "хочеться їсти»). Людина не думає категоріями шкал — вона одразу хоче те, що "
+    "покращить стан. 1-2 короткі речення, українською."
+)
+
 
 @dataclass(frozen=True)
 class ModelSelection:
@@ -187,7 +196,21 @@ class ChibigochiGeminiProxy:
             return self._memory_request(payload)
         if operation == "memory_fidelity_pass":
             return self._memory_fidelity_pass(payload)
+        if operation == "inner_thought":
+            return self._inner_thought(payload)
         return {"error": f"unsupported operation: {operation!r}"}
+
+    def _inner_thought(self, payload: dict[str, Any]) -> dict[str, Any]:
+        state = clean_string(payload.get("input_text"))
+        response = self.gemini.generate_text(
+            model=self.llm_config.for_role("balanced").model,
+            system_instruction=INNER_THOUGHT_SYSTEM,
+            prompt=state,
+            response_mime_type=None,
+            operation="chibigochi_inner_thought",
+            model_role="balanced",
+        )
+        return {"text": response.text}
 
     def _chat_reply(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = clean_string(payload.get("input_text"))
