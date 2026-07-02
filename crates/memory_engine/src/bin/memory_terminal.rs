@@ -115,6 +115,7 @@ fn main() -> Result<()> {
             tags: vec!["terminal_message".to_string()],
             theme: Some("terminal_conversation".to_string()),
             emotional_tone: None,
+            speaker: None,
             links: Vec::new(),
             importance_hint: Default::default(),
             processing_mode: Default::default(),

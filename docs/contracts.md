@@ -203,7 +203,8 @@ Markdown-файли існують для людини. Вони не замін
   "tags": ["personal_fact", "location"],
   "theme": "personal_background",
   "emotional_tone": "neutral",
-  "links": [],
+  "speaker": { "id": "tg_311422683", "name": "Микита" },
+  "links": [{ "kind": "reply_to", "target": "event_01J00000000000000000000009" }],
   "importance_hint": "high",
   "processing_mode": "defer_to_sleep"
 }
@@ -223,6 +224,7 @@ Markdown-файли існують для людини. Вони не замін
 - `tags`;
 - `theme`;
 - `emotional_tone`;
+- `speaker`;
 - `links`;
 - `importance_hint`;
 - `processing_mode`.
@@ -233,7 +235,9 @@ Markdown-файли існують для людини. Вони не замін
 - ядро системи не має жорстко знати всі можливі `type`;
 - `tags` мають бути короткими машинними рядками;
 - `theme` - одна основна тема, якщо хост її знає;
-- `emotional_tone` - рядок, без фіксованого enum на v0.1.
+- `emotional_tone` - рядок, без фіксованого enum на v0.1;
+- `speaker` - `{ "id", "name" }` автора події в мультиспікерній сесії (груповий чат). `id` — стабільна ідентичність хоста (імена змінюються і колізять), `name` — prompt-facing форма. Відсутній `speaker` зберігає стару однокористувацьку семантику; лінійні хости поле не заповнюють. Сесія вважається мультиспікерною, коли серед `user_message` подій є ≥2 різних `speaker.id` — тоді автоматичний Archive → Core bridge вимикається (Фаза 1 захисту від «пліток у Core»), а Core росте через `/remember` і reflection + review;
+- `links` типізовані: `{ "kind", "target" }`. Конвенція kind `reply_to`: `target` — `event_id` повідомлення, на яке відповідає ця подія. Reply-структура живе в сирому шарі сесії, використовується під час sleep-дистиляції і не зберігається в Archive/MemoryUnit (зміст замість структури); не плутати з `ArchiveEntry.links` — то звʼязки спогадів на іншому шарі.
 
 ### 3.2 StoredEvent
 

@@ -42,6 +42,15 @@ pub struct Link {
     pub note: Option<String>,
 }
 
+/// Who authored an event in a multi-speaker session. `id` is the stable host
+/// identity (names change and collide); `name` is the prompt-facing form.
+/// Absent speaker keeps the legacy single-user behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Speaker {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimeRange {
     pub start: Timestamp,

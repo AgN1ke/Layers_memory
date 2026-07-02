@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::types::{Id, ImportanceHint, Link, ProcessingMode, Timestamp};
+use crate::types::{Id, ImportanceHint, Link, ProcessingMode, Speaker, Timestamp};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IngestEvent {
@@ -18,6 +18,8 @@ pub struct IngestEvent {
     pub theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emotional_tone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<Speaker>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
     #[serde(default)]
@@ -43,6 +45,8 @@ pub struct StoredEvent {
     pub theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emotional_tone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<Speaker>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
     #[serde(default)]
@@ -73,6 +77,7 @@ impl StoredEvent {
             tags: event.tags,
             theme: event.theme,
             emotional_tone: event.emotional_tone,
+            speaker: event.speaker,
             links: event.links,
             importance_hint: event.importance_hint,
             processing_mode: event.processing_mode,

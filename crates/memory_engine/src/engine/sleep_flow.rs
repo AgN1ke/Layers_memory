@@ -267,6 +267,15 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         let session_events = self.read_session_events_with_archived(&archive.source_session_id)?;
+        if session_is_multi_speaker(&session_events) {
+            // Phase 1 of the multi-speaker plan: with several human speakers
+            // the user-source guard cannot tell self-statements from gossip
+            // about another participant, so the automatic Archive -> Core
+            // bridge is disabled. Core still grows through explicit
+            // /remember and reflection candidates with manual review.
+            summary.skipped += archive.personal_signals.len();
+            return Ok(summary);
+        }
         let user_event_ids = session_events
             .iter()
             .filter(|event| event.event_type == "user_message")
@@ -396,6 +405,11 @@ impl<S: Storage> MemoryEngine<S> {
             return Ok(HashSet::new());
         }
         let session_events = self.read_session_events_with_archived(&archive.source_session_id)?;
+        if session_is_multi_speaker(&session_events) {
+            // No unit is on the automatic Core path while the bridge is
+            // disabled for multi-speaker sessions.
+            return Ok(HashSet::new());
+        }
         let user_event_ids = session_events
             .iter()
             .filter(|event| event.event_type == "user_message")
@@ -694,4 +708,29 @@ impl<S: Storage> MemoryEngine<S> {
 
         Ok(archive_entry)
     }
+}
+
+/// A session is multi-speaker when at least two distinct human speaker ids
+/// appear among its user messages. Events without a `speaker` keep the legacy
+/// single-user semantics, so a lone identified speaker (or none) is not
+/// multi-speaker.
+pub(super) fn session_is_multi_speaker(events: &[StoredEvent]) -> bool {
+    let mut speaker_ids = HashSet::new();
+    for event in events {
+        if event.event_type != "user_message" {
+            continue;
+        }
+        let Some(speaker) = event.speaker.as_ref() else {
+            continue;
+        };
+        let id = normalize_whitespace(&speaker.id);
+        if id.is_empty() {
+            continue;
+        }
+        speaker_ids.insert(id);
+        if speaker_ids.len() >= 2 {
+            return true;
+        }
+    }
+    false
 }

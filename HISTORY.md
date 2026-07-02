@@ -46,6 +46,30 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-03 - Multi-speaker branch 1: speaker contract, attributed transcript, Core gossip gate
+
+First slice of the multi-speaker geometry plan (`docs/research/multi-speaker-geometry-2026-06-12.md`, DEVLOG Запис 117). Linear hosts are unaffected: every new field is optional with serde defaults, and behavior without `speaker` is byte-identical to before.
+
+**What changed:**
+- `IngestEvent`/`StoredEvent`/`CoreContextEvent` gain optional `speaker: { id, name }` (stable host identity + prompt-facing name).
+- `render_memory_view` renders user-side events with a `speaker` under the speaker's name (`Жека: ...`) instead of `user:`; assistant rendering unchanged; current-message dedup now treats any non-assistant role as user-side.
+- The `reply_to` link kind is documented in `docs/contracts.md` (the typed `links` slot already existed; reply structure lives in the raw session layer and is not persisted into Archive/MemoryUnit).
+- Phase-1 Core protection, enforced in the core (not the host): when a session has >= 2 distinct `speaker.id` among user messages, the automatic Archive -> Core personal-signal bridge is disabled (signals are counted as skipped) and no unit is on the automatic Core fidelity path. Core still grows through explicit `/remember` and reflection candidates with manual review.
+- New conformance scenario `--host direct-multispeaker`: proves `speaker` survives the PyO3 JSON boundary, the transcript is attributed, memory-unit theses stay attributed, and a high-confidence gossip signal ("У Жеки є мотоцикл" said in a two-speaker chat) does not become a Core fact.
+
+**What is retracted (if applicable):**
+- The implicit claim that the user-source guard alone protects Core in group chats is retracted: with several human speakers every message is `user_message`, so gossip passed the old guard. Until subject-aware facts land (branch 3), multi-speaker sessions get no automatic Core writes at all.
+
+**What is still true:**
+- Single-user hosts (Telegram private chat, Chibigochi, conformance drivers) behave exactly as before; no scenario expectations changed.
+- Agents still cannot write Core truth directly; this change only narrows one automatic path.
+- Sleep-material speaker/reply markers, evidence-pack speaker rendering, `recall_by_event_id`, and `CoreFact.subject` remain open roadmap work (branches 1b-3).
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_multi_speaker`
+- `memory_view_attributes_speakers_and_drops_current_speaker_duplicate`
+- `python tests/host_conformance/host_conformance.py --host direct-multispeaker`
+
 ## 2026-07-02 - Prompt view gains derived time labels; relative time is never stored
 
 The rendered memory view previously carried no notion of time: the model saw neither "now" nor the age of memories, so questions like "when did we talk about this?" were unanswerable and any "yesterday/today" in replies was hallucinated. This change adds prompt-facing time perception while keeping storage unchanged.

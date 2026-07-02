@@ -25,6 +25,7 @@ pub(super) fn session_context_events(
             timestamp: event.timestamp.clone(),
             event_type: event.event_type.clone(),
             source: event.source.clone(),
+            speaker: event.speaker.clone(),
             text: event_text(event),
             tags: event.tags.clone(),
             theme: event.theme.clone(),

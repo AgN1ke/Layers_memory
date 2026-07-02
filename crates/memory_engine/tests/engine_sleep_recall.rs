@@ -2754,6 +2754,7 @@ fn ingest_text_in_session(
             tags: tags.into_iter().map(str::to_string).collect(),
             theme: Some("personal_background".to_string()),
             emotional_tone: None,
+            speaker: None,
             links: vec![],
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),

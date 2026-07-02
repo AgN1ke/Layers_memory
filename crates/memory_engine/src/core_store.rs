@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::recall::RecallItem;
-use crate::types::{Id, Link, Timestamp};
+use crate::types::{Id, Link, Speaker, Timestamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -166,6 +166,8 @@ pub struct CoreContextEvent {
     #[serde(rename = "type")]
     pub event_type: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<Speaker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

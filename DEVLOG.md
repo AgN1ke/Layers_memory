@@ -5589,3 +5589,29 @@ Live-перевірка на реальному Telegram-чаті («коли я
 
 **Наступні кроки:**
 Мультиспікерна гілка 1 (speaker у контракті, атрибутований рендер, core-side gating auto-bridge, мультиспікерний conformance-сценарій).
+
+## Запис 120 — 2026-07-03 — Мультиспікерна гілка 1: speaker-контракт, атрибутований transcript, gossip-gate (Claude, гілка feature/multi-speaker-contracts)
+
+**Проблематика:**
+Продовження списку Запису 118, пункт 4: перший зріз мультиспікерної геометрії за `docs/research/multi-speaker-geometry-2026-06-12.md` + доповнення Запису 117. Мета зрізу — контракт і захист: щоб груповий чат уже можна було ingest-ити з авторством, бачити атрибутований transcript, і щоб «плітки» гарантовано не потрапляли в Core до появи subject-моделі.
+
+**Що зроблено:**
+- `types.rs`: `Speaker { id, name }` (стабільний id хоста + prompt-facing імʼя — доповнення 6 Запису 117).
+- `IngestEvent`/`StoredEvent`/`CoreContextEvent`: опціональний `speaker` (serde default, без міграцій; старі events.jsonl читаються як є).
+- `prompt_view.rs`: `dialogue_role()` — події зі speaker рендеряться імʼям (`Жека: ...`), assistant без змін; dedup поточного повідомлення тепер за умовою «не-assistant» (працює і для іменованих ролей). `render_context_event_prompt_line` використовує ту саму роль → budget estimator автоматично рахує імена.
+- Фаза 1 захисту Core — у ядрі, не в хості (доповнення 3): `session_is_multi_speaker()` (≥2 різних непорожніх `speaker.id` серед user_message; події без speaker = legacy-ідентичність) вимикає Archive → Core bridge (`skipped` += сигнали) і обнуляє автоматичний Core-fidelity-path.
+- `contracts.md`: поле `speaker` + конвенція `links.kind = "reply_to"` (структура живе в сирому шарі, в Archive/MemoryUnit не зберігається; не плутати з `ArchiveEntry.links`).
+- Conformance: новий `--host direct-multispeaker` — Жека/Антон через PyO3 JSON-межу, атрибутований live-transcript ДО sleep (після sleep події вже покриті архівом і transcript порожній — перший прогін це чесно зловив), атрибутовані тези в units, gossip-сигнал confidence 0.95 → `core_summary.created == 0`, `skipped ≥ 1`, `fidelity_requests` порожні, Core порожній.
+- HISTORY-запис із чесною ретракцією: старий user-source guard у групових чатах НЕ захищав від пліток (усі люди — `user_message`).
+
+**Перевірки:**
+- `cargo test --workspace` — зелений; нові: `engine_multi_speaker.rs` (gossip-gate для двох спікерів + контроль, що один іменований спікер зберігає legacy-bridge і fidelity-routing), `memory_view_attributes_speakers_and_drops_current_speaker_duplicate`.
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` — зелені.
+- `maturin develop` + `pytest` — 13 passed.
+- Усі ВІСІМ conformance-хостів PASS: direct-multispeaker (новий), direct, telegram-local, godot-headless, chibigochi-spike, chibigochi-ui, chibigochi-llm-bridge, chibigochi-product-loop — лінійні сценарії без жодної правки очікувань.
+
+**Проблеми чи виклики:**
+Відкриті частини гілки 1 (позначені в roadmap): speaker/reply-маркери в сирому матеріалі sleep-пасів, speaker в evidence pack, `recall_by_event_id` (з попереднім фіксом full-scan у `archive_entry_path_by_id`), host-частина «ingest усього потоку». Гілка 2 (промпти пасів з вимогою атрибуції) і гілка 3 (`CoreFact.subject`, subject-aware near-dup) — наступні; до гілки 2 атрибуція тез тримається лише на fake-LLM сценарії, тому реальний груповий чат поки має Core-захист, але не має атрибутованої дистиляції.
+
+**Наступні кроки:**
+Гілка 1b (sleep-матеріал + evidence + recall_by_event_id) → гілка 2 з live-тестом на переплетених темах → гілка 3.
