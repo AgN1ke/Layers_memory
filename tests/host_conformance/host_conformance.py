@@ -36,7 +36,7 @@ import memory_engine
 SESSION_ID = "host_conformance_direct"
 CORE_SCOPE = SESSION_ID
 VECTOR_DIM = 384
-VECTOR_MODEL_ID = "intfloat/multilingual-e5-small"
+VECTOR_MODEL_ID = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 class ConformanceError(AssertionError):

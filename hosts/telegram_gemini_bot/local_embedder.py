@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 
-DEFAULT_EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
+DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_EMBEDDING_DIM = 384
 
 
@@ -39,11 +39,17 @@ class LocalEmbedder:
         self._model = None
 
     def embed_passages(self, texts: Iterable[str]) -> tuple[list[list[float]], EmbeddingTelemetry]:
-        return self._embed([f"passage: {text}" for text in texts])
+        return self._embed([self._prepare_text(text, "passage") for text in texts])
 
     def embed_query(self, text: str) -> tuple[list[float], EmbeddingTelemetry]:
-        vectors, telemetry = self._embed([f"query: {text}"])
+        vectors, telemetry = self._embed([self._prepare_text(text, "query")])
         return vectors[0], telemetry
+
+    def _prepare_text(self, text: str, prefix: str) -> str:
+        model = self.model_id.lower()
+        if "e5" in model or "bge" in model:
+            return f"{prefix}: {text}"
+        return text
 
     def _embed(self, texts: list[str]) -> tuple[list[list[float]], EmbeddingTelemetry]:
         started = time.perf_counter()

@@ -24,6 +24,13 @@ Depends on: `docs/architecture.md` v0.1, `docs/contracts.md` v0.1, `docs/strateg
 >   pattern, not a parallel task system;
 > - integrate vector recall reinforcement with the existing buffered recall stats
 >   path instead of writing recall events on every query.
+>
+> **2026-07-03 maintainer note.** The implementation TZ
+> `docs/research/vector-storage-tz-2026-07-03.md` supersedes this draft. In
+> particular, the draft's `intfloat/multilingual-e5-small` default was retracted
+> after a live fastembed check: `fastembed==0.8.0` does not expose that model via
+> `TextEmbedding`. The v1 implementation default is
+> `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384 dim).
 
 ---
 

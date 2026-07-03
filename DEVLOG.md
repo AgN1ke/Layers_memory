@@ -5623,7 +5623,7 @@ Live-перевірка на реальному Telegram-чаті («коли я
 
 **Що зроблено:**
 Написано імплементаційне ТЗ `docs/research/vector-storage-tz-2026-07-03.md`, яке розвʼязує всі TODO(align). Ключові рішення:
-- **Прийнято з драфту:** локальний embedder (fastembed, multilingual-e5-small, 384d, префікси passage:/query:) — приватність і нуль зовнішніх викликів; flat cosine index за трейтом (HNSW — ні); формат vectors.f32 + rows.jsonl + R1-recovery + compaction; on-demand tool-based deep recall із min_sim-чесністю (НЕ every-turn RAG); калібрування min_sim обовʼязкове.
+- **Прийнято з драфту:** локальний embedder (fastembed/ONNX на CPU; початковий `multilingual-e5-small` пізніше ретрактовано в Entry 124 на користь fastembed-supported MiniLM 384d) — приватність і нуль зовнішніх викликів; flat cosine index за трейтом (HNSW — ні); формат vectors.f32 + rows.jsonl + R1-recovery + compaction; on-demand tool-based deep recall із min_sim-чесністю (НЕ every-turn RAG); калібрування min_sim обовʼязкове.
 - **Змінено проти драфту:** embed-иться теза MemoryUnit (не archive text); розкладка `memory/archive/vectors/<scope>/` (per-chat opt-in без вигаданих per-scope каталогів верхнього рівня); events.jsonl скасований — reinforcement через існуючий buffered recall stats, tombstones окремим файлом; без register_embedder у PyO3 (core API приймає готовий query_vec, текст→вектор — модуль bot.py); реюз існуючого `TaskType::ComputeEmbedding` (prompt_id "embed_batch" — операційна мітка без файлу в prompts/); legacy entry-рівневі embedding-поля — deprecated без міграції.
 - **Залежність від атрибуції розвʼязана хірургічно:** gate у ядрі — units мультиспікерних сесій (`session_is_multi_speaker`) не embed-яться до гілок 1b–2; однокористувацькі scope embed-яться одразу. Roadmap-рядок замінено, фази A/B/C додані пунктами.
 - Фазування: A (storage/backfill/toggle/purge) → B (recall_deep + Telegram tool + калібрування) → C (Stage 2 re-rank, тільки після калібрування). Інваріанти з тестами: вимкнено = нуль тасків і байтова ідентичність recall; вектори — похідні й rebuild-овні; model/dim mismatch → відмова; scope-ізоляція; порядок локів session → vectors.
@@ -5684,3 +5684,32 @@ Phase A could build a derived vector catalog but nothing could query it. The acc
 
 **Next:**
 Run the full gate set, then either (a) wire real Gemini function-calling for `recall_distant_memory`, or (b) calibrate `min_sim` through `/vectors_on` + `/recall_deep` first and only then wire the automatic tool. Phase C stays blocked until calibration data exists.
+
+## Entry 124 - 2026-07-03 - Vector embedder default corrected after fastembed live check (Codex, feature/vector-storage-fastembed-model)
+
+**Problem:**
+After Phase B was integrated, the first live calibration attempt installed `fastembed==0.8.0` and enabled vectors for the owner's Telegram scope. The core emitted a valid `ComputeEmbedding` task, but the host failed before embedding because `TextEmbedding("intfloat/multilingual-e5-small")` is not supported by the installed fastembed registry.
+
+**What changed:**
+- Retracted the v1 default model choice `intfloat/multilingual-e5-small`.
+- Switched the default model to `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (`dim=384`), which is multilingual and present in `TextEmbedding.list_supported_models()`.
+- Updated Rust defaults, Telegram local embedder defaults, deterministic vector conformance constants, contracts, local-development docs, and the vector-storage TZ.
+- Existing runtime vector catalogs produced with the old model are treated as derived data and should be purged/rebuilt before calibration continues.
+- Rebuilt the owner Telegram vector scope after purge: 63 eligible memory units embedded, catalog status `ready`.
+- Set calibrated defaults for this model/data slice: `deep_recall_min_sim=0.30`, Telegram `vivid` threshold `0.55`.
+
+**Calibration observations:**
+- Strong true positives: cat/Irzhа queries top out around `0.60-0.66`; space and car queries around `0.52`.
+- Clear negative: "favorite soup" tops out around `0.26`, so `0.30` rejects it.
+- Weak/ambiguous: "where do I live?" finds related residence rows only around `0.12-0.15`; lowering the threshold enough to admit it would admit too much noise. This stays a Core/Stage-1 case unless the query includes a stronger location cue.
+
+**What did not change:**
+- The core still only stores/validates vectors; it does not compute embeddings.
+- Strict model/dim mismatch rejection remains the contract.
+- Stage 2 rerank is still blocked until live `min_sim` calibration exists.
+
+**Checks:**
+- `cargo test -p memory_engine --test engine_vectors` passed.
+- `python -m py_compile hosts/telegram_gemini_bot/local_embedder.py hosts/telegram_gemini_bot/bot.py tests/host_conformance/host_conformance.py` passed.
+- `maturin develop` rebuilt the Python adapter.
+- Live owner-scope backfill and deep-recall calibration passed after purging the stale old-model catalog/task.

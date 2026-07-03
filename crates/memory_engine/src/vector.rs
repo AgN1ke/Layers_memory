@@ -8,7 +8,8 @@ use crate::{MemoryEngineError, Result};
 pub const VECTOR_INDEX_SCHEMA_VERSION: &str = "vector_index.v1";
 pub const EMBED_BATCH_RESULT_SCHEMA_VERSION: &str = "embed_batch_result.v1";
 pub const DEEP_RECALL_RESULT_SCHEMA_VERSION: &str = "deep_recall.v1";
-pub const DEFAULT_VECTOR_MODEL_ID: &str = "intfloat/multilingual-e5-small";
+pub const DEFAULT_VECTOR_MODEL_ID: &str =
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2";
 pub const DEFAULT_VECTOR_DIM: usize = 384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

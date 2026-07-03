@@ -343,7 +343,7 @@ hosts/telegram_gemini_bot/runtime/logs/token_usage.jsonl
 
 Vector recall у Telegram host є opt-in. Ядро не рахує embeddings; локальний
 host-модуль `hosts/telegram_gemini_bot/local_embedder.py` використовує
-`fastembed` і модель `intfloat/multilingual-e5-small` тільки коли чат явно
+`fastembed` і модель `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` тільки коли чат явно
 вмикає `/vectors_on` або викликає `/recall_deep`. Для цього у venv адаптера:
 
 ```powershell

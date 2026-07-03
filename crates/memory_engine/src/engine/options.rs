@@ -195,7 +195,7 @@ impl Default for VectorConfig {
             dim: DEFAULT_VECTOR_DIM,
             embed_batch_size: 64,
             deep_recall_default_top_k: 5,
-            deep_recall_min_sim: 0.75,
+            deep_recall_min_sim: 0.30,
             deep_recall_recency_weight: 0.10,
             deep_recall_unit_weight: 0.10,
         }

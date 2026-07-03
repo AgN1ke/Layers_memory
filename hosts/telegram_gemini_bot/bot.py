@@ -1400,7 +1400,7 @@ def recall_distant_memory(
         {
             "when": clean_string(hit.get("created_at")),
             "sim": float(hit.get("sim", 0.0) or 0.0),
-            "strength": "vivid" if float(hit.get("sim", 0.0) or 0.0) >= 0.82 else "faint",
+            "strength": "vivid" if float(hit.get("sim", 0.0) or 0.0) >= 0.55 else "faint",
             "text": clean_string(hit.get("thesis")),
         }
         for hit in hits

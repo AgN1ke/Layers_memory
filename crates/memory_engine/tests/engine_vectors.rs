@@ -9,8 +9,8 @@ use memory_engine::types::{
     EVENT_SCHEMA_VERSION, FORGET_REVIEW_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION,
 };
 use memory_engine::vector::{
-    DeepRecallQuery, EmbedBatchResult, EmbedBatchVector, VectorScopeStatus,
-    EMBED_BATCH_RESULT_SCHEMA_VERSION,
+    DeepRecallQuery, EmbedBatchResult, EmbedBatchVector, VectorScopeStatus, DEFAULT_VECTOR_DIM,
+    DEFAULT_VECTOR_MODEL_ID, EMBED_BATCH_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{FileStorage, MemoryEngine};
 use serde_json::json;
@@ -67,21 +67,21 @@ fn vector_backfill_appends_embeddings_and_rejects_model_mismatch() {
     let bad = EmbedBatchResult {
         schema_version: EMBED_BATCH_RESULT_SCHEMA_VERSION.to_string(),
         model_id: "wrong-model".to_string(),
-        dim: 384,
+        dim: DEFAULT_VECTOR_DIM,
         results: vec![EmbedBatchVector {
             memory_unit_id: memory_unit_id.clone(),
-            vector: unit_vector(384, 0),
+            vector: unit_vector(DEFAULT_VECTOR_DIM, 0),
         }],
     };
     assert!(engine.resume_compute_embedding(&task_id, bad).is_err());
 
     let good = EmbedBatchResult {
         schema_version: EMBED_BATCH_RESULT_SCHEMA_VERSION.to_string(),
-        model_id: "intfloat/multilingual-e5-small".to_string(),
-        dim: 384,
+        model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+        dim: DEFAULT_VECTOR_DIM,
         results: vec![EmbedBatchVector {
             memory_unit_id,
-            vector: unit_vector(384, 0),
+            vector: unit_vector(DEFAULT_VECTOR_DIM, 0),
         }],
     };
     let appended = engine
@@ -191,7 +191,12 @@ fn deep_recall_returns_disabled_without_catalog() {
     let engine = MemoryEngine::new(storage);
 
     let result = engine
-        .recall_deep(deep_query("vector_scope", unit_vector(384, 0), 5, 0.75))
+        .recall_deep(deep_query(
+            "vector_scope",
+            unit_vector(DEFAULT_VECTOR_DIM, 0),
+            5,
+            0.75,
+        ))
         .expect("deep recall");
 
     assert!(!result.found);
@@ -225,7 +230,12 @@ fn deep_recall_finds_hits_limits_results_and_records_recall_stats() {
     submit_embeddings(&engine, &requests[0], vec![0, 1]);
 
     let result = engine
-        .recall_deep(deep_query("vector_scope", unit_vector(384, 1), 1, 0.75))
+        .recall_deep(deep_query(
+            "vector_scope",
+            unit_vector(DEFAULT_VECTOR_DIM, 1),
+            1,
+            0.75,
+        ))
         .expect("deep recall");
 
     assert!(result.found);
@@ -269,20 +279,25 @@ fn deep_recall_enforces_scope_isolation_threshold_and_model_dim() {
     }
 
     let result = engine
-        .recall_deep(deep_query("scope_a", unit_vector(384, 1), 5, 0.9))
+        .recall_deep(deep_query(
+            "scope_a",
+            unit_vector(DEFAULT_VECTOR_DIM, 1),
+            5,
+            0.9,
+        ))
         .expect("deep recall");
     assert!(!result.found);
     assert_eq!(result.reason.as_deref(), Some("below_threshold"));
 
     let wrong_model = DeepRecallQuery {
         model_id: "wrong-model".to_string(),
-        ..deep_query("scope_a", unit_vector(384, 0), 5, 0.75)
+        ..deep_query("scope_a", unit_vector(DEFAULT_VECTOR_DIM, 0), 5, 0.75)
     };
     assert!(engine.recall_deep(wrong_model).is_err());
 
     let wrong_dim = DeepRecallQuery {
         query_vec: unit_vector(3, 0),
-        ..deep_query("scope_a", unit_vector(384, 0), 5, 0.75)
+        ..deep_query("scope_a", unit_vector(DEFAULT_VECTOR_DIM, 0), 5, 0.75)
     };
     assert!(engine.recall_deep(wrong_dim).is_err());
 
@@ -321,7 +336,12 @@ fn deep_recall_score_uses_recency_weight_and_top_k() {
     submit_embeddings(&engine, &requests[0], vec![0, 0, 1]);
 
     let result = engine
-        .recall_deep(deep_query("vector_scope", unit_vector(384, 0), 2, 0.75))
+        .recall_deep(deep_query(
+            "vector_scope",
+            unit_vector(DEFAULT_VECTOR_DIM, 0),
+            2,
+            0.75,
+        ))
         .expect("deep recall");
 
     assert!(result.found);
@@ -511,13 +531,13 @@ fn submit_embeddings(
                 .as_str()
                 .expect("memory unit id")
                 .to_string(),
-            vector: unit_vector(384, hot_index),
+            vector: unit_vector(DEFAULT_VECTOR_DIM, hot_index),
         })
         .collect();
     let result = EmbedBatchResult {
         schema_version: EMBED_BATCH_RESULT_SCHEMA_VERSION.to_string(),
-        model_id: "intfloat/multilingual-e5-small".to_string(),
-        dim: 384,
+        model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+        dim: DEFAULT_VECTOR_DIM,
         results,
     };
     engine
@@ -529,7 +549,7 @@ fn deep_query(scope: &str, query_vec: Vec<f32>, top_k: usize, min_sim: f32) -> D
     DeepRecallQuery {
         scope: scope.to_string(),
         query_vec,
-        model_id: "intfloat/multilingual-e5-small".to_string(),
+        model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
         top_k,
         min_sim,
         now: Some("2020-07-01T00:00:00Z".to_string()),

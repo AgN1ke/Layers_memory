@@ -46,6 +46,30 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-03 - Vector embedder default changed to fastembed-supported multilingual MiniLM
+
+Live calibration setup for vector recall installed `fastembed==0.8.0` and tried to load the model named in the vector-storage TZ. `TextEmbedding("intfloat/multilingual-e5-small")` failed because that model is not present in the installed fastembed registry. After switching to a supported 384-dimensional multilingual model, owner-scope calibration showed a lower cosine range than the original e5-family assumption.
+
+**What changed:**
+- The default vector model is now `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` with `dim=384`.
+- The Rust default `DEFAULT_VECTOR_MODEL_ID`, Telegram `DEFAULT_EMBEDDING_MODEL`, vector conformance constants, contracts, and the implementation TZ now use the supported model.
+- `VectorConfig.deep_recall_min_sim` is now `0.30` for this model family. Telegram's prompt-facing `vivid` threshold for `/recall_deep` is now `0.55`.
+- Existing vector catalogs using the old model must be purged/rebuilt; vectors are derived data, so this does not affect archive or memory-unit truth.
+
+**What is retracted (if applicable):**
+- The claim that the v1 local fastembed path can use `intfloat/multilingual-e5-small` is retracted for the installed fastembed version.
+
+**What is still true:**
+- The Rust core still does not compute embeddings or load an embedding model.
+- The model/dim boundary remains strict: submit and deep recall reject mismatched vectors instead of silently accepting them.
+- The default dimension remains 384, so storage shape and deterministic tests stay small.
+- `min_sim` still gates on raw cosine before recency/weight scoring; lowering it to `0.30` does not let recency rescue below-threshold rows.
+
+**Reproducibility anchor:**
+- `python -c "from fastembed import TextEmbedding; print(TextEmbedding.list_supported_models())"` shows `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` and not `intfloat/multilingual-e5-small` for fastembed 0.8.0.
+- Owner Telegram scope `telegram_311422683`: 63 eligible units embedded; true-positive sims for cat/space/car queries were roughly `0.52-0.66`; a clear negative soup query topped out at about `0.26`; `min_sim=0.30` separates those cases. The location query "де я живу?" remains weak for vector-only recall without an explicit location cue and should be handled by Core/Stage 1.
+- `cargo test -p memory_engine --test engine_vectors`
+
 ## 2026-07-03 - Vector storage Phase B slice: deep recall over host-provided vectors
 
 Vector storage Phase A created the derived index and `ComputeEmbedding` task boundary. This slice adds the first read path over that index: `recall_deep`, plus a Telegram host-side local embedder/manual command path for calibration.

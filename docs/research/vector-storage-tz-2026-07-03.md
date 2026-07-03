@@ -21,7 +21,9 @@
 
 ## 2. Що прийнято з драфту і що змінено (résolution всіх TODO(align))
 
-**Прийнято без змін:** локальний embedder `intfloat/multilingual-e5-small` (384 dim, префікси `passage:`/`query:`); flat brute-force cosine за трейтом `VectorIndex` (HNSW — свідомо ні); бінарний формат `vectors.f32` + `rows.jsonl` + recovery-правило R1; compaction; `min_sim`-чесність («не пам'ятаю» замість слабких збігів); on-demand tool-based deep recall (M1: НЕ every-turn RAG); scarcity top_k=5 + token budget; калібрування `min_sim` перед шипінгом (§8); performance envelope.
+**Прийнято без змін:** локальний embedder через fastembed/ONNX на CPU; flat brute-force cosine за трейтом `VectorIndex` (HNSW — свідомо ні); бінарний формат `vectors.f32` + `rows.jsonl` + recovery-правило R1; compaction; `min_sim`-чесність («не пам'ятаю» замість слабких збігів); on-demand tool-based deep recall (M1: НЕ every-turn RAG); scarcity top_k=5 + token budget; калібрування `min_sim` перед шипінгом (§8); performance envelope.
+
+**Змінено після live-перевірки 2026-07-03:** початковий вибір `intfloat/multilingual-e5-small` ретрактовано, бо `fastembed==0.8.0` не має цієї моделі в `TextEmbedding.list_supported_models()`. Дефолт v1 — `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384 dim, multilingual, fastembed-supported, prefixes not required but harmless).
 
 **Змінено (з причин, зафіксованих у maintainer note 2026-06-10 і Записі 117):**
 
@@ -69,11 +71,11 @@ pub fn resume_compute_embedding(&self, task_id: &str, result: EmbedBatchResult) 
 ```json
 // inputs таска / LlmRequest.prompt_inputs
 { "kind": "embed_batch", "scope": "telegram_311422683",
-  "model_id": "intfloat/multilingual-e5-small", "dim": 384,
+  "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", "dim": 384,
   "items": [ { "memory_unit_id": "mu_...", "text": "<теза unit-а>" } ] }
 // результат хоста (embed_batch_result.v1), повертається як LlmResponse::Ok { text: <цей JSON> }
 { "schema_version": "embed_batch_result.v1",
-  "model_id": "intfloat/multilingual-e5-small", "dim": 384,
+  "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", "dim": 384,
   "results": [ { "memory_unit_id": "mu_...", "vector": [0.01, -0.02] } ] }
 ```
 
@@ -103,7 +105,7 @@ pub fn recall_deep(&self, query: DeepRecallQuery) -> Result<DeepRecallResult>;
 
 ## 6. Host-частина (Telegram, Фаза B)
 
-1. Новий модуль `hosts/telegram_gemini_bot/local_embedder.py`: fastembed `TextEmbedding("intfloat/multilingual-e5-small")`, `embed_passages` (префікс passage:) / `embed_query` (префікс query:), L2-нормалізація, lazy-ініціалізація (перше завантаження ONNX — повідомити в лог), fallback-моделі за драфтом §8.1. `fastembed` — нова dev-залежність venv, зафіксувати в `docs/local-development.md`.
+1. Новий модуль `hosts/telegram_gemini_bot/local_embedder.py`: fastembed `TextEmbedding("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")`, `embed_passages` / `embed_query`, L2-нормалізація, lazy-ініціалізація (перше завантаження ONNX — повідомити в лог). `fastembed` — нова dev-залежність venv, зафіксувати в `docs/local-development.md`.
 2. Виконання `ComputeEmbedding`-тасків: після sleep (з `SleepOutcome.embedding_requests`) і по `pending_embedding_backfill` при enable — батчами через local_embedder, submit через `resume_compute_embedding`.
 3. Gemini function-calling tool `recall_distant_memory` (декларація і system-prompt доповнення — з драфту §8.2, перекласти в `chibigochi/telegram` персону відповідно): виклик → typing-екшн → `embed_query` → `engine.recall_deep` → tool result `{found, reason, memories:[{when: <мітка з існуючого time-labels bucketing — реюз>, sim, strength: vivid|faint, text: thesis}]}`. Немає збігів → модель чесно каже, що не пам'ятає.
 4. Команди: `/vectors` (status), `/vectors_on`, `/vectors_off`, `/vectors_purge` (з підтвердженням другим повідомленням), scope = поточний чат.
@@ -118,7 +120,7 @@ Conformance: новий `--host direct-vectors` — детермінований
 
 ## 8. Калібрування (обов'язково до Фази C і до заявлених висновків)
 
-На живому Telegram-архіві власника: увімкнути вектори, ~10 реальних «пам'ятаєш...» запитів через `--debug`-шлях, записати sim найслабшого true positive і найсильнішого false positive, поставити `min_sim` між ними, `vivid_sim` біля кластера сильних. Значення + model_id → у DEVLOG. Без калібрування дефолт 0.75 — старт, не вердикт (e5-родина кластеризує high).
+На живому Telegram-архіві власника: увімкнути вектори, ~10 реальних «пам'ятаєш...» запитів через `--debug`-шлях, записати sim найслабшого true positive і найсильнішого false positive, поставити `min_sim` між ними, `vivid_sim` біля кластера сильних. Значення + model_id → у DEVLOG. Live-калібрування 2026-07-03 для `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` поставило стартові `min_sim=0.30`, `vivid_sim=0.55`.
 
 ## 9. Чого свідомо не робити (v1)
 

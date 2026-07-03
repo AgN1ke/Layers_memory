@@ -1079,7 +1079,7 @@ never calls an embedding provider.
 {
   "kind": "embed_batch",
   "scope": "telegram_311422683",
-  "model_id": "intfloat/multilingual-e5-small",
+  "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "dim": 384,
   "items": [
     { "memory_unit_id": "mu_...", "text": "MemoryUnit thesis text" }
@@ -1092,7 +1092,7 @@ Host result submitted through `resume_compute_embedding(task_id, result)`:
 ```json
 {
   "schema_version": "embed_batch_result.v1",
-  "model_id": "intfloat/multilingual-e5-small",
+  "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "dim": 384,
   "results": [
     { "memory_unit_id": "mu_...", "vector": [0.01, -0.02] }
@@ -1286,7 +1286,7 @@ memory/archive/vectors/<scope>/
 ```json
 {
   "schema_version": "vector_index.v1",
-  "model_id": "intfloat/multilingual-e5-small",
+  "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "dim": 384,
   "metric": "cosine",
   "normalized": true,
@@ -1326,9 +1326,9 @@ Request:
 {
   "scope": "telegram_311422683",
   "query_vec": [0.01, -0.02],
-  "model_id": "intfloat/multilingual-e5-small",
+  "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "top_k": 5,
-  "min_sim": 0.75,
+  "min_sim": 0.30,
   "now": "2026-07-03T12:00:00Z"
 }
 ```
