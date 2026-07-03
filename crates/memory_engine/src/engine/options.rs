@@ -8,6 +8,7 @@ pub struct EngineOptions {
     pub context: ContextPackageConfig,
     pub fidelity: FidelityConfig,
     pub forgetting: ForgetConfig,
+    pub vectors: VectorConfig,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +96,13 @@ pub struct ForgetConfig {
     pub prompt_version: u32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorConfig {
+    pub model_id: String,
+    pub dim: usize,
+    pub embed_batch_size: usize,
+}
+
 impl Default for RecallStage1Config {
     fn default() -> Self {
         Self {
@@ -172,6 +180,16 @@ impl Default for ForgetConfig {
             protect_emotional_strength: 0.85,
             prompt_id: "forget_review_pass".to_string(),
             prompt_version: 1,
+        }
+    }
+}
+
+impl Default for VectorConfig {
+    fn default() -> Self {
+        Self {
+            model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+            dim: DEFAULT_VECTOR_DIM,
+            embed_batch_size: 64,
         }
     }
 }

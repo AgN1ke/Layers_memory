@@ -5615,3 +5615,41 @@ Live-перевірка на реальному Telegram-чаті («коли я
 
 **Наступні кроки:**
 Гілка 1b (sleep-матеріал + evidence + recall_by_event_id) → гілка 2 з live-тестом на переплетених темах → гілка 3.
+
+## Запис 121 — 2026-07-03 — ТЗ на векторне сховище: узгодження драфту з v0.2/v0.3-кодом (Claude)
+
+**Проблематика:**
+Власник вирішив: векторне сховище робимо зараз (з Кодексом), з можливістю повністю вимкнути, потім тестуємо. Існуючий драфт `docs/research/vector-recall.md` прийнятий як напрям, але писався проти README і має 10+ `TODO(align)` проти фактичної архітектури (MemoryUnits, buffered stats, реальна розкладка memory/, multi-speaker gate). Також у roadmap стояла жорстка залежність «vector storage тільки після атрибуції».
+
+**Що зроблено:**
+Написано імплементаційне ТЗ `docs/research/vector-storage-tz-2026-07-03.md`, яке розвʼязує всі TODO(align). Ключові рішення:
+- **Прийнято з драфту:** локальний embedder (fastembed, multilingual-e5-small, 384d, префікси passage:/query:) — приватність і нуль зовнішніх викликів; flat cosine index за трейтом (HNSW — ні); формат vectors.f32 + rows.jsonl + R1-recovery + compaction; on-demand tool-based deep recall із min_sim-чесністю (НЕ every-turn RAG); калібрування min_sim обовʼязкове.
+- **Змінено проти драфту:** embed-иться теза MemoryUnit (не archive text); розкладка `memory/archive/vectors/<scope>/` (per-chat opt-in без вигаданих per-scope каталогів верхнього рівня); events.jsonl скасований — reinforcement через існуючий buffered recall stats, tombstones окремим файлом; без register_embedder у PyO3 (core API приймає готовий query_vec, текст→вектор — модуль bot.py); реюз існуючого `TaskType::ComputeEmbedding` (prompt_id "embed_batch" — операційна мітка без файлу в prompts/); legacy entry-рівневі embedding-поля — deprecated без міграції.
+- **Залежність від атрибуції розвʼязана хірургічно:** gate у ядрі — units мультиспікерних сесій (`session_is_multi_speaker`) не embed-яться до гілок 1b–2; однокористувацькі scope embed-яться одразу. Roadmap-рядок замінено, фази A/B/C додані пунктами.
+- Фазування: A (storage/backfill/toggle/purge) → B (recall_deep + Telegram tool + калібрування) → C (Stage 2 re-rank, тільки після калібрування). Інваріанти з тестами: вимкнено = нуль тасків і байтова ідентичність recall; вектори — похідні й rebuild-овні; model/dim mismatch → відмова; scope-ізоляція; порядок локів session → vectors.
+
+**Наступні кроки:**
+Кодекс реалізує фазу A за ТЗ; live-калібрування min_sim на архіві власника — між фазами B і C.
+
+## Entry 122 - 2026-07-03 - Vector storage Phase A implementation (Codex, feature/vector-storage-phase-a)
+
+**Problem:**
+The accepted vector-storage TZ requires an opt-in derived vector catalog before deep recall can be built. The core must stay provider-free: hosts compute embeddings, while Rust stores validated vectors and owns eligibility, tombstones, and scope isolation.
+
+**What changed:**
+- Added `vector.rs` contracts: `vector_index.v1`, `embed_batch_result.v1`, `VectorScopeState`, `EmbedBatchInputs`, `EmbedBatchResult`, rows/tombstones, SHA-256 thesis hashes, and defensive L2 normalization.
+- Added storage under `memory/archive/vectors/<scope>/` with `manifest.json`, `vectors.f32`, `rows.jsonl`, and `tombstones.jsonl`. `archive/vectors` is skipped by archive scanners.
+- Added core APIs: `vector_state`, `set_vector_scope`, `rebuild_vectors`, `pending_embedding_backfill`, `resume_compute_embedding`.
+- Activated `TaskType::ComputeEmbedding` through `LlmRequest { prompt_id: "embed_batch", role_hint: fast }`; no prompt file and no provider logic in core.
+- `SleepOutcome` now carries `embedding_requests` for enabled scopes after sleep creates eligible memory units.
+- Forgotten/rejected units append vector tombstones; `pending_embedding_backfill` compacts tombstones and `remember_back` is re-embedded by normal backfill.
+- Multi-speaker sessions emit no embedding tasks until attributed memory units are implemented.
+- PyO3 exposes the new API as thin JSON methods.
+- `docs/contracts.md`, `HISTORY.md`, and roadmap vector Phase A status were updated.
+
+**Checks:**
+- `cargo check --workspace` passed.
+- `cargo test -p memory_engine` passed, including new `engine_vectors.rs` tests for disabled scope, backfill/submit, model mismatch, multi-speaker gate, forgotten tombstone, and remember-back re-embed.
+
+**Next:**
+Phase B: `recall_deep`, local Telegram fastembed host module, `recall_distant_memory` tool, vector commands, direct-vectors conformance, and live `min_sim` calibration before Phase C.

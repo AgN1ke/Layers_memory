@@ -171,6 +171,9 @@ impl<S: Storage> MemoryEngine<S> {
             unit.status = memory_unit_status_after_fidelity(review.status);
             unit.fidelity_review = Some(review.clone());
             self.storage.write_memory_unit(&unit)?;
+            if unit.status != MemoryUnitStatus::ActiveArchive {
+                self.tombstone_vector_unit_if_indexed_unlocked(&unit)?;
+            }
 
             let mut archive_entry = self.storage.read_archive_entry_by_id(&unit.archive_id)?;
             archive_entry.updated_at = now.clone();

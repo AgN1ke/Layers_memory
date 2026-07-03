@@ -24,6 +24,7 @@ pub mod sleep;
 pub mod storage;
 pub mod tasks;
 pub mod types;
+pub mod vector;
 
 pub use engine::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult, MemoryEngine,
@@ -36,3 +37,7 @@ pub use llm::{
     SleepOutcome, SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
 };
 pub use prompt_view::render_memory_view;
+pub use vector::{
+    EmbedBatchInputs, EmbedBatchItem, EmbedBatchResult, EmbedBatchVector, VectorScopeState,
+    VectorScopeStatus,
+};

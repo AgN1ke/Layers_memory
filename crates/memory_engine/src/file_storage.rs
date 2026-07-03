@@ -17,6 +17,10 @@ use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
 use crate::storage::{Storage, StorageCollection, StorageReadWarning};
 use crate::tasks::TaskState;
 use crate::types::{CORE_STORE_SCHEMA_VERSION, SESSION_SCHEMA_VERSION};
+use crate::vector::{
+    VectorAppendRecord, VectorIndexData, VectorIndexManifest, VectorTombstone,
+    VECTOR_INDEX_SCHEMA_VERSION,
+};
 use crate::{MemoryEngineError, Result};
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -51,6 +55,7 @@ impl FileStorage {
         fs::create_dir_all(self.root.join("archive"))?;
         fs::create_dir_all(self.root.join("archive").join("units"))?;
         fs::create_dir_all(self.root.join("archive").join("forgotten"))?;
+        fs::create_dir_all(self.root.join("archive").join("vectors"))?;
         fs::create_dir_all(self.root.join("core").join("store"))?;
         fs::create_dir_all(self.root.join("core").join("candidates"))?;
         fs::create_dir_all(self.root.join("tasks"))?;
@@ -160,6 +165,26 @@ impl FileStorage {
 
     fn journal_path(&self, op_id: &str) -> PathBuf {
         self.root.join("journal").join(format!("{op_id}.json"))
+    }
+
+    fn vector_scope_dir(&self, scope: &str) -> PathBuf {
+        self.root.join("archive").join("vectors").join(scope)
+    }
+
+    fn vector_manifest_path(&self, scope: &str) -> PathBuf {
+        self.vector_scope_dir(scope).join("manifest.json")
+    }
+
+    fn vector_rows_path(&self, scope: &str) -> PathBuf {
+        self.vector_scope_dir(scope).join("rows.jsonl")
+    }
+
+    fn vector_tombstones_path(&self, scope: &str) -> PathBuf {
+        self.vector_scope_dir(scope).join("tombstones.jsonl")
+    }
+
+    fn vector_data_path(&self, scope: &str) -> PathBuf {
+        self.vector_scope_dir(scope).join("vectors.f32")
     }
 
     fn read_session_metadata_file(&self, session_id: &str) -> Result<SessionMetadata> {
@@ -604,6 +629,157 @@ impl Storage for FileStorage {
         })
     }
 
+    fn read_vector_index(&self, scope: &str) -> Result<Option<VectorIndexData>> {
+        self.ensure_layout()?;
+        validate_scope_component(scope)?;
+        let manifest_path = self.vector_manifest_path(scope);
+        if !manifest_path.exists() {
+            return Ok(None);
+        }
+
+        let mut manifest: VectorIndexManifest = read_json(&manifest_path)?;
+        if manifest.schema_version != VECTOR_INDEX_SCHEMA_VERSION {
+            return Err(MemoryEngineError::IncompatibleSchema {
+                expected: VECTOR_INDEX_SCHEMA_VERSION.to_string(),
+                actual: manifest.schema_version.clone(),
+            });
+        }
+
+        let rows = read_jsonl::<crate::vector::VectorRow>(&self.vector_rows_path(scope))?;
+        let tombstones = read_jsonl::<VectorTombstone>(&self.vector_tombstones_path(scope))?;
+        let vector_path = self.vector_data_path(scope);
+        let vector_bytes = if vector_path.exists() {
+            fs::read(&vector_path)?
+        } else {
+            Vec::new()
+        };
+        if vector_bytes.len() % std::mem::size_of::<f32>() != 0 {
+            manifest.state = crate::vector::VectorScopeStatus::Corrupt;
+            atomic_write_json(&manifest_path, &manifest)?;
+            return Ok(Some(VectorIndexData {
+                manifest,
+                rows,
+                vectors: Vec::new(),
+                tombstones,
+            }));
+        }
+
+        let expected_bytes = rows
+            .len()
+            .saturating_mul(manifest.dim)
+            .saturating_mul(std::mem::size_of::<f32>());
+        if vector_bytes.len() > expected_bytes {
+            let file = OpenOptions::new().write(true).open(&vector_path)?;
+            file.set_len(expected_bytes as u64)?;
+        } else if vector_bytes.len() < expected_bytes {
+            manifest.state = crate::vector::VectorScopeStatus::Corrupt;
+            atomic_write_json(&manifest_path, &manifest)?;
+            return Ok(Some(VectorIndexData {
+                manifest,
+                rows,
+                vectors: Vec::new(),
+                tombstones,
+            }));
+        }
+
+        manifest.rows = rows.len();
+        let vector_bytes = if vector_path.exists() {
+            fs::read(&vector_path)?
+        } else {
+            Vec::new()
+        };
+        let vectors = decode_f32_vectors(&vector_bytes, manifest.dim)?;
+        Ok(Some(VectorIndexData {
+            manifest,
+            rows,
+            vectors,
+            tombstones,
+        }))
+    }
+
+    fn write_vector_index(&self, scope: &str, index: &VectorIndexData) -> Result<()> {
+        self.ensure_layout()?;
+        validate_scope_component(scope)?;
+        let dir = self.vector_scope_dir(scope);
+        fs::create_dir_all(&dir)?;
+        atomic_write_f32_vectors(&self.vector_data_path(scope), &index.vectors)?;
+        atomic_write_jsonl(&self.vector_rows_path(scope), &index.rows, true)?;
+        atomic_write_jsonl(&self.vector_tombstones_path(scope), &index.tombstones, true)?;
+        atomic_write_json(&self.vector_manifest_path(scope), &index.manifest)
+    }
+
+    fn write_vector_manifest(&self, scope: &str, manifest: &VectorIndexManifest) -> Result<()> {
+        self.ensure_layout()?;
+        validate_scope_component(scope)?;
+        fs::create_dir_all(self.vector_scope_dir(scope))?;
+        atomic_write_json(&self.vector_manifest_path(scope), manifest)
+    }
+
+    fn append_vector_records(
+        &self,
+        scope: &str,
+        manifest: &VectorIndexManifest,
+        records: &[VectorAppendRecord],
+    ) -> Result<()> {
+        if records.is_empty() {
+            return self.write_vector_manifest(scope, manifest);
+        }
+        self.ensure_layout()?;
+        validate_scope_component(scope)?;
+        fs::create_dir_all(self.vector_scope_dir(scope))?;
+
+        let mut vector_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.vector_data_path(scope))?;
+        for record in records {
+            write_f32_vector(&mut vector_file, &record.vector)?;
+        }
+        vector_file.sync_all()?;
+
+        let mut rows_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.vector_rows_path(scope))?;
+        for record in records {
+            writeln!(rows_file, "{}", serde_json::to_string(&record.row)?)?;
+        }
+        rows_file.sync_all()?;
+
+        atomic_write_json(&self.vector_manifest_path(scope), manifest)
+    }
+
+    fn append_vector_tombstones(&self, scope: &str, tombstones: &[VectorTombstone]) -> Result<()> {
+        if tombstones.is_empty() {
+            return Ok(());
+        }
+        self.ensure_layout()?;
+        validate_scope_component(scope)?;
+        if !self.vector_manifest_path(scope).exists() {
+            return Ok(());
+        }
+        fs::create_dir_all(self.vector_scope_dir(scope))?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.vector_tombstones_path(scope))?;
+        for tombstone in tombstones {
+            writeln!(file, "{}", serde_json::to_string(tombstone)?)?;
+        }
+        file.sync_all()?;
+        Ok(())
+    }
+
+    fn purge_vector_scope(&self, scope: &str) -> Result<()> {
+        self.ensure_layout()?;
+        validate_scope_component(scope)?;
+        match fs::remove_dir_all(self.vector_scope_dir(scope)) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     fn begin_journaled_operation(&self, operation: &JournalOperation) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.journal_path(&operation.op_id), operation)
@@ -697,6 +873,55 @@ fn atomic_write_jsonl<T: Serialize>(path: &Path, values: &[T], sync_file: bool) 
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let content = serde_json::to_string_pretty(value)?;
     atomic_write_string(path, &format!("{content}\n"), true)
+}
+
+fn atomic_write_f32_vectors(path: &Path, vectors: &[Vec<f32>]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp_path = unique_tmp_path(path);
+    let mut file = File::create(&tmp_path)?;
+    for vector in vectors {
+        write_f32_vector(&mut file, vector)?;
+    }
+    file.sync_all()?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+fn write_f32_vector(file: &mut File, vector: &[f32]) -> Result<()> {
+    for value in vector {
+        file.write_all(&value.to_le_bytes())?;
+    }
+    Ok(())
+}
+
+fn decode_f32_vectors(bytes: &[u8], dim: usize) -> Result<Vec<Vec<f32>>> {
+    if dim == 0 {
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Err(MemoryEngineError::Storage(
+            "vector dim must not be zero".to_string(),
+        ));
+    }
+    let row_bytes = dim.saturating_mul(std::mem::size_of::<f32>());
+    if row_bytes == 0 || !bytes.len().is_multiple_of(row_bytes) {
+        return Err(MemoryEngineError::Storage(format!(
+            "vector byte length {} is not divisible by row size {}",
+            bytes.len(),
+            row_bytes
+        )));
+    }
+    let mut vectors = Vec::new();
+    for chunk in bytes.chunks_exact(row_bytes) {
+        let mut vector = Vec::with_capacity(dim);
+        for raw in chunk.chunks_exact(std::mem::size_of::<f32>()) {
+            vector.push(f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]));
+        }
+        vectors.push(vector);
+    }
+    Ok(vectors)
 }
 
 fn atomic_write_json_relaxed<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -808,7 +1033,7 @@ fn collect_archive_entry_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            if matches!(name, "units" | "forgotten") {
+            if matches!(name, "units" | "forgotten" | "vectors") {
                 continue;
             }
             collect_archive_entry_files(&path, files)?;
@@ -817,6 +1042,21 @@ fn collect_archive_entry_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<
         }
     }
 
+    Ok(())
+}
+
+fn validate_scope_component(scope: &str) -> Result<()> {
+    if scope.trim().is_empty()
+        || scope.contains('/')
+        || scope.contains('\\')
+        || scope == "."
+        || scope == ".."
+        || scope.contains("..")
+    {
+        return Err(MemoryEngineError::Validation(format!(
+            "invalid vector scope path component: {scope}"
+        )));
+    }
     Ok(())
 }
 

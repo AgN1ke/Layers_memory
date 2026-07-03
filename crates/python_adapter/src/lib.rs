@@ -32,6 +32,7 @@ use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::reflection::ReflectionAnalyzeResult;
 use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::storage::Storage;
+use ::memory_engine::vector::EmbedBatchResult;
 use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
 
 #[pyclass(name = "MemoryEngine")]
@@ -319,6 +320,43 @@ impl PyMemoryEngine {
     fn seed_core_from_archives(&self, py: Python<'_>) -> PyResult<String> {
         let summary = run_without_gil(py, || self.inner.seed_core_from_archives())?;
         dump_json(&summary, "core archive seed summary")
+    }
+
+    fn vector_state(&self, py: Python<'_>, scope: &str) -> PyResult<String> {
+        let state = run_without_gil(py, || self.inner.vector_state(scope))?;
+        dump_json(&state, "vector scope state")
+    }
+
+    #[pyo3(signature = (scope, enabled, purge=false))]
+    fn set_vector_scope(
+        &self,
+        py: Python<'_>,
+        scope: &str,
+        enabled: bool,
+        purge: bool,
+    ) -> PyResult<String> {
+        let state = run_without_gil(py, || self.inner.set_vector_scope(scope, enabled, purge))?;
+        dump_json(&state, "vector scope state")
+    }
+
+    fn rebuild_vectors(&self, py: Python<'_>, scope: &str) -> PyResult<String> {
+        let state = run_without_gil(py, || self.inner.rebuild_vectors(scope))?;
+        dump_json(&state, "vector scope state")
+    }
+
+    fn pending_embedding_backfill(&self, py: Python<'_>, scope: &str) -> PyResult<String> {
+        let requests = run_without_gil(py, || self.inner.pending_embedding_backfill(scope))?;
+        dump_json(&requests, "embedding requests")
+    }
+
+    fn resume_compute_embedding(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        result_json: &str,
+    ) -> PyResult<usize> {
+        let result: EmbedBatchResult = parse_json(result_json, "embed batch result")?;
+        run_without_gil(py, || self.inner.resume_compute_embedding(task_id, result))
     }
 }
 
