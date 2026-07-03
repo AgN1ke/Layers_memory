@@ -46,6 +46,32 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-03 - Vector storage Phase A: opt-in derived index and ComputeEmbedding tasks
+
+The owner accepted `docs/research/vector-storage-tz-2026-07-03.md` as the implementation contract for vector storage. This first phase adds the derived storage/index and task boundary only; it does not add deep recall, Telegram fastembed, or Stage 2 reranking yet.
+
+**What changed:**
+- New derived vector catalog under `memory/archive/vectors/<scope>/`: `manifest.json`, `vectors.f32`, `rows.jsonl`, and `tombstones.jsonl`.
+- New public core APIs: `vector_state`, `set_vector_scope`, `rebuild_vectors`, `pending_embedding_backfill`, and `resume_compute_embedding`.
+- `TaskType::ComputeEmbedding` is now active. The core emits `LlmRequest { prompt_id: "embed_batch", role_hint: fast }` with `EmbedBatchInputs`; hosts return `embed_batch_result.v1`.
+- `SleepOutcome` can include `embedding_requests` when a scope is enabled and new eligible `MemoryUnit` theses need embeddings.
+- Vector rows index active archive memory units only. Forgotten/rejected units are tombstoned; compaction removes tombstoned rows. `remember_back` is picked up by backfill.
+- Multi-speaker sessions are gated out of embedding until attributed memory units land.
+
+**What is retracted (if applicable):**
+- The reserved `ArchiveEntry.embedding_model_id` and `ArchiveEntry.embedding` fields are not the vector-storage path. They remain deprecated/reserved compatibility fields; Phase A indexes `MemoryUnit` theses instead.
+
+**What is still true:**
+- The Rust core still does not compute embeddings, call a network, know provider keys, or load an embedding model.
+- Vector storage is disabled by default. With vectors disabled, no embedding tasks are emitted and ordinary Stage 1 recall is unchanged.
+- Vectors are derived data; deleting or rebuilding `memory/archive/vectors/<scope>/` does not delete memory truth.
+- Deep recall (`recall_deep`), local fastembed in Telegram, min-sim calibration, and Stage 2 rerank remain Phase B/C work.
+
+**Reproducibility anchor:**
+- `cargo test -p memory_engine --test engine_vectors`
+- `cargo test -p memory_engine`
+- `cargo check --workspace`
+
 ## 2026-07-03 - Multi-speaker branch 1: speaker contract, attributed transcript, Core gossip gate
 
 First slice of the multi-speaker geometry plan (`docs/research/multi-speaker-geometry-2026-06-12.md`, DEVLOG Запис 117). Linear hosts are unaffected: every new field is optional with serde defaults, and behavior without `speaker` is byte-identical to before.

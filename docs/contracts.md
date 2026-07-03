@@ -1067,6 +1067,42 @@ PendingTask - спосіб, яким ядро системи просить хо
 - `fact_check`;
 - `tag_proposal`.
 
+`compute_embedding` is active starting with vector storage Phase A. It is not a
+prompt rendered from `prompts/`: `prompt_id = "embed_batch"` is an operational
+label, `role_hint = "fast"` is informational for hosts, and the host must execute
+the task with a local embedding model. The core never computes embeddings and
+never calls an embedding provider.
+
+`compute_embedding.inputs` shape:
+
+```json
+{
+  "kind": "embed_batch",
+  "scope": "telegram_311422683",
+  "model_id": "intfloat/multilingual-e5-small",
+  "dim": 384,
+  "items": [
+    { "memory_unit_id": "mu_...", "text": "MemoryUnit thesis text" }
+  ]
+}
+```
+
+Host result submitted through `resume_compute_embedding(task_id, result)`:
+
+```json
+{
+  "schema_version": "embed_batch_result.v1",
+  "model_id": "intfloat/multilingual-e5-small",
+  "dim": 384,
+  "results": [
+    { "memory_unit_id": "mu_...", "vector": [0.01, -0.02] }
+  ]
+}
+```
+
+The core rejects model/dim mismatches and normalizes accepted vectors before
+storing them.
+
 `state`:
 
 - `pending`;
@@ -1229,7 +1265,59 @@ PendingTask - спосіб, яким ядро системи просить хо
 
 ---
 
-## 12. Manifest
+## 12. Vector index
+
+Vector storage is opt-in and derived from `MemoryUnit` theses. The source of
+truth remains archives and units; `memory/archive/vectors/<scope>/` may be
+deleted and rebuilt without losing memory.
+
+Scope directory:
+
+```text
+memory/archive/vectors/<scope>/
+  manifest.json
+  vectors.f32
+  rows.jsonl
+  tombstones.jsonl
+```
+
+`manifest.json`:
+
+```json
+{
+  "schema_version": "vector_index.v1",
+  "model_id": "intfloat/multilingual-e5-small",
+  "dim": 384,
+  "metric": "cosine",
+  "normalized": true,
+  "rows": 1,
+  "state": "ready",
+  "built_at": "2026-07-03T12:00:00Z",
+  "updated_at": "2026-07-03T12:00:00Z",
+  "backfill_cursor": null
+}
+```
+
+`rows.jsonl`:
+
+```json
+{"row":0,"memory_unit_id":"mu_...","archive_id":"archive_...","created_at":"2026-07-03T12:00:00Z","thesis_hash":"sha256:..."}
+```
+
+`vectors.f32` is little-endian row-major `f32`, one L2-normalized vector per
+row. `tombstones.jsonl` contains `{"memory_unit_id":"mu_..."}` records for
+forgotten/rejected units until compaction.
+
+Eligibility in Phase A: `MemoryUnit.status == active_archive`, scope vector
+catalog enabled, global `Manifest.features.embeddings_enabled == true`, and the
+session is not multi-speaker. Multi-speaker units are skipped until attributed
+memory units are implemented.
+
+Legacy `ArchiveEntry.embedding_model_id` and `ArchiveEntry.embedding` are
+deprecated reserved fields. Vector storage does not use archive-level
+embeddings.
+
+## 13. Manifest
 
 Файл: `memory/manifest.json`.
 
@@ -1272,7 +1360,7 @@ PendingTask - спосіб, яким ядро системи просить хо
 
 ---
 
-## 13. JournalOperation
+## 14. JournalOperation
 
 JournalOperation описує мульти-файлову операцію, яку потрібно або завершити, або безпечно розібрати після обриву. На v0.2 це зарезервований storage primitive: схема і FileStorage-операції існують, але runtime sleep/recovery поки не використовують journal як transaction layer.
 
@@ -1322,7 +1410,7 @@ JournalOperation описує мульти-файлову операцію, як
 
 ---
 
-## 14. Файли і джерела правди
+## 15. Файли і джерела правди
 
 Мінімальна файлова структура v0.1:
 
@@ -1363,7 +1451,7 @@ memory/
 
 ---
 
-## 15. Що цей документ не задає
+## 16. Що цей документ не задає
 
 Цей документ не задає:
 

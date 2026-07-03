@@ -6,6 +6,7 @@ use crate::llm::SleepRun;
 use crate::manifest::Manifest;
 use crate::session::{SessionMetadata, SessionRecord};
 use crate::tasks::PendingTask;
+use crate::vector::{VectorAppendRecord, VectorIndexData, VectorIndexManifest, VectorTombstone};
 use crate::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +85,18 @@ pub trait Storage {
     fn save_sleep_run(&self, run: &SleepRun) -> Result<()>;
     fn load_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun>;
     fn load_sleep_runs(&self) -> Result<StorageCollection<SleepRun>>;
+
+    fn read_vector_index(&self, scope: &str) -> Result<Option<VectorIndexData>>;
+    fn write_vector_index(&self, scope: &str, index: &VectorIndexData) -> Result<()>;
+    fn write_vector_manifest(&self, scope: &str, manifest: &VectorIndexManifest) -> Result<()>;
+    fn append_vector_records(
+        &self,
+        scope: &str,
+        manifest: &VectorIndexManifest,
+        records: &[VectorAppendRecord],
+    ) -> Result<()>;
+    fn append_vector_tombstones(&self, scope: &str, tombstones: &[VectorTombstone]) -> Result<()>;
+    fn purge_vector_scope(&self, scope: &str) -> Result<()>;
 
     fn begin_journaled_operation(&self, operation: &JournalOperation) -> Result<()>;
     fn complete_journaled_operation(&self, op_id: &str) -> Result<()>;

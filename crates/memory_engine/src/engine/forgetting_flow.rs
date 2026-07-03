@@ -369,6 +369,7 @@ impl<S: Storage> MemoryEngine<S> {
                     &["forget_reviewed".to_string(), "forgotten".to_string()],
                 );
                 self.storage.write_memory_unit(&unit)?;
+                self.tombstone_vector_unit_if_indexed_unlocked(&unit)?;
                 self.rebuild_archive_units_and_compact_unlocked(&unit.archive_id, &unit, now)?;
                 Ok(ForgetApplyAction::Forgotten(unit))
             }

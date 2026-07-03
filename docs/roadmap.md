@@ -230,7 +230,10 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 
 Векторне сховище не входить у v0.3 close. Робочий research-документ зафіксовано в `docs/research/vector-recall.md`, але перед кодом він має пройти alignment із поточною архітектурою: індексувати validated active `MemoryUnit`, а не великі archive JSON; core приймає vectors, host рахує embeddings; recall feedback має використовувати buffered stats path.
 
-- [ ] **Explicit-залежність:** vector storage вмикається ТІЛЬКИ після атрибуції тез (мультиспікерні гілки 1–2 у секції v0.3). Безсубʼєктні тези («користувач любив мотоцикли»), впечені в embeddings, означають migration по всьому embedded-архіву (Запис 117).
+- [x] **Залежність від атрибуції розвʼязана хірургічно (рішення власника 2026-07-03):** замість блокування всього vector storage — gate у ядрі: units із мультиспікерних сесій (`session_is_multi_speaker`) не embed-яться, доки не закриті гілки 1b–2 атрибуції; однокористувацькі scope embed-яться одразу (там «користувач» однозначний). Після гілки 2 gate знімається + backfill групових scope. ТЗ: `docs/research/vector-storage-tz-2026-07-03.md`.
+- [x] Фаза A за ТЗ: storage `memory/archive/vectors/<scope>/` (manifest/vectors.f32/rows.jsonl/tombstones), `ComputeEmbedding`-батчі, backfill/enable/disable/purge/rebuild, R1-recovery, compaction, мультиспікерний gate. Реалізація: `feature/vector-storage-phase-a`, тести `engine_vectors.rs`.
+- [ ] Фаза B за ТЗ: `recall_deep` (min_sim-чесність, top_k, buffered reinforcement), локальний fastembed embedder у Telegram host, Gemini tool `recall_distant_memory`, `/vectors*`-команди, conformance `--host direct-vectors`, калібрування `min_sim` на живих даних.
+- [ ] Фаза C за ТЗ (після калібрування): Stage 2 re-rank через `RecallQuery.query_embedding` над top-K Stage 1.
 - [ ] Хост має явний режим privacy/storage: `embeddings_enabled = false` за замовчуванням або як мінімум видима галочка "з vector storage / без vector storage".
 - [ ] Без embeddings Memory Engine має лишатися повністю працездатним через Stage 1 recall, compact memory і reflection по structured units.
 - [ ] PendingTask тип `ComputeEmbedding` для validated active memory units, а не для великих змішаних archive JSON.

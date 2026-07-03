@@ -62,6 +62,12 @@ use crate::types::{
     RECALL_RESULT_SCHEMA_VERSION, REFLECTION_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
     SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
+use crate::vector::{
+    default_vector_manifest, memory_unit_is_vector_eligible, normalize_vector, thesis_hash,
+    EmbedBatchInputs, EmbedBatchItem, EmbedBatchResult, VectorAppendRecord, VectorIndexData,
+    VectorRow, VectorScopeState, VectorScopeStatus, VectorTombstone, DEFAULT_VECTOR_DIM,
+    DEFAULT_VECTOR_MODEL_ID, EMBED_BATCH_RESULT_SCHEMA_VERSION,
+};
 use crate::{MemoryEngineError, Result};
 
 mod context_budget;
@@ -76,16 +82,18 @@ mod session_ops;
 mod sleep_driver;
 mod sleep_flow;
 mod validation;
+mod vector_flow;
 
 use context_budget::*;
 use options::ForgetApplyAction;
 pub use options::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, FidelityConfig, ForgetConfig,
-    IngestResult, RecallStage1Config, SleepStage1Config, SleepStage1Result,
+    IngestResult, RecallStage1Config, SleepStage1Config, SleepStage1Result, VectorConfig,
 };
 use recall_api::*;
 use recall_stage1::*;
 use sleep_driver::*;
+use sleep_flow::session_is_multi_speaker;
 use validation::*;
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SLEEP_RUN_SCHEMA_VERSION: &str = "sleep_run.v1";

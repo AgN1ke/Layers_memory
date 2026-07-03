@@ -174,6 +174,8 @@ impl<S: Storage> MemoryEngine<S> {
 
             let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
             let fidelity_requests = self.auto_route_memory_fidelity_requests(&archive_entry)?;
+            let embedding_requests =
+                self.pending_embedding_backfill_unlocked(&archive_entry.source_session_id)?;
             let covered_event_ids = self
                 .record_completed_archive_in_session_metadata_unlocked(&session_id, &archive_entry)?
                 .into_iter()
@@ -194,6 +196,7 @@ impl<S: Storage> MemoryEngine<S> {
                 archive_entry,
                 core_summary,
                 fidelity_requests,
+                embedding_requests,
                 failed_passes: run.failed_passes.clone(),
                 completion_mode: run
                     .completion_mode

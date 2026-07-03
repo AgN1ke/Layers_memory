@@ -327,6 +327,10 @@ pub(super) fn core_lock_key(category: &str) -> String {
     format!("core:{category}")
 }
 
+pub(super) fn vectors_lock_key(scope: &str) -> String {
+    format!("vectors:{scope}")
+}
+
 pub(super) fn archive_lock_key(archive_id: &str) -> String {
     format!("archive:{archive_id}")
 }
