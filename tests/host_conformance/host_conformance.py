@@ -290,6 +290,16 @@ def english_memory_units_for_events(events: list[dict[str, Any]]) -> list[dict[s
                     "weight": 0.9,
                 }
             )
+        if "silver feather" in text.lower():
+            units.append(
+                {
+                    "thesis": "Keepsake -> the player hid a silver feather under the old bridge.",
+                    "source_event_ids": [source_id],
+                    "evidence": text,
+                    "tags": ["episode", "keepsake"],
+                    "weight": 0.82,
+                }
+            )
     return units
 
 
@@ -637,6 +647,57 @@ class DirectHostDriver:
         self.engine.submit_memory_fidelity_response(request["task_id"], dumps(response))
 
 
+class EnglishDirectHostDriver(DirectHostDriver):
+    def _response_for_request(self, run: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+        prompt_id = request["prompt_id"]
+        if prompt_id == "sleep_consolidator":
+            return {
+                "status": "ok",
+                "request_id": request["request_id"],
+                "text": (
+                    "GIST: The player introduced stable profile facts and one old keepsake episode.\n\n"
+                    "In the conformance scenario the player introduced themselves, mentioned their cat, "
+                    "shared an interest in space, and described hiding a silver feather under an old bridge."
+                ),
+            }
+
+        events = self._sleep_events(request)
+        user_events = [event for event in events if event_kind(event) == "user_message"]
+        if not user_events:
+            user_events = events
+
+        if prompt_id == "memory_unit_pass":
+            payload = {
+                "schema_version": "memory_units_result.v1",
+                "archive_id": run["archive_id"],
+                "memory_units": english_memory_units_for_events(user_events),
+            }
+        elif prompt_id == "sleep_emotional_pass":
+            payload = {"emotional_markers": english_emotional_markers_for_events(user_events)}
+        elif prompt_id == "sleep_topic_thread_pass":
+            payload = {
+                "topic_thread": [
+                    {
+                        "topic": "host_conformance",
+                        "summary": "The player introduced durable facts and one old keepsake episode.",
+                        "source_event_ids": [event_id(event) for event in user_events[:3]],
+                    }
+                ]
+            }
+        elif prompt_id == "sleep_personal_signal_pass":
+            payload = {"personal_signals": english_personal_signals_for_events(user_events)}
+        elif prompt_id == "sleep_relational_pass":
+            payload = {"relational_tone": None}
+        else:
+            raise ConformanceError(f"unexpected LLM request prompt_id={prompt_id!r}")
+
+        return {
+            "status": "ok",
+            "request_id": request["request_id"],
+            "text": dumps(payload),
+        }
+
+
 class FakeTelegram:
     def __init__(self) -> None:
         self.messages: list[tuple[int, str]] = []
@@ -923,6 +984,100 @@ def run_direct_vectors(keep_runtime: bool) -> DriverResult:
             shutil.rmtree(runtime, ignore_errors=True)
 
 
+def run_direct_forced_recall(keep_runtime: bool) -> DriverResult:
+    runtime = Path(tempfile.mkdtemp(prefix="memory_engine_forced_recall_conformance_"))
+    driver = EnglishDirectHostDriver(runtime)
+    try:
+        state = loads(driver.engine.set_vector_scope(SESSION_ID, True, False))
+        if state.get("status") not in {"building", "ready"}:
+            raise ConformanceError(f"vector scope did not enable: {state!r}")
+
+        driver.send_user_message("My name is Mykyta.")
+        driver.send_user_message("My cat is named Irzha.")
+        driver.send_user_message("I like space stories.")
+        driver.send_user_message("During a rainy walk I hid a silver feather under the old bridge.")
+        outcome = driver.run_sleep()
+        assert_sleep_outcome(outcome)
+
+        requests = outcome.get("embedding_requests") or loads(
+            driver.engine.pending_embedding_backfill(SESSION_ID)
+        )
+        if not requests:
+            raise ConformanceError("direct-forced-recall produced no embedding requests")
+
+        topic_vectors: dict[str, int] = {}
+        for request in requests:
+            topic_vectors.update(submit_topic_fake_embedding_request(driver.engine, request))
+        keepsake_index = topic_vectors.get("keepsake")
+        if keepsake_index is None:
+            raise ConformanceError(f"direct-forced-recall did not embed the keepsake unit: {topic_vectors!r}")
+
+        visible = driver.context_package("Do you remember the keepsake from that rainy walk?")
+        visible["core_facts"] = []
+        visible["archive_relevant"] = []
+        visible["session_recent"] = []
+        visible["session_trace"] = []
+        visible_view = driver.engine.render_memory_view(
+            dumps(visible),
+            "Do you remember the keepsake from that rainy walk?",
+        )
+        if "silver feather" in visible_view.lower():
+            raise ConformanceError(f"minimal visible context already contained distant memory:\n{visible_view}")
+
+        result = loads(
+            driver.engine.recall_deep(
+                dumps(
+                    {
+                        "scope": SESSION_ID,
+                        "query_vec": fake_vector(keepsake_index),
+                        "model_id": VECTOR_MODEL_ID,
+                        "top_k": 1,
+                        "min_sim": 0.9,
+                        "now": "2026-06-10T11:00:00Z",
+                    }
+                )
+            )
+        )
+        if not result.get("found"):
+            raise ConformanceError(f"forced distant recall found nothing: {result!r}")
+        hits = result.get("hits", [])
+        if len(hits) != 1:
+            raise ConformanceError(f"forced distant recall expected one scarce hit: {result!r}")
+        thesis = str(hits[0].get("thesis", ""))
+        if "silver feather" not in thesis.lower():
+            raise ConformanceError(f"forced distant recall returned the wrong memory: {result!r}")
+
+        reply = f"I remember this: {thesis}"
+        if "silver feather" not in reply.lower():
+            raise ConformanceError(f"forced distant recall reply did not use the recalled memory: {reply!r}")
+
+        miss = loads(
+            driver.engine.recall_deep(
+                dumps(
+                    {
+                        "scope": SESSION_ID,
+                        "query_vec": fake_vector(200),
+                        "model_id": VECTOR_MODEL_ID,
+                        "top_k": 1,
+                        "min_sim": 0.9,
+                    }
+                )
+            )
+        )
+        if miss.get("found") or miss.get("reason") != "below_threshold":
+            raise ConformanceError(f"unrelated forced recall should miss cleanly: {miss!r}")
+
+        return DriverResult(
+            runtime_dir=runtime,
+            archive_id=outcome["archive_entry"]["archive_id"],
+            memory_unit_count=len(outcome["archive_entry"].get("memory_units", [])),
+            core_fact_count=len(driver.context_package("What profile facts are known?").get("core_facts", [])),
+        )
+    finally:
+        if not keep_runtime:
+            shutil.rmtree(runtime, ignore_errors=True)
+
+
 def submit_fake_embedding_request(engine: Any, request: dict[str, Any]) -> list[str]:
     embed_batch = request.get("prompt_inputs", {}).get("embed_batch", {})
     items = embed_batch.get("items", [])
@@ -948,6 +1103,51 @@ def submit_fake_embedding_request(engine: Any, request: dict[str, Any]) -> list[
         ),
     )
     return ids
+
+
+def submit_topic_fake_embedding_request(engine: Any, request: dict[str, Any]) -> dict[str, int]:
+    embed_batch = request.get("prompt_inputs", {}).get("embed_batch", {})
+    items = embed_batch.get("items", [])
+    if not isinstance(items, list) or not items:
+        raise ConformanceError(f"embedding request has no items: {request!r}")
+
+    topic_to_index = {"name": 3, "cat": 7, "space": 11, "keepsake": 17}
+    seen_topics: dict[str, int] = {}
+    results = []
+    for item in items:
+        memory_unit_id = item.get("memory_unit_id")
+        text = str(item.get("text", ""))
+        if not isinstance(memory_unit_id, str) or not memory_unit_id:
+            raise ConformanceError(f"embedding item has no memory_unit_id: {item!r}")
+        lower = text.lower()
+        if "silver feather" in lower or "keepsake" in lower:
+            topic = "keepsake"
+        elif "irzha" in lower or "cat" in lower:
+            topic = "cat"
+        elif "space" in lower:
+            topic = "space"
+        elif "mykyta" in lower or "name" in lower:
+            topic = "name"
+        else:
+            topic = f"other:{memory_unit_id}"
+        hot_index = topic_to_index.get(topic, 31 + len(seen_topics))
+        if hot_index >= VECTOR_DIM:
+            raise ConformanceError(f"fake vector hot index overflow for {topic!r}")
+        seen_topics[topic] = hot_index
+        results.append({"memory_unit_id": memory_unit_id, "vector": fake_vector(hot_index)})
+
+    engine.resume_compute_embedding(
+        request["task_id"],
+        dumps(
+            {
+                "schema_version": "embed_batch_result.v1",
+                "model_id": VECTOR_MODEL_ID,
+                "dim": VECTOR_DIM,
+                "results": results,
+            }
+        ),
+    )
+    return seen_topics
 
 
 def run_telegram_local(keep_runtime: bool) -> DriverResult:
@@ -1386,6 +1586,7 @@ def main() -> int:
         choices=[
             "direct",
             "direct-vectors",
+            "direct-forced-recall",
             "direct-multispeaker",
             "telegram-local",
             "godot-headless",
@@ -1405,6 +1606,8 @@ def main() -> int:
             result = run_direct(args.keep_runtime)
         elif args.host == "direct-vectors":
             result = run_direct_vectors(args.keep_runtime)
+        elif args.host == "direct-forced-recall":
+            result = run_direct_forced_recall(args.keep_runtime)
         elif args.host == "direct-multispeaker":
             result = run_direct_multispeaker(args.keep_runtime)
         elif args.host == "telegram-local":

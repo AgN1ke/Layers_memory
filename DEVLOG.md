@@ -5748,3 +5748,26 @@ Manual Telegram or Godot checks stay final smoke tests only.
 
 **Deferred:**
 Stage 2 recall integration remains after this behavior layer. The next useful milestone is natural distant remembering in a live host, then ordinary recall reranking.
+
+## Entry 126 - 2026-07-03 - Scripted forced distant-memory recall conformance (Codex, feature/forced-distant-recall-conformance)
+
+**Context:**
+After Entry 125, the next planned step was to stop relying on the owner as the test harness for vector recall behavior. The library already had vector storage, local embedding, calibrated `recall_deep`, and manual `/recall_deep`; what was missing was a scripted proof that a host can deliberately fetch a distant episodic memory and use it in an answer path.
+
+**What changed:**
+- Added `--host direct-forced-recall` to `tests/host_conformance/host_conformance.py`.
+- The scenario stores profile facts plus one episodic memory: the player hid a silver feather under an old bridge.
+- The scenario sleeps the conversation, validates the produced memory units, enables vectors, submits deterministic fake embeddings, and then clears the visible memory package.
+- The host then performs a forced deep-recall call for the keepsake episode, asserts that the returned scarce hit is the silver-feather memory, and builds a reply from that hit.
+- An unrelated fake vector is also queried and must return `found:false` with `reason:below_threshold`.
+
+**What this proves:**
+The full distant-memory chain works without manual Telegram/Godot probing: old memory exists as a validated unit, vector backfill indexes it, a host can call deep recall on demand, the engine returns the relevant memory, and weak unrelated queries stay below threshold.
+
+**What is still next:**
+This is a forced behavior scenario. The next product step is the deterministic recall-decision gate in the host path for explicit memory-seeking language, followed by live tuning and only then an optional LLM router if the deterministic gate is too noisy or misses real recall moments.
+
+**Checks:**
+- `python -m py_compile tests/host_conformance/host_conformance.py` passed.
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall` passed.
+- Existing adjacent conformance hosts still passed: `direct`, `direct-vectors`.
