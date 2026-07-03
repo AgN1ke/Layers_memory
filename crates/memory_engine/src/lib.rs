@@ -38,6 +38,6 @@ pub use llm::{
 };
 pub use prompt_view::render_memory_view;
 pub use vector::{
-    EmbedBatchInputs, EmbedBatchItem, EmbedBatchResult, EmbedBatchVector, VectorScopeState,
-    VectorScopeStatus,
+    DeepRecallHit, DeepRecallQuery, DeepRecallResult, EmbedBatchInputs, EmbedBatchItem,
+    EmbedBatchResult, EmbedBatchVector, VectorScopeState, VectorScopeStatus,
 };

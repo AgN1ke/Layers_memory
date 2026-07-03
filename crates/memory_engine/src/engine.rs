@@ -64,8 +64,9 @@ use crate::types::{
 };
 use crate::vector::{
     default_vector_manifest, memory_unit_is_vector_eligible, normalize_vector, thesis_hash,
-    EmbedBatchInputs, EmbedBatchItem, EmbedBatchResult, VectorAppendRecord, VectorIndexData,
-    VectorRow, VectorScopeState, VectorScopeStatus, VectorTombstone, DEFAULT_VECTOR_DIM,
+    DeepRecallHit, DeepRecallQuery, DeepRecallResult, EmbedBatchInputs, EmbedBatchItem,
+    EmbedBatchResult, VectorAppendRecord, VectorIndexData, VectorRow, VectorScopeState,
+    VectorScopeStatus, VectorTombstone, DEEP_RECALL_RESULT_SCHEMA_VERSION, DEFAULT_VECTOR_DIM,
     DEFAULT_VECTOR_MODEL_ID, EMBED_BATCH_RESULT_SCHEMA_VERSION,
 };
 use crate::{MemoryEngineError, Result};

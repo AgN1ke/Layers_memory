@@ -101,6 +101,10 @@ pub struct VectorConfig {
     pub model_id: String,
     pub dim: usize,
     pub embed_batch_size: usize,
+    pub deep_recall_default_top_k: usize,
+    pub deep_recall_min_sim: f32,
+    pub deep_recall_recency_weight: f32,
+    pub deep_recall_unit_weight: f32,
 }
 
 impl Default for RecallStage1Config {
@@ -190,6 +194,10 @@ impl Default for VectorConfig {
             model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
             dim: DEFAULT_VECTOR_DIM,
             embed_batch_size: 64,
+            deep_recall_default_top_k: 5,
+            deep_recall_min_sim: 0.75,
+            deep_recall_recency_weight: 0.10,
+            deep_recall_unit_weight: 0.10,
         }
     }
 }

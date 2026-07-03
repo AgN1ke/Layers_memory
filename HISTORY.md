@@ -46,6 +46,36 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-03 - Vector storage Phase B slice: deep recall over host-provided vectors
+
+Vector storage Phase A created the derived index and `ComputeEmbedding` task boundary. This slice adds the first read path over that index: `recall_deep`, plus a Telegram host-side local embedder/manual command path for calibration.
+
+**What changed:**
+- New public core/PyO3 API: `recall_deep(query_json) -> deep_recall.v1`.
+- `DeepRecallQuery` carries `scope`, host-produced `query_vec`, `model_id`, `top_k`, `min_sim`, and optional deterministic `now`.
+- The core normalizes the query vector, enforces model/dim match, searches only `memory/archive/vectors/<scope>/`, skips tombstoned/ineligible units, gates on raw cosine `min_sim`, ranks by `sim + recency_weight * recency + unit_weight * unit.weight`, and returns scarce top-K hits.
+- Returned deep-recall hits update existing buffered archive recall stats; no synchronous archive write is added to the recall path.
+- Telegram host gained `local_embedder.py` (fastembed, local CPU, lazy import), embedding task execution after sleep/backfill, `/vectors*` commands, and `/recall_deep text` for calibration.
+- Host conformance gained `--host direct-vectors`, using deterministic fake vectors through the public Python adapter.
+
+**What is retracted (if applicable):**
+- Nothing is retracted. Phase A's statement that deep recall remained future work is superseded by this Phase B slice.
+
+**What is still true:**
+- The Rust core still does not compute embeddings, call a network, know provider keys, or load an embedding model.
+- Vector storage remains opt-in and disabled by default. With vectors disabled, ordinary Stage 1 recall remains the active chat path.
+- Vectors remain derived data; archives and memory units are still the source of truth.
+- Automatic Gemini function-calling for `recall_distant_memory`, live `min_sim` calibration, and Stage 2 reranking remain open before Phase C.
+
+**Reproducibility anchor:**
+- `cargo fmt --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `python -m pytest crates/python_adapter/tests -q`
+- `python tests/host_conformance/host_conformance.py --host direct-vectors`
+- `python tests/host_conformance/host_conformance.py --host telegram-local`
+- Full deterministic host conformance also passed for `direct`, `direct-multispeaker`, `godot-headless`, `chibigochi-spike`, `chibigochi-ui`, `chibigochi-llm-bridge`, and `chibigochi-product-loop`.
+
 ## 2026-07-03 - Vector storage Phase A: opt-in derived index and ComputeEmbedding tasks
 
 The owner accepted `docs/research/vector-storage-tz-2026-07-03.md` as the implementation contract for vector storage. This first phase adds the derived storage/index and task boundary only; it does not add deep recall, Telegram fastembed, or Stage 2 reranking yet.

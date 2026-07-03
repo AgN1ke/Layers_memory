@@ -1308,10 +1308,62 @@ memory/archive/vectors/<scope>/
 row. `tombstones.jsonl` contains `{"memory_unit_id":"mu_..."}` records for
 forgotten/rejected units until compaction.
 
-Eligibility in Phase A: `MemoryUnit.status == active_archive`, scope vector
-catalog enabled, global `Manifest.features.embeddings_enabled == true`, and the
-session is not multi-speaker. Multi-speaker units are skipped until attributed
-memory units are implemented.
+Eligibility: `MemoryUnit.status == active_archive`, fidelity status is not
+`distorted` / `unsupported` / `needs_revision`, scope vector catalog is enabled,
+global `Manifest.features.embeddings_enabled == true`, and the session is not
+multi-speaker. Multi-speaker units are skipped until attributed memory units are
+implemented.
+
+### 12.1 Deep recall
+
+`recall_deep` is active starting with vector storage Phase B. The core accepts a
+ready query vector from the host; it does not tokenize text, compute embeddings,
+load an embedding model, or call an embedding provider.
+
+Request:
+
+```json
+{
+  "scope": "telegram_311422683",
+  "query_vec": [0.01, -0.02],
+  "model_id": "intfloat/multilingual-e5-small",
+  "top_k": 5,
+  "min_sim": 0.75,
+  "now": "2026-07-03T12:00:00Z"
+}
+```
+
+Response:
+
+```json
+{
+  "schema_version": "deep_recall.v1",
+  "found": true,
+  "reason": null,
+  "hits": [
+    {
+      "memory_unit_id": "mu_...",
+      "archive_id": "archive_...",
+      "thesis": "User has a cat named Irzha.",
+      "created_at": "2026-07-03T12:00:00Z",
+      "sim": 0.84,
+      "score": 0.99
+    }
+  ]
+}
+```
+
+`reason` when `found == false`:
+
+- `disabled` - global embeddings are disabled or the scope catalog is absent;
+- `building` - the scope exists but backfill is not ready;
+- `corrupt` - the derived vector catalog needs rebuild;
+- `below_threshold` - no row passed raw cosine `min_sim`.
+
+Model and dimension mismatches are hard errors. Search is scope-isolated and
+never crosses `memory/archive/vectors/<scope>/`. Returned hits update existing
+buffered recall stats for parent archives; they do not write synchronously to
+archive files.
 
 Legacy `ArchiveEntry.embedding_model_id` and `ArchiveEntry.embedding` are
 deprecated reserved fields. Vector storage does not use archive-level

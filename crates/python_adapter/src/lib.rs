@@ -32,7 +32,7 @@ use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::reflection::ReflectionAnalyzeResult;
 use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::storage::Storage;
-use ::memory_engine::vector::EmbedBatchResult;
+use ::memory_engine::vector::{DeepRecallQuery, EmbedBatchResult};
 use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
 
 #[pyclass(name = "MemoryEngine")]
@@ -357,6 +357,12 @@ impl PyMemoryEngine {
     ) -> PyResult<usize> {
         let result: EmbedBatchResult = parse_json(result_json, "embed batch result")?;
         run_without_gil(py, || self.inner.resume_compute_embedding(task_id, result))
+    }
+
+    fn recall_deep(&self, py: Python<'_>, query_json: &str) -> PyResult<String> {
+        let query: DeepRecallQuery = parse_json(query_json, "deep recall query")?;
+        let result = run_without_gil(py, || self.inner.recall_deep(query))?;
+        dump_json(&result, "deep recall result")
     }
 }
 

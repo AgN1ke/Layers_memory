@@ -9,7 +9,8 @@ use memory_engine::types::{
     EVENT_SCHEMA_VERSION, FORGET_REVIEW_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION,
 };
 use memory_engine::vector::{
-    EmbedBatchResult, EmbedBatchVector, VectorScopeStatus, EMBED_BATCH_RESULT_SCHEMA_VERSION,
+    DeepRecallQuery, EmbedBatchResult, EmbedBatchVector, VectorScopeStatus,
+    EMBED_BATCH_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{FileStorage, MemoryEngine};
 use serde_json::json;
@@ -183,23 +184,189 @@ fn forgotten_unit_is_tombstoned_and_remember_back_reembeds() {
     fs::remove_dir_all(root).ok();
 }
 
+#[test]
+fn deep_recall_returns_disabled_without_catalog() {
+    let root = unique_temp_dir("vectors_deep_disabled");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+
+    let result = engine
+        .recall_deep(deep_query("vector_scope", unit_vector(384, 0), 5, 0.75))
+        .expect("deep recall");
+
+    assert!(!result.found);
+    assert_eq!(result.reason.as_deref(), Some("disabled"));
+    assert!(result.hits.is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn deep_recall_finds_hits_limits_results_and_records_recall_stats() {
+    let root = unique_temp_dir("vectors_deep_hits");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let storage_probe = storage.clone();
+    let engine = MemoryEngine::new(storage);
+
+    let unit_ids = create_archive_with_units(
+        &engine,
+        "vector_scope",
+        vec![
+            ("User loves astronomy.", 0.8),
+            ("User keeps a cat named Irzha.", 0.9),
+        ],
+    );
+    engine
+        .set_vector_scope("vector_scope", true, false)
+        .expect("enable vectors");
+    let requests = engine
+        .pending_embedding_backfill("vector_scope")
+        .expect("pending embedding backfill");
+    submit_embeddings(&engine, &requests[0], vec![0, 1]);
+
+    let result = engine
+        .recall_deep(deep_query("vector_scope", unit_vector(384, 1), 1, 0.75))
+        .expect("deep recall");
+
+    assert!(result.found);
+    assert_eq!(result.hits.len(), 1);
+    assert_eq!(result.hits[0].memory_unit_id, unit_ids[1]);
+    assert!(result.hits[0].sim > 0.99);
+
+    assert_eq!(engine.flush_recall_stats().expect("flush stats"), 1);
+    let archive = storage_probe
+        .read_archive_entry_by_id("archive_vector_scope")
+        .expect("read archive");
+    assert_eq!(archive.recall_count, 1);
+    assert_eq!(
+        archive.last_recalled_at.as_deref(),
+        Some("2020-07-01T00:00:00Z")
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn deep_recall_enforces_scope_isolation_threshold_and_model_dim() {
+    let root = unique_temp_dir("vectors_deep_scope");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+
+    create_archive_with_units(&engine, "scope_a", vec![("User likes astronomy.", 0.8)]);
+    create_archive_with_units(
+        &engine,
+        "scope_b",
+        vec![("User keeps a cat named Irzha.", 0.8)],
+    );
+    for (scope, hot_index) in [("scope_a", 0usize), ("scope_b", 1usize)] {
+        engine
+            .set_vector_scope(scope, true, false)
+            .expect("enable vectors");
+        let requests = engine
+            .pending_embedding_backfill(scope)
+            .expect("pending embedding backfill");
+        submit_embedding(&engine, &requests[0], hot_index);
+    }
+
+    let result = engine
+        .recall_deep(deep_query("scope_a", unit_vector(384, 1), 5, 0.9))
+        .expect("deep recall");
+    assert!(!result.found);
+    assert_eq!(result.reason.as_deref(), Some("below_threshold"));
+
+    let wrong_model = DeepRecallQuery {
+        model_id: "wrong-model".to_string(),
+        ..deep_query("scope_a", unit_vector(384, 0), 5, 0.75)
+    };
+    assert!(engine.recall_deep(wrong_model).is_err());
+
+    let wrong_dim = DeepRecallQuery {
+        query_vec: unit_vector(3, 0),
+        ..deep_query("scope_a", unit_vector(384, 0), 5, 0.75)
+    };
+    assert!(engine.recall_deep(wrong_dim).is_err());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn deep_recall_score_uses_recency_weight_and_top_k() {
+    let root = unique_temp_dir("vectors_deep_ranking");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+
+    let unit_ids = create_archive_with_units_at(
+        &engine,
+        "vector_scope",
+        vec![
+            (
+                "Old but semantically matching note.",
+                0.5,
+                "2019-01-01T00:00:00Z",
+            ),
+            (
+                "Fresh semantically matching note.",
+                0.5,
+                "2020-06-30T00:00:00Z",
+            ),
+            ("Weakly related note.", 0.5, "2020-06-30T00:00:00Z"),
+        ],
+    );
+    engine
+        .set_vector_scope("vector_scope", true, false)
+        .expect("enable vectors");
+    let requests = engine
+        .pending_embedding_backfill("vector_scope")
+        .expect("pending embedding backfill");
+    submit_embeddings(&engine, &requests[0], vec![0, 0, 1]);
+
+    let result = engine
+        .recall_deep(deep_query("vector_scope", unit_vector(384, 0), 2, 0.75))
+        .expect("deep recall");
+
+    assert!(result.found);
+    assert_eq!(result.hits.len(), 2);
+    assert_eq!(result.hits[0].memory_unit_id, unit_ids[1]);
+    assert_eq!(result.hits[1].memory_unit_id, unit_ids[0]);
+
+    fs::remove_dir_all(root).ok();
+}
+
 fn create_archive_with_units(
     engine: &MemoryEngine<FileStorage>,
     session_id: &str,
     units: Vec<(&str, f64)>,
 ) -> Vec<String> {
+    create_archive_with_units_at(
+        engine,
+        session_id,
+        units
+            .into_iter()
+            .map(|(thesis, weight)| (thesis, weight, "2020-01-01T10:00:00Z"))
+            .collect(),
+    )
+}
+
+fn create_archive_with_units_at(
+    engine: &MemoryEngine<FileStorage>,
+    session_id: &str,
+    units: Vec<(&str, f64, &str)>,
+) -> Vec<String> {
     let event = ingest_user_event(engine, session_id, "Hello memory.");
-    let now = "2020-01-01T10:00:00Z".to_string();
+    let archive_time = units
+        .first()
+        .map(|(_, _, created_at)| (*created_at).to_string())
+        .unwrap_or_else(|| "2020-01-01T10:00:00Z".to_string());
     let unit_values = units
         .into_iter()
         .enumerate()
-        .map(|(index, (thesis, weight))| MemoryUnit {
+        .map(|(index, (thesis, weight, created_at))| MemoryUnit {
             schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
             memory_unit_id: format!("mu_{session_id}_{index}"),
             archive_id: format!("archive_{session_id}"),
             source_session_id: session_id.to_string(),
-            created_at: now.clone(),
-            updated_at: now.clone(),
+            created_at: created_at.to_string(),
+            updated_at: created_at.to_string(),
             thesis: thesis.to_string(),
             source_event_ids: vec![event.event_id.clone()],
             evidence: None,
@@ -214,13 +381,13 @@ fn create_archive_with_units(
     let archive = ArchiveEntry {
         schema_version: "archive_entry.v1".to_string(),
         archive_id: format!("archive_{session_id}"),
-        created_at: now.clone(),
-        updated_at: now.clone(),
+        created_at: archive_time.clone(),
+        updated_at: archive_time.clone(),
         source_session_id: session_id.to_string(),
         source_event_ids: vec![event.event_id],
         time_range: memory_engine::types::TimeRange {
-            start: now.clone(),
-            end: now.clone(),
+            start: archive_time.clone(),
+            end: archive_time.clone(),
         },
         theme: None,
         tags: Vec::new(),
@@ -324,22 +491,49 @@ fn submit_embedding(
     request: &memory_engine::llm::LlmRequest,
     hot_index: usize,
 ) {
-    let memory_unit_id = request.prompt_inputs["embed_batch"]["items"][0]["memory_unit_id"]
-        .as_str()
-        .expect("memory unit id")
-        .to_string();
+    submit_embeddings(engine, request, vec![hot_index]);
+}
+
+fn submit_embeddings(
+    engine: &MemoryEngine<FileStorage>,
+    request: &memory_engine::llm::LlmRequest,
+    hot_indices: Vec<usize>,
+) {
+    let items = request.prompt_inputs["embed_batch"]["items"]
+        .as_array()
+        .expect("embed items");
+    assert_eq!(items.len(), hot_indices.len());
+    let results = items
+        .iter()
+        .zip(hot_indices)
+        .map(|(item, hot_index)| EmbedBatchVector {
+            memory_unit_id: item["memory_unit_id"]
+                .as_str()
+                .expect("memory unit id")
+                .to_string(),
+            vector: unit_vector(384, hot_index),
+        })
+        .collect();
     let result = EmbedBatchResult {
         schema_version: EMBED_BATCH_RESULT_SCHEMA_VERSION.to_string(),
         model_id: "intfloat/multilingual-e5-small".to_string(),
         dim: 384,
-        results: vec![EmbedBatchVector {
-            memory_unit_id,
-            vector: unit_vector(384, hot_index),
-        }],
+        results,
     };
     engine
         .resume_compute_embedding(&request.task_id, result)
         .expect("submit embedding");
+}
+
+fn deep_query(scope: &str, query_vec: Vec<f32>, top_k: usize, min_sim: f32) -> DeepRecallQuery {
+    DeepRecallQuery {
+        scope: scope.to_string(),
+        query_vec,
+        model_id: "intfloat/multilingual-e5-small".to_string(),
+        top_k,
+        min_sim,
+        now: Some("2020-07-01T00:00:00Z".to_string()),
+    }
 }
 
 fn unit_vector(dim: usize, hot_index: usize) -> Vec<f32> {

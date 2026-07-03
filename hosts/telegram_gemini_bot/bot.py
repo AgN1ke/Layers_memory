@@ -31,6 +31,13 @@ except ImportError as err:
         "so maturin can build and install the PyO3 adapter."
     ) from err
 
+from local_embedder import (
+    DEFAULT_EMBEDDING_DIM,
+    DEFAULT_EMBEDDING_MODEL,
+    LocalEmbedder,
+    LocalEmbedderUnavailable,
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = ROOT / "prompts"
@@ -369,6 +376,7 @@ def main() -> None:
     print("Bot is running. Open Telegram and write to your bot.")
     print(
         "Commands: /help, /sleep, /archives, /archive_last, /recall text, "
+        "/vectors, /vectors_on, /vectors_off, /vectors_purge, /recall_deep text, "
         "/core, /core_seed, /remember text, /core_update id text, "
         "/core_forget id, /evidence unit_id, /fidelity unit_id, /reflect, "
         "/candidates, /confirm id, /reject id, /forget_review, "
@@ -443,6 +451,32 @@ def handle_update(
     if text == "/tasks":
         tasks = json.loads(engine.pending_tasks())
         telegram.send_message(chat_id, format_tasks(tasks))
+        return
+
+    if text == "/vectors":
+        state = json.loads(engine.vector_state(session_id))
+        telegram.send_message(chat_id, format_vector_state(state))
+        return
+
+    if text == "/vectors_on":
+        state = json.loads(engine.set_vector_scope(session_id, True, False))
+        requests = json.loads(engine.pending_embedding_backfill(session_id))
+        summary = run_embedding_requests(engine, requests)
+        state = json.loads(engine.vector_state(session_id))
+        telegram.send_message(
+            chat_id,
+            format_vector_state(state) + "\n" + format_embedding_summary(summary),
+        )
+        return
+
+    if text == "/vectors_off":
+        state = json.loads(engine.set_vector_scope(session_id, False, False))
+        telegram.send_message(chat_id, format_vector_state(state))
+        return
+
+    if text == "/vectors_purge":
+        state = json.loads(engine.set_vector_scope(session_id, False, True))
+        telegram.send_message(chat_id, "Vector scope purged.\n" + format_vector_state(state))
         return
 
     if text == "/core":
@@ -526,6 +560,15 @@ def handle_update(
             session_id=session_id,
             reason="manual sleep",
         )
+        return
+
+    if text.startswith("/recall_deep"):
+        query = text.removeprefix("/recall_deep").strip()
+        if not query:
+            telegram.send_message(chat_id, "Usage: /recall_deep text")
+            return
+        result = recall_distant_memory(engine, session_id, query)
+        telegram.send_message(chat_id, format_deep_recall(result))
         return
 
     if text.startswith("/recall"):
@@ -1029,6 +1072,10 @@ def complete_sleep_result(
         llm_config,
         outcome.get("fidelity_requests", []),
     )
+    embedding_summary = run_embedding_requests(
+        engine,
+        outcome.get("embedding_requests", []),
+    )
     compact_tokens = estimate_tokens(clean_string(updated.get("compact_memory")))
     log_sleep_compression_metrics(engine, sleep_run, updated)
     log_line(
@@ -1037,6 +1084,7 @@ def complete_sleep_result(
         f"completion_mode={outcome.get('completion_mode')} "
         f"failed_passes={','.join(outcome.get('failed_passes', [])) or 'none'} "
         f"fidelity={format_fidelity_summary_for_log(fidelity_summary)} "
+        f"embeddings={format_embedding_summary_for_log(embedding_summary)} "
         f"compact_tokens={compact_tokens}"
     )
     return (
@@ -1049,6 +1097,7 @@ def complete_sleep_result(
         f"Personal signals: {len(updated.get('personal_signals', []))}\n"
         f"Core signals: {format_core_signal_counts(core_summary)}\n"
         f"Fidelity: {format_fidelity_summary_for_user(fidelity_summary)}\n"
+        f"Embeddings: {format_embedding_summary_for_user(embedding_summary)}\n"
         f"Gist: {updated['gist']}"
     )
 
@@ -1230,6 +1279,155 @@ def run_auto_fidelity_requests(
     return summary
 
 
+def run_embedding_requests(
+    engine: memory_engine.MemoryEngine,
+    requests: list[dict[str, Any]],
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "requested": len(requests),
+        "completed": 0,
+        "failed": 0,
+        "items": 0,
+        "appended": 0,
+        "model_id": DEFAULT_EMBEDDING_MODEL,
+        "dim": DEFAULT_EMBEDDING_DIM,
+    }
+    if not requests:
+        return summary
+
+    try:
+        embedder = LocalEmbedder()
+    except LocalEmbedderUnavailable as err:
+        summary["failed"] = len(requests)
+        summary["error"] = str(err)
+        log_line(f"embedding_unavailable {err}")
+        return summary
+
+    for request in requests:
+        task_id = clean_string(request.get("task_id"))
+        request_id = clean_string(request.get("request_id"))
+        embed_batch = request.get("prompt_inputs", {}).get("embed_batch", {})
+        items = embed_batch.get("items") if isinstance(embed_batch, dict) else None
+        if not isinstance(items, list) or not items:
+            summary["failed"] += 1
+            log_line(f"embedding_request_failed task={task_id or 'unknown'} reason=missing_items")
+            continue
+        texts = [clean_string(item.get("text")) for item in items if isinstance(item, dict)]
+        memory_unit_ids = [
+            clean_string(item.get("memory_unit_id")) for item in items if isinstance(item, dict)
+        ]
+        if len(texts) != len(items) or not all(texts) or not all(memory_unit_ids):
+            summary["failed"] += 1
+            log_line(f"embedding_request_failed task={task_id or 'unknown'} reason=invalid_items")
+            continue
+
+        try:
+            vectors, telemetry = embedder.embed_passages(texts)
+            result = {
+                "schema_version": "embed_batch_result.v1",
+                "model_id": telemetry.model_id,
+                "dim": telemetry.dim,
+                "results": [
+                    {"memory_unit_id": memory_unit_id, "vector": vector}
+                    for memory_unit_id, vector in zip(memory_unit_ids, vectors)
+                ],
+            }
+            appended = int(engine.resume_compute_embedding(task_id, json.dumps(result, ensure_ascii=False)))
+        except Exception as err:
+            summary["failed"] += 1
+            log_exception(f"embedding request failed task={task_id or 'unknown'}", err)
+            continue
+
+        summary["completed"] += 1
+        summary["items"] += len(items)
+        summary["appended"] += appended
+        summary["model_id"] = telemetry.model_id
+        summary["dim"] = telemetry.dim
+        log_embedding_usage(
+            operation="embed_batch",
+            model_id=telemetry.model_id,
+            dim=telemetry.dim,
+            count=len(items),
+            duration_ms=telemetry.duration_ms,
+            telemetry={
+                "request_id": request_id,
+                "task_id": task_id,
+                "scope": clean_string(embed_batch.get("scope")),
+                "appended": appended,
+            },
+        )
+    return summary
+
+
+def recall_distant_memory(
+    engine: memory_engine.MemoryEngine,
+    session_id: str,
+    query_text: str,
+    top_k: int = 5,
+    min_sim: float = 0.0,
+) -> dict[str, Any]:
+    try:
+        embedder = LocalEmbedder()
+        query_vec, telemetry = embedder.embed_query(query_text)
+        log_embedding_usage(
+            operation="recall_deep_query",
+            model_id=telemetry.model_id,
+            dim=telemetry.dim,
+            count=1,
+            duration_ms=telemetry.duration_ms,
+            telemetry={"scope": session_id, "query_hash": text_hash(query_text)},
+        )
+    except LocalEmbedderUnavailable as err:
+        return {"found": False, "reason": "embedder_unavailable", "error": str(err), "memories": []}
+
+    result = json.loads(
+        engine.recall_deep(
+            json.dumps(
+                {
+                    "scope": session_id,
+                    "query_vec": query_vec,
+                    "model_id": DEFAULT_EMBEDDING_MODEL,
+                    "top_k": top_k,
+                    "min_sim": min_sim,
+                    "now": now_rfc3339(),
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    hits = result.get("hits") if isinstance(result.get("hits"), list) else []
+    memories = [
+        {
+            "when": clean_string(hit.get("created_at")),
+            "sim": float(hit.get("sim", 0.0) or 0.0),
+            "strength": "vivid" if float(hit.get("sim", 0.0) or 0.0) >= 0.82 else "faint",
+            "text": clean_string(hit.get("thesis")),
+        }
+        for hit in hits
+        if isinstance(hit, dict)
+    ]
+    log_embedding_usage(
+        operation="recall_deep",
+        model_id=DEFAULT_EMBEDDING_MODEL,
+        dim=DEFAULT_EMBEDDING_DIM,
+        count=len(memories),
+        duration_ms=0,
+        telemetry={
+            "scope": session_id,
+            "query_hash": text_hash(query_text),
+            "found": bool(result.get("found")),
+            "reason": result.get("reason"),
+            "top_sim": memories[0]["sim"] if memories else None,
+        },
+    )
+    return {
+        "found": bool(result.get("found")),
+        "reason": result.get("reason"),
+        "memories": memories,
+        "raw": result,
+    }
+
+
 def format_fidelity_summary_for_log(summary: dict[str, Any]) -> str:
     return (
         f"requested:{summary.get('requested', 0)},"
@@ -1250,6 +1448,35 @@ def format_fidelity_summary_for_user(summary: dict[str, Any]) -> str:
         f"{summary.get('completed', 0)} completed, "
         f"{summary.get('failed', 0)} failed"
     )
+
+
+def format_embedding_summary_for_log(summary: dict[str, Any]) -> str:
+    return (
+        f"requested:{summary.get('requested', 0)},"
+        f"completed:{summary.get('completed', 0)},"
+        f"failed:{summary.get('failed', 0)},"
+        f"items:{summary.get('items', 0)},"
+        f"appended:{summary.get('appended', 0)}"
+    )
+
+
+def format_embedding_summary_for_user(summary: dict[str, Any]) -> str:
+    requested = int(summary.get("requested", 0) or 0)
+    if requested == 0:
+        return "0 requested"
+    base = (
+        f"{requested} batch(es), "
+        f"{summary.get('completed', 0)} completed, "
+        f"{summary.get('appended', 0)} rows appended, "
+        f"{summary.get('failed', 0)} failed"
+    )
+    if summary.get("error"):
+        return base + f" ({summary['error']})"
+    return base
+
+
+def format_embedding_summary(summary: dict[str, Any]) -> str:
+    return "Embeddings: " + format_embedding_summary_for_user(summary)
 
 
 def promote_existing_archives(engine: memory_engine.MemoryEngine) -> dict[str, int]:
@@ -1557,6 +1784,10 @@ def secret_fingerprint(value: str) -> str:
     return f"len={len(value)} sha256_12={digest}"
 
 
+def text_hash(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
 def read_model_config() -> HostLlmConfig:
     if os.environ.get("MEMORY_BOT_NONINTERACTIVE") == "1":
         return HostLlmConfig(
@@ -1760,6 +1991,34 @@ def log_token_usage(
         f"prompt={usage.get('prompt_tokens')} output={usage.get('output_tokens')} "
         f"total={usage.get('total_tokens')} est_prompt={record['estimated_prompt_tokens']}"
         f"{extra}"
+    )
+
+
+def log_embedding_usage(
+    operation: str,
+    model_id: str,
+    dim: int,
+    count: int,
+    duration_ms: int,
+    telemetry: dict[str, Any] | None = None,
+) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    record: dict[str, Any] = {
+        "timestamp": now_rfc3339(),
+        "kind": "embedding_usage",
+        "operation": operation,
+        "model_id": model_id,
+        "dim": dim,
+        "count": count,
+        "duration_ms": duration_ms,
+    }
+    if telemetry:
+        record.update(telemetry)
+    with TOKEN_USAGE_PATH.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    log_line(
+        "embedding_usage "
+        f"operation={operation} model={model_id} dim={dim} count={count} duration_ms={duration_ms}"
     )
 
 
@@ -1983,6 +2242,46 @@ def format_recall(recall_result: dict[str, Any]) -> str:
         lines.append("")
         lines.append("Notes:")
         lines.extend(f"- {note}" for note in notes)
+    return "\n".join(lines)
+
+
+def format_deep_recall(result: dict[str, Any]) -> str:
+    memories = result.get("memories") if isinstance(result.get("memories"), list) else []
+    if not result.get("found"):
+        reason = clean_string(result.get("reason")) or "not_found"
+        error = clean_string(result.get("error"))
+        suffix = f" ({error})" if error else ""
+        return f"Deep recall: no match, reason={reason}{suffix}"
+    lines = ["Deep recall:"]
+    raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    hits = raw.get("hits") if isinstance(raw.get("hits"), list) else []
+    for index, memory in enumerate(memories, start=1):
+        hit = hits[index - 1] if index - 1 < len(hits) and isinstance(hits[index - 1], dict) else {}
+        sim = float(memory.get("sim", 0.0) or 0.0)
+        score = float(hit.get("score", 0.0) or 0.0)
+        lines.append(
+            f"{index}. sim={sim:.3f} score={score:.3f} "
+            f"{memory.get('strength', 'faint')}: {memory.get('text', '')}"
+        )
+    return "\n".join(lines)
+
+
+def format_vector_state(state: dict[str, Any]) -> str:
+    status = clean_string(state.get("status")) or "unknown"
+    scope = clean_string(state.get("scope")) or "-"
+    rows = int_or_zero(state.get("rows"))
+    model_id = clean_string(state.get("model_id")) or "-"
+    dim = state.get("dim") if isinstance(state.get("dim"), int) else "-"
+    reason = clean_string(state.get("reason"))
+    lines = [
+        f"Vector scope: {scope}",
+        f"Status: {status}",
+        f"Rows: {rows}",
+        f"Model: {model_id}",
+        f"Dim: {dim}",
+    ]
+    if reason:
+        lines.append(f"Reason: {reason}")
     return "\n".join(lines)
 
 
@@ -2365,6 +2664,11 @@ def help_text() -> str:
         "/archive_last - inspect the newest archive memory\n"
         "/archive id - inspect one archive memory by id\n"
         "/recall text - search archive memory\n"
+        "/vectors - show vector index status for this chat\n"
+        "/vectors_on - enable local vector indexing for this chat and run backfill\n"
+        "/vectors_off - disable and remove vector index for this chat\n"
+        "/vectors_purge - remove vector index for this chat\n"
+        "/recall_deep text - search vector memory for this chat\n"
         "/core - show stable Core facts\n"
         "/core_seed - seed Core from completed archive personal signals\n"
         "/remember text - save a stable Core fact manually\n"

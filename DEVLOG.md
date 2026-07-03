@@ -5653,3 +5653,34 @@ The accepted vector-storage TZ requires an opt-in derived vector catalog before 
 
 **Next:**
 Phase B: `recall_deep`, local Telegram fastembed host module, `recall_distant_memory` tool, vector commands, direct-vectors conformance, and live `min_sim` calibration before Phase C.
+
+## Entry 123 - 2026-07-03 - Vector storage Phase B slice: deep recall and Telegram local embedder path (Codex, feature/vector-storage-phase-b)
+
+**Problem:**
+Phase A could build a derived vector catalog but nothing could query it. The accepted vector-storage TZ requires the next slice to keep the core provider-free while adding honest deep recall, scope isolation, min-sim gating, and a host-side local embedder path for calibration.
+
+**What changed:**
+- Added `DeepRecallQuery`, `DeepRecallHit`, and `DeepRecallResult` (`deep_recall.v1`) in `vector.rs`.
+- Added `MemoryEngine::recall_deep`: validates model/dim, normalizes the host-provided query vector, reads only `memory/archive/vectors/<scope>/`, skips tombstoned/ineligible units, gates on raw cosine `min_sim`, ranks by similarity + recency + unit weight, and returns scarce top-K hits.
+- Deep recall reinforces parent archive entries through the existing buffered recall-stats path; it does not add synchronous archive writes.
+- PyO3 exposes `recall_deep(query_json) -> json`.
+- `tests/host_conformance/host_conformance.py` gained `--host direct-vectors`: enable scope, sleep, submit deterministic fake embeddings, deep-recall one target, then disable and assert `reason=disabled`.
+- Telegram host gained `local_embedder.py` using local fastembed/ONNX lazily, `/vectors`, `/vectors_on`, `/vectors_off`, `/vectors_purge`, and `/recall_deep text`. Sleep now executes returned `embedding_requests` when a scope is enabled. Telemetry logs only counts, dims, duration, scope, and query hashes.
+- Contracts, local-development notes, roadmap, and HISTORY were updated.
+
+**What is deliberately not claimed yet:**
+- Automatic Gemini function-calling for `recall_distant_memory` is not wired into ordinary chat yet. The manual `/recall_deep` path and reusable helper exist for calibration without changing chat behavior.
+- No benchmark or quality claim is made. `min_sim=0.75` is still a starting default until live calibration on owner data.
+- Stage 2 reranking remains Phase C and must wait for calibration.
+
+**Checks:**
+- `cargo fmt --check` passed.
+- `cargo test --workspace` passed, including the 8 vector tests in `engine_vectors.rs`.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `maturin develop` rebuilt the Python adapter before host conformance.
+- `python -m pytest crates/python_adapter/tests -q` passed: 13 tests.
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/local_embedder.py tests/host_conformance/host_conformance.py` passed.
+- Host conformance passed for: `direct`, `direct-vectors`, `direct-multispeaker`, `telegram-local`, `godot-headless`, `chibigochi-spike`, `chibigochi-ui`, `chibigochi-llm-bridge`, and `chibigochi-product-loop`.
+
+**Next:**
+Run the full gate set, then either (a) wire real Gemini function-calling for `recall_distant_memory`, or (b) calibrate `min_sim` through `/vectors_on` + `/recall_deep` first and only then wire the automatic tool. Phase C stays blocked until calibration data exists.

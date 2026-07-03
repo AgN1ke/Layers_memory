@@ -35,6 +35,8 @@ import memory_engine
 
 SESSION_ID = "host_conformance_direct"
 CORE_SCOPE = SESSION_ID
+VECTOR_DIM = 384
+VECTOR_MODEL_ID = "intfloat/multilingual-e5-small"
 
 
 class ConformanceError(AssertionError):
@@ -55,6 +57,14 @@ def dumps(value: Any) -> str:
 
 def loads(raw: str) -> Any:
     return json.loads(raw)
+
+
+def fake_vector(hot_index: int, dim: int = VECTOR_DIM) -> list[float]:
+    if hot_index < 0 or hot_index >= dim:
+        raise ConformanceError(f"fake vector hot index out of range: {hot_index}")
+    vector = [0.0] * dim
+    vector[hot_index] = 1.0
+    return vector
 
 
 def event_text(event: dict[str, Any]) -> str:
@@ -828,6 +838,118 @@ def run_direct(keep_runtime: bool) -> DriverResult:
             shutil.rmtree(runtime, ignore_errors=True)
 
 
+def run_direct_vectors(keep_runtime: bool) -> DriverResult:
+    runtime = Path(tempfile.mkdtemp(prefix="memory_engine_direct_vectors_conformance_"))
+    driver = DirectHostDriver(runtime)
+    try:
+        state = loads(driver.engine.set_vector_scope(SESSION_ID, True, False))
+        if state.get("status") not in {"building", "ready"}:
+            raise ConformanceError(f"vector scope did not enable: {state!r}")
+
+        driver.send_user_message("Мене звати Микита.")
+        driver.send_user_message("У мене є кішка Іржа.")
+        driver.send_user_message("Я люблю космос і хочу deep recall без Telegram.")
+        outcome = driver.run_sleep()
+        assert_sleep_outcome(outcome)
+
+        requests = outcome.get("embedding_requests") or loads(
+            driver.engine.pending_embedding_backfill(SESSION_ID)
+        )
+        if not requests:
+            raise ConformanceError("direct-vectors produced no embedding requests")
+
+        embedded_ids: list[str] = []
+        for request in requests:
+            embedded_ids.extend(submit_fake_embedding_request(driver.engine, request))
+        if len(embedded_ids) < 2:
+            raise ConformanceError(f"direct-vectors expected at least two embedded units, got {embedded_ids!r}")
+
+        state = loads(driver.engine.vector_state(SESSION_ID))
+        if state.get("status") != "ready":
+            raise ConformanceError(f"vector scope not ready after fake embeddings: {state!r}")
+
+        target_index = 1
+        target_id = embedded_ids[target_index]
+        result = loads(
+            driver.engine.recall_deep(
+                dumps(
+                    {
+                        "scope": SESSION_ID,
+                        "query_vec": fake_vector(target_index),
+                        "model_id": VECTOR_MODEL_ID,
+                        "top_k": 1,
+                        "min_sim": 0.9,
+                        "now": "2026-06-10T11:00:00Z",
+                    }
+                )
+            )
+        )
+        if not result.get("found"):
+            raise ConformanceError(f"deep recall found nothing: {result!r}")
+        hits = result.get("hits", [])
+        if len(hits) != 1 or hits[0].get("memory_unit_id") != target_id:
+            raise ConformanceError(f"deep recall did not return the vector target {target_id!r}: {result!r}")
+        if hits[0].get("sim", 0.0) < 0.99:
+            raise ConformanceError(f"deep recall similarity too low: {hits[0]!r}")
+
+        disabled = loads(driver.engine.set_vector_scope(SESSION_ID, False, True))
+        if disabled.get("status") != "disabled":
+            raise ConformanceError(f"vector scope did not disable: {disabled!r}")
+        disabled_result = loads(
+            driver.engine.recall_deep(
+                dumps(
+                    {
+                        "scope": SESSION_ID,
+                        "query_vec": fake_vector(target_index),
+                        "model_id": VECTOR_MODEL_ID,
+                        "top_k": 1,
+                        "min_sim": 0.9,
+                    }
+                )
+            )
+        )
+        if disabled_result.get("found") or disabled_result.get("reason") != "disabled":
+            raise ConformanceError(f"disabled deep recall did not report disabled: {disabled_result!r}")
+
+        package = driver.context_package("Do you remember the companion animal?")
+        return DriverResult(
+            runtime_dir=runtime,
+            archive_id=outcome["archive_entry"]["archive_id"],
+            memory_unit_count=len(outcome["archive_entry"].get("memory_units", [])),
+            core_fact_count=len(package.get("core_facts", [])),
+        )
+    finally:
+        if not keep_runtime:
+            shutil.rmtree(runtime, ignore_errors=True)
+
+
+def submit_fake_embedding_request(engine: Any, request: dict[str, Any]) -> list[str]:
+    embed_batch = request.get("prompt_inputs", {}).get("embed_batch", {})
+    items = embed_batch.get("items", [])
+    if not isinstance(items, list) or not items:
+        raise ConformanceError(f"embedding request has no items: {request!r}")
+    results = []
+    ids = []
+    for index, item in enumerate(items):
+        memory_unit_id = item.get("memory_unit_id")
+        if not isinstance(memory_unit_id, str) or not memory_unit_id:
+            raise ConformanceError(f"embedding item has no memory_unit_id: {item!r}")
+        ids.append(memory_unit_id)
+        results.append({"memory_unit_id": memory_unit_id, "vector": fake_vector(index)})
+    engine.resume_compute_embedding(
+        request["task_id"],
+        dumps(
+            {
+                "schema_version": "embed_batch_result.v1",
+                "model_id": VECTOR_MODEL_ID,
+                "dim": VECTOR_DIM,
+                "results": results,
+            }
+        ),
+    )
+    return ids
+
+
 def run_telegram_local(keep_runtime: bool) -> DriverResult:
     runtime = Path(tempfile.mkdtemp(prefix="memory_engine_telegram_local_conformance_"))
     driver = TelegramLocalHostDriver(runtime)
@@ -1263,6 +1385,7 @@ def main() -> int:
         "--host",
         choices=[
             "direct",
+            "direct-vectors",
             "direct-multispeaker",
             "telegram-local",
             "godot-headless",
@@ -1280,6 +1403,8 @@ def main() -> int:
     try:
         if args.host == "direct":
             result = run_direct(args.keep_runtime)
+        elif args.host == "direct-vectors":
+            result = run_direct_vectors(args.keep_runtime)
         elif args.host == "direct-multispeaker":
             result = run_direct_multispeaker(args.keep_runtime)
         elif args.host == "telegram-local":

@@ -341,6 +341,21 @@ hosts/telegram_gemini_bot/runtime/logs/token_usage.jsonl
 
 Там кожен рядок — JSON record. Для Gemini-викликів пишуться `operation`, `model_role`, `model`, provider `usageMetadata` (`prompt_tokens`, `output_tokens`, `total_tokens`, `thoughts_tokens`), estimated prompt/output tokens і, для chat replies, estimated baseline "raw history without compression" та savings estimate. Для sleep пишеться `sleep_compression_metric`: raw transcript, stored full archive, prompt-facing archive payload і `compact_memory` tokens/ratios. `compressed_estimated_tokens` лишається legacy alias для `compact_memory_estimated_tokens`.
 
+Vector recall у Telegram host є opt-in. Ядро не рахує embeddings; локальний
+host-модуль `hosts/telegram_gemini_bot/local_embedder.py` використовує
+`fastembed` і модель `intfloat/multilingual-e5-small` тільки коли чат явно
+вмикає `/vectors_on` або викликає `/recall_deep`. Для цього у venv адаптера:
+
+```powershell
+crates\python_adapter\.venv\Scripts\python.exe -m pip install fastembed
+```
+
+Без `fastembed` звичайний bot, sleep, Stage 1 recall і conformance-хости
+працюють як раніше; vector commands повернуть повідомлення, що локальний
+embedder недоступний. Embedding telemetry пишеться у той самий
+`token_usage.jsonl` як `kind=embedding_usage` без текстів: scope, query hash,
+model id, dim, count і duration.
+
 ## Локальний Conversation Harness Без Telegram
 
 Для перевірки памʼяті без Telegram polling є harness:

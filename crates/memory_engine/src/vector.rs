@@ -7,6 +7,7 @@ use crate::{MemoryEngineError, Result};
 
 pub const VECTOR_INDEX_SCHEMA_VERSION: &str = "vector_index.v1";
 pub const EMBED_BATCH_RESULT_SCHEMA_VERSION: &str = "embed_batch_result.v1";
+pub const DEEP_RECALL_RESULT_SCHEMA_VERSION: &str = "deep_recall.v1";
 pub const DEFAULT_VECTOR_MODEL_ID: &str = "intfloat/multilingual-e5-small";
 pub const DEFAULT_VECTOR_DIM: usize = 384;
 
@@ -76,6 +77,39 @@ pub struct VectorScopeState {
     pub updated_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeepRecallQuery {
+    pub scope: String,
+    pub query_vec: Vec<f32>,
+    pub model_id: String,
+    #[serde(default)]
+    pub top_k: usize,
+    #[serde(default)]
+    pub min_sim: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeepRecallHit {
+    pub memory_unit_id: Id,
+    pub archive_id: Id,
+    pub thesis: String,
+    pub created_at: Timestamp,
+    pub sim: f32,
+    pub score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeepRecallResult {
+    pub schema_version: String,
+    pub found: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hits: Vec<DeepRecallHit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,7 +197,11 @@ pub fn normalize_vector(mut vector: Vec<f32>, expected_dim: usize) -> Result<Vec
 }
 
 pub fn memory_unit_is_vector_eligible(unit: &MemoryUnit) -> bool {
-    use crate::archive::MemoryUnitStatus;
+    use crate::archive::{FidelityStatus, MemoryUnitStatus};
 
     unit.status == MemoryUnitStatus::ActiveArchive
+        && !matches!(
+            unit.fidelity_status,
+            FidelityStatus::Distorted | FidelityStatus::Unsupported | FidelityStatus::NeedsRevision
+        )
 }

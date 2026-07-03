@@ -209,6 +209,114 @@ impl<S: Storage> MemoryEngine<S> {
         })
     }
 
+    pub fn recall_deep(&self, query: DeepRecallQuery) -> Result<DeepRecallResult> {
+        self.ensure_manifest()?;
+        validate_vector_scope(&query.scope)?;
+
+        self.with_resource_lock(vectors_lock_key(&query.scope), || {
+            let root_manifest = self.storage.read_manifest()?;
+            if !root_manifest.features.embeddings_enabled {
+                return Ok(deep_recall_empty("disabled"));
+            }
+
+            let Some(index) = self.storage.read_vector_index(&query.scope)? else {
+                return Ok(deep_recall_empty("disabled"));
+            };
+            ensure_vector_manifest_matches(
+                &index.manifest,
+                &query.model_id,
+                query.query_vec.len(),
+            )?;
+            if index.manifest.state == VectorScopeStatus::Corrupt {
+                return Ok(deep_recall_empty("corrupt"));
+            }
+            if index.manifest.state != VectorScopeStatus::Ready {
+                return Ok(deep_recall_empty("building"));
+            }
+
+            let query_vec = normalize_vector(query.query_vec.clone(), index.manifest.dim)?;
+            let min_sim = if query.min_sim > 0.0 {
+                query.min_sim
+            } else {
+                self.options.vectors.deep_recall_min_sim
+            };
+            let top_k = if query.top_k == 0 {
+                self.options.vectors.deep_recall_default_top_k
+            } else {
+                query.top_k
+            }
+            .max(1);
+            let now = query.now.clone().map_or_else(now_rfc3339, Ok)?;
+            let tombstoned = index
+                .tombstones
+                .iter()
+                .map(|item| item.memory_unit_id.as_str())
+                .collect::<HashSet<_>>();
+
+            let mut scored = Vec::new();
+            for (row, vector) in index.rows.iter().zip(index.vectors.iter()) {
+                if tombstoned.contains(row.memory_unit_id.as_str()) {
+                    continue;
+                }
+                let sim = dot_product(&query_vec, vector);
+                if sim < min_sim {
+                    continue;
+                }
+                let Ok(unit) = self.storage.read_memory_unit_by_id(&row.memory_unit_id) else {
+                    continue;
+                };
+                if unit.source_session_id != query.scope || !memory_unit_is_vector_eligible(&unit) {
+                    continue;
+                }
+                let age_days = timestamp_age_days(&unit.created_at, &now).unwrap_or(0.0);
+                let recency =
+                    half_life_decay_factor(age_days, self.options.recall.freshness_half_life_days)
+                        as f32;
+                let score = sim
+                    + (self.options.vectors.deep_recall_recency_weight * recency)
+                    + (self.options.vectors.deep_recall_unit_weight
+                        * unit.weight.clamp(0.0, 1.0) as f32);
+                scored.push(DeepRecallHit {
+                    memory_unit_id: unit.memory_unit_id,
+                    archive_id: unit.archive_id,
+                    thesis: unit.thesis,
+                    created_at: unit.created_at,
+                    sim,
+                    score,
+                });
+            }
+
+            scored.sort_by(|left, right| {
+                right
+                    .score
+                    .total_cmp(&left.score)
+                    .then_with(|| right.sim.total_cmp(&left.sim))
+                    .then_with(|| left.created_at.cmp(&right.created_at))
+                    .then_with(|| left.memory_unit_id.cmp(&right.memory_unit_id))
+            });
+            scored.truncate(top_k);
+
+            if scored.is_empty() {
+                return Ok(deep_recall_empty("below_threshold"));
+            }
+
+            let archive_ids = scored
+                .iter()
+                .map(|hit| hit.archive_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            self.record_recall_stats(&archive_ids, &now)?;
+
+            Ok(DeepRecallResult {
+                schema_version: DEEP_RECALL_RESULT_SCHEMA_VERSION.to_string(),
+                found: true,
+                reason: None,
+                hits: scored,
+            })
+        })
+    }
+
     pub(super) fn pending_embedding_backfill_unlocked(
         &self,
         scope: &str,
@@ -478,6 +586,22 @@ fn disabled_vector_state(scope: &str, reason: &str) -> VectorScopeState {
         updated_at: None,
         reason: Some(reason.to_string()),
     }
+}
+
+fn deep_recall_empty(reason: &str) -> DeepRecallResult {
+    DeepRecallResult {
+        schema_version: DEEP_RECALL_RESULT_SCHEMA_VERSION.to_string(),
+        found: false,
+        reason: Some(reason.to_string()),
+        hits: Vec::new(),
+    }
+}
+
+fn dot_product(left: &[f32], right: &[f32]) -> f32 {
+    left.iter()
+        .zip(right.iter())
+        .map(|(left, right)| left * right)
+        .sum::<f32>()
 }
 
 fn ensure_vector_manifest_matches(
