@@ -5713,3 +5713,38 @@ After Phase B was integrated, the first live calibration attempt installed `fast
 - `python -m py_compile hosts/telegram_gemini_bot/local_embedder.py hosts/telegram_gemini_bot/bot.py tests/host_conformance/host_conformance.py` passed.
 - `maturin develop` rebuilt the Python adapter.
 - Live owner-scope backfill and deep-recall calibration passed after purging the stale old-model catalog/task.
+
+## Entry 125 - 2026-07-03 - Vector recall strategy reflection: distant associative remembering (Owner + Codex)
+
+**Context:**
+After the first Phase B slice and live calibration, the owner challenged the framing of vector storage. We re-read the strategic documents (`docs/strategy.md`, `docs/architecture.md`, `docs/research/vector-recall.md`, and `docs/research/vector-storage-tz-2026-07-03.md`) and corrected the working interpretation.
+
+**Strategic role:**
+Vector storage is the mechanism for distant associative remembering over validated memory units. Its product role is to let a host/persona recall a small number of old, relevant experiences when the visible context and ordinary memory package do not carry enough material for the current reply.
+
+For Telegram this means remembering old personal topics, decisions, preferences, and episodes from earlier conversations. For Chibigochi this means recalling old days, care episodes, raids, gifts, injuries, repeated themes, and emotional history as part of character behavior.
+
+**Current state:**
+The library can already store derived vectors, rebuild them, search a scope by a host-provided query vector, apply a similarity threshold, return scarce hits, and reinforce returned parent memories through the existing buffered recall stats path. The Telegram host has a manual `/recall_deep` path and local embedder. Owner-scope calibration is done for the current model.
+
+**Next implementation plan:**
+First, add a controlled host-driver scenario with a forced distant-memory call. This proves the full chain: old memory exists, visible context is insufficient, the host calls deep recall, the engine returns the right memory, and the answer path uses it.
+
+Second, add a small deterministic recall-decision gate in the host path. It should trigger on explicit memory-seeking language such as "remember", "previously", "we talked about", "what did I say about", and equivalent Ukrainian/Russian forms. This is the first live behavior layer for "the persona decides to remember".
+
+Third, evaluate whether the deterministic gate is enough. If live usage shows missed recall moments or noisy recall moments, add a small LLM router whose only job is to decide whether distant memory should be queried for this turn.
+
+Fourth, bring the same behavior to Chibigochi/Godot after the Telegram path has a stable test and observed behavior.
+
+**Test strategy:**
+The owner is not the harness. The acceptance path should use scripted scenarios:
+- a fact or episode is stored, slept, validated, and removed from visible context;
+- a later user turn hints at it with different wording;
+- the host performs distant recall;
+- the returned memory is relevant and scarce;
+- a weak unrelated query produces no usable memory.
+
+Manual Telegram or Godot checks stay final smoke tests only.
+
+**Deferred:**
+Stage 2 recall integration remains after this behavior layer. The next useful milestone is natural distant remembering in a live host, then ordinary recall reranking.
