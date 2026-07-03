@@ -75,6 +75,8 @@ MEMORY_KEYWORD_PARTS = (
 ARCHIVE_LIST_LIMIT = 5
 ARCHIVE_DETAIL_LIMIT = 10
 MAX_CORE_CATEGORY_LENGTH = 64
+DEFAULT_DEEP_RECALL_MIN_SIM = 0.30
+DEFAULT_DEEP_RECALL_VIVID_SIM = 0.55
 DISTANT_RECALL_TRIGGERS = (
     "remember",
     "do you remember",
@@ -107,6 +109,7 @@ DISTANT_RECALL_STOPWORDS = {
     "before",
     "did",
     "earlier",
+    "from",
     "have",
     "last",
     "please",
@@ -1434,7 +1437,7 @@ def recall_distant_memory(
     session_id: str,
     query_text: str,
     top_k: int = 5,
-    min_sim: float = 0.0,
+    min_sim: float = DEFAULT_DEEP_RECALL_MIN_SIM,
 ) -> dict[str, Any]:
     try:
         embedder = LocalEmbedder()
@@ -1470,7 +1473,9 @@ def recall_distant_memory(
         {
             "when": clean_string(hit.get("created_at")),
             "sim": float(hit.get("sim", 0.0) or 0.0),
-            "strength": "vivid" if float(hit.get("sim", 0.0) or 0.0) >= 0.55 else "faint",
+            "strength": "vivid"
+            if float(hit.get("sim", 0.0) or 0.0) >= DEFAULT_DEEP_RECALL_VIVID_SIM
+            else "faint",
             "text": clean_string(hit.get("thesis")),
         }
         for hit in hits
@@ -1515,6 +1520,11 @@ def distant_recall_query_terms(user_text: str) -> list[str]:
             continue
         result.append(cleaned)
     return unique_preserve_order(result)
+
+
+def distant_recall_search_text(user_text: str) -> str:
+    terms = distant_recall_query_terms(user_text)
+    return " ".join(terms) if terms else user_text
 
 
 def visible_memory_sections(memory_view: str) -> str:
@@ -1567,17 +1577,24 @@ def maybe_add_distant_memory(
         log_line(f"distant recall skipped: vector scope not ready session={session_id}")
         return {"used": False, "reason": "not_ready"}
 
-    result = recall_distant_memory(engine, session_id, user_text, top_k=3)
+    search_text = distant_recall_search_text(user_text)
+    result = recall_distant_memory(
+        engine,
+        session_id,
+        search_text,
+        top_k=3,
+        min_sim=DEFAULT_DEEP_RECALL_MIN_SIM,
+    )
     if not result.get("found"):
         log_line(
-            f"distant recall miss session={session_id} reason={result.get('reason')} query={text_hash(user_text)}"
+            f"distant recall miss session={session_id} reason={result.get('reason')} query={text_hash(search_text)}"
         )
         return {"used": False, "reason": result.get("reason"), "result": result}
 
     append_distant_memories_to_package(package, result, session_id)
     log_line(
         f"distant recall added {len(result.get('memories', []))} memory item(s) "
-        f"session={session_id} query={text_hash(user_text)}"
+        f"session={session_id} query={text_hash(search_text)}"
     )
     return {"used": True, "reason": "found", "result": result}
 

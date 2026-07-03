@@ -1193,7 +1193,9 @@ def run_telegram_distant_gate(keep_runtime: bool) -> DriverResult:
         top_k: int = 5,
         min_sim: float = 0.0,
     ) -> dict[str, Any]:
-        del engine, top_k, min_sim
+        del engine, top_k
+        if min_sim != visible_driver.telegram_bot.DEFAULT_DEEP_RECALL_MIN_SIM:
+            raise ConformanceError(f"distant recall used unexpected min_sim={min_sim!r}")
         calls.append(f"{session_id}:{query_text}")
         return {
             "found": True,
@@ -1238,6 +1240,8 @@ def run_telegram_distant_gate(keep_runtime: bool) -> DriverResult:
         missing_reply = missing_driver.send_user_message("Do you remember the silver feather?")
         if len(calls) != 1:
             raise ConformanceError(f"distant recall was not called exactly once for missing memory: {calls!r}")
+        if not calls[0].endswith(":silver feather"):
+            raise ConformanceError(f"distant recall did not use cleaned search text: {calls!r}")
         if "silver feather" not in missing_reply.lower():
             raise ConformanceError(f"distant-memory reply did not use the recalled memory: {missing_reply!r}")
 

@@ -5800,3 +5800,30 @@ Run a live Telegram smoke with vectors enabled on the owner scope and a few expl
 - `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate` passed.
 - Adjacent host checks passed: `direct-forced-recall`, `direct-vectors`, `telegram-local`.
 - `crates/python_adapter/.venv/Scripts/python.exe -m pytest crates/python_adapter/tests -q` passed: 13 tests.
+
+## Entry 128 - 2026-07-03 - Live Telegram-host distant recall check with real Gemini and local embeddings (Codex, feature/forced-distant-recall-conformance)
+
+**Context:**
+After Entry 127, the owner asked Codex to run the live check instead of relying on manual Telegram probing. The check used the Telegram host code path with an isolated temporary memory runtime, real Gemini sleep/fidelity/chat calls, and the local fastembed-backed embedder.
+
+**What happened:**
+- The first attempt could not read the cached Gemini key because `secrets.local.json` had a UTF-8 BOM. `local_harness.load_cache()` now reads with `utf-8-sig`.
+- The local harness also still called the old `chat_prompt(package, text)` shape. It now calls the current `chat_prompt(engine, package, text)` and runs the same distant-memory pre-prompt hook as the Telegram host.
+- A live isolated session stored an episode: Mykyta hid a silver feather under an old bridge during a rainy walk.
+- Real Gemini sleep completed, real fidelity completed, and local embeddings appended 2 vector rows.
+- With normal visible memory intact, a Ukrainian "пам'ятаєш срібне перо?" query was recognized as already answered by the visible memory package, so deep recall was skipped.
+- With the visible memory package cleared for the test, the Ukrainian query "пам'ятаєш срібне перо і старий міст?" triggered deep recall, found the silver-feather memory (`sim=0.5269`), inserted it into the prompt, and Gemini answered using that memory.
+
+**Fixes from the live check:**
+- The host now strips memory-request boilerplate before embedding a distant-memory query. Example: "Do you remember the silver feather?" searches for "silver feather".
+- Telegram deep recall now passes the calibrated `min_sim=0.30` explicitly instead of relying on `0.0`/default interpretation across installed adapter builds.
+- The vivid/faint threshold is now a named host constant (`0.55`).
+
+**Observed limitation:**
+Cross-language recall remains weaker with the current MiniLM model: an English query against a Ukrainian sleep-produced thesis can miss the threshold. Ukrainian query -> Ukrainian thesis worked. This is a calibration/product note, not a blocker for the current Ukrainian Telegram path.
+
+**Checks:**
+- Live isolated Telegram-host path with real Gemini and local embeddings passed.
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/local_harness.py tests/host_conformance/host_conformance.py` passed.
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate` passed.
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall` passed.
