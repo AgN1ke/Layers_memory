@@ -5771,3 +5771,32 @@ This is a forced behavior scenario. The next product step is the deterministic r
 - `python -m py_compile tests/host_conformance/host_conformance.py` passed.
 - `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall` passed.
 - Existing adjacent conformance hosts still passed: `direct`, `direct-vectors`.
+
+## Entry 127 - 2026-07-03 - Deterministic distant-recall decision gate for Telegram host (Codex, feature/forced-distant-recall-conformance)
+
+**Context:**
+After the forced distant-memory scenario passed, the owner clarified the correct behavior: if the normal three-layer memory package already contains the answer, vector recall should not run. Vector storage is a distant fallback for explicit remembering moments where visible memory is insufficient, not a replacement for Core/long/short memory.
+
+**What changed:**
+- Telegram chat flow now builds the normal memory view first.
+- A deterministic gate considers distant recall only for explicit memory-seeking language such as "remember", "what did I say", "we talked about", and Ukrainian/Russian equivalents.
+- Before calling deep recall, the host checks the visible memory sections (`core_memory`, `long_memory`, `short_memory`) for meaningful query terms. If the answer appears to be present, deep recall is skipped.
+- The check includes a conservative stem match for Cyrillic terms, so inflected forms such as "Іржу" can match visible memory containing "Іржа".
+- Deep recall is skipped unless the vector scope is already `ready`; this preserves the opt-in/privacy invariant that disabled vector scopes do not send chat text to the local embedder.
+- When deep recall returns hits, the host injects them into the existing `archive_relevant`/`<long_memory>` prompt shape, so the model sees distant memories through the same memory geometry.
+
+**Conformance:**
+- Added `--host telegram-distant-gate`.
+- Case 1: visible Core memory already contains "silver feather"; the gate skips deep recall.
+- Case 2: visible memory lacks it and vector scope is test-ready; fake deep recall is called once and the reply uses the returned memory.
+- Case 3: vector scope is not ready; the gate skips deep recall even for a memory-seeking query.
+- The scenario also asserts the Ukrainian inflection guard for `Іржу` vs `Іржа`.
+
+**What is still next:**
+Run a live Telegram smoke with vectors enabled on the owner scope and a few explicit "пам'ятаєш..." prompts. If the deterministic gate misses real recall moments or calls too often, add the optional small LLM router described in Entry 125.
+
+**Checks:**
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py tests/host_conformance/host_conformance.py` passed.
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate` passed.
+- Adjacent host checks passed: `direct-forced-recall`, `direct-vectors`, `telegram-local`.
+- `crates/python_adapter/.venv/Scripts/python.exe -m pytest crates/python_adapter/tests -q` passed: 13 tests.

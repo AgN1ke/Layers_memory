@@ -75,6 +75,73 @@ MEMORY_KEYWORD_PARTS = (
 ARCHIVE_LIST_LIMIT = 5
 ARCHIVE_DETAIL_LIMIT = 10
 MAX_CORE_CATEGORY_LENGTH = 64
+DISTANT_RECALL_TRIGGERS = (
+    "remember",
+    "do you remember",
+    "what did i say",
+    "what have i said",
+    "we talked about",
+    "previously",
+    "earlier",
+    "last time",
+    "пам'ята",
+    "памʼята",
+    "памята",
+    "згада",
+    "згадув",
+    "ми говорили",
+    "ми розмовляли",
+    "що я казав",
+    "що я казала",
+    "ранiше",
+    "раніше",
+    "помни",
+    "вспомни",
+    "мы говорили",
+    "что я говорил",
+    "что я говорила",
+)
+DISTANT_RECALL_STOPWORDS = {
+    "about",
+    "again",
+    "before",
+    "did",
+    "earlier",
+    "have",
+    "last",
+    "please",
+    "previously",
+    "remember",
+    "said",
+    "talked",
+    "that",
+    "the",
+    "this",
+    "time",
+    "what",
+    "with",
+    "you",
+    "згадай",
+    "згадати",
+    "згадуєш",
+    "казав",
+    "казала",
+    "мені",
+    "ми",
+    "памятаєш",
+    "пам'ятаєш",
+    "памʼятаєш",
+    "про",
+    "раніше",
+    "розмовляли",
+    "ти",
+    "що",
+    "говорили",
+    "помнишь",
+    "вспомни",
+    "говорил",
+    "говорила",
+}
 
 
 @dataclass(frozen=True)
@@ -680,6 +747,9 @@ def handle_update(
     package = context_package(engine, session_id, chat_id, text)
     model = llm_config.chat_model().model
     prompt = chat_prompt(engine, package, text)
+    distant_recall = maybe_add_distant_memory(engine, session_id, text, package, prompt)
+    if distant_recall and distant_recall.get("used"):
+        prompt = chat_prompt(engine, package, text)
     prompt_telemetry = chat_prompt_telemetry(package, session_id, prompt)
     answer_response = gemini.generate_text(
         model=model,
@@ -1426,6 +1496,136 @@ def recall_distant_memory(
         "memories": memories,
         "raw": result,
     }
+
+
+def should_consider_distant_recall(user_text: str) -> bool:
+    lowered = user_text.lower()
+    return any(trigger in lowered for trigger in DISTANT_RECALL_TRIGGERS)
+
+
+def distant_recall_query_terms(user_text: str) -> list[str]:
+    lowered = user_text.lower()
+    terms = re.findall(r"[\w'ʼ-]{3,}", lowered, flags=re.UNICODE)
+    result: list[str] = []
+    for term in terms:
+        cleaned = term.strip("-_'ʼ")
+        if len(cleaned) < 3 or cleaned in DISTANT_RECALL_STOPWORDS:
+            continue
+        if any(trigger == cleaned for trigger in DISTANT_RECALL_TRIGGERS):
+            continue
+        result.append(cleaned)
+    return unique_preserve_order(result)
+
+
+def visible_memory_sections(memory_view: str) -> str:
+    sections: list[str] = []
+    for tag in ("core_memory", "long_memory", "short_memory"):
+        match = re.search(rf"<{tag}>(.*?)</{tag}>", memory_view, flags=re.DOTALL)
+        if match:
+            sections.append(match.group(1))
+    return "\n".join(sections).lower()
+
+
+def visible_memory_already_answers(user_text: str, memory_view: str) -> bool:
+    terms = distant_recall_query_terms(user_text)
+    if not terms:
+        return False
+    visible = visible_memory_sections(memory_view)
+    if not visible or visible.count("(empty)") == 3:
+        return False
+    matched = sum(1 for term in terms if visible_memory_contains_term(visible, term))
+    required = 1 if len(terms) == 1 else 2
+    return matched >= required
+
+
+def visible_memory_contains_term(visible_memory: str, term: str) -> bool:
+    if term in visible_memory:
+        return True
+    if re.search(r"[а-яіїєґё]", term, flags=re.IGNORECASE):
+        return len(term) >= 3 and term[:3] in visible_memory
+    return len(term) >= 5 and term[:5] in visible_memory
+
+
+def distant_recall_scope_ready(engine: memory_engine.MemoryEngine, session_id: str) -> bool:
+    state = json.loads(engine.vector_state(session_id))
+    return state.get("status") == "ready"
+
+
+def maybe_add_distant_memory(
+    engine: memory_engine.MemoryEngine,
+    session_id: str,
+    user_text: str,
+    package: dict[str, Any],
+    memory_view: str,
+) -> dict[str, Any] | None:
+    if not should_consider_distant_recall(user_text):
+        return None
+    if visible_memory_already_answers(user_text, memory_view):
+        log_line(f"distant recall skipped: visible memory already has query terms session={session_id}")
+        return {"used": False, "reason": "visible_memory"}
+    if not distant_recall_scope_ready(engine, session_id):
+        log_line(f"distant recall skipped: vector scope not ready session={session_id}")
+        return {"used": False, "reason": "not_ready"}
+
+    result = recall_distant_memory(engine, session_id, user_text, top_k=3)
+    if not result.get("found"):
+        log_line(
+            f"distant recall miss session={session_id} reason={result.get('reason')} query={text_hash(user_text)}"
+        )
+        return {"used": False, "reason": result.get("reason"), "result": result}
+
+    append_distant_memories_to_package(package, result, session_id)
+    log_line(
+        f"distant recall added {len(result.get('memories', []))} memory item(s) "
+        f"session={session_id} query={text_hash(user_text)}"
+    )
+    return {"used": True, "reason": "found", "result": result}
+
+
+def append_distant_memories_to_package(package: dict[str, Any], result: dict[str, Any], session_id: str) -> None:
+    raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    hits = raw.get("hits") if isinstance(raw.get("hits"), list) else []
+    archive_relevant = package.setdefault("archive_relevant", [])
+    if not isinstance(archive_relevant, list):
+        package["archive_relevant"] = archive_relevant = []
+
+    existing = {
+        clean_string(item.get("id"))
+        for item in archive_relevant
+        if isinstance(item, dict)
+    }
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        memory_unit_id = clean_string(hit.get("memory_unit_id"))
+        archive_id = clean_string(hit.get("archive_id"))
+        thesis = clean_string(hit.get("thesis"))
+        if not memory_unit_id or not archive_id or not thesis:
+            continue
+        item_id = f"deep:{memory_unit_id}"
+        if item_id in existing:
+            continue
+        sim = clamp_float(hit.get("sim"), 0.0)
+        score = float(hit.get("score", sim) or sim)
+        archive_relevant.insert(
+            0,
+            {
+                "source_layer": "archive",
+                "id": item_id,
+                "gist": thesis,
+                "compact_memory": thesis,
+                "narrative": None,
+                "facts": [thesis],
+                "source_session_id": session_id,
+                "tags": ["deep_recall", f"archive:{archive_id}"],
+                "theme": "distant_memory",
+                "weight": max(0.0, min(1.0, sim)),
+                "freshness": 1.0,
+                "relevance_score": score,
+                "relevance_explanation": f"distant vector recall sim={sim:.3f}",
+            },
+        )
+        existing.add(item_id)
 
 
 def format_fidelity_summary_for_log(summary: dict[str, Any]) -> str:

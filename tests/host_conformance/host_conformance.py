@@ -721,7 +721,9 @@ class FakeGemini:
         telemetry: dict[str, Any] | None = None,
     ) -> Any:
         del system_instruction, response_mime_type, model_role, telemetry
-        if operation == "chat_reply":
+        if operation == "chat_reply" and "silver feather" in prompt.lower():
+            text = "I remember the silver feather under the old bridge."
+        elif operation == "chat_reply":
             text = "ACK telegram-local: відповідь з fake Gemini без Telegram transport."
         elif operation == "sleep_consolidator":
             text = (
@@ -1175,6 +1177,91 @@ def run_telegram_local(keep_runtime: bool) -> DriverResult:
             shutil.rmtree(runtime, ignore_errors=True)
 
 
+def run_telegram_distant_gate(keep_runtime: bool) -> DriverResult:
+    runtime = Path(tempfile.mkdtemp(prefix="memory_engine_telegram_distant_gate_"))
+    visible_driver = TelegramLocalHostDriver(runtime / "visible")
+    missing_driver = TelegramLocalHostDriver(runtime / "missing")
+    disabled_driver = TelegramLocalHostDriver(runtime / "disabled")
+    calls: list[str] = []
+    original_recall = visible_driver.telegram_bot.recall_distant_memory
+    original_scope_ready = visible_driver.telegram_bot.distant_recall_scope_ready
+
+    def fake_recall_distant_memory(
+        engine: Any,
+        session_id: str,
+        query_text: str,
+        top_k: int = 5,
+        min_sim: float = 0.0,
+    ) -> dict[str, Any]:
+        del engine, top_k, min_sim
+        calls.append(f"{session_id}:{query_text}")
+        return {
+            "found": True,
+            "reason": None,
+            "memories": [
+                {
+                    "when": "2026-06-10T10:04:00Z",
+                    "sim": 0.96,
+                    "strength": "vivid",
+                    "text": "Keepsake -> the player hid a silver feather under the old bridge.",
+                }
+            ],
+            "raw": {
+                "hits": [
+                    {
+                        "memory_unit_id": "mu_fake_silver_feather",
+                        "archive_id": "archive_fake_keepsake",
+                        "thesis": "Keepsake -> the player hid a silver feather under the old bridge.",
+                        "created_at": "2026-06-10T10:04:00Z",
+                        "sim": 0.96,
+                        "score": 1.12,
+                    }
+                ]
+            },
+        }
+
+    try:
+        visible_driver.telegram_bot.recall_distant_memory = fake_recall_distant_memory
+        visible_driver.telegram_bot.distant_recall_scope_ready = lambda engine, session_id: True
+        if not visible_driver.telegram_bot.visible_memory_already_answers(
+            "Пам'ятаєш про Іржу?",
+            "<core_memory>\n- pet (0.95): У користувача є кішка Іржа.\n</core_memory>",
+        ):
+            raise ConformanceError("visible-memory gate missed a Ukrainian inflected Irzha query")
+        visible_driver.send_user_message("/remember The player hid a silver feather under the old bridge.")
+        visible_reply = visible_driver.send_user_message("Do you remember the silver feather?")
+        if calls:
+            raise ConformanceError(f"distant recall was called even though visible memory had the answer: {calls!r}")
+        if "silver feather" not in visible_reply.lower():
+            raise ConformanceError(f"visible-memory reply did not see the core memory: {visible_reply!r}")
+
+        missing_reply = missing_driver.send_user_message("Do you remember the silver feather?")
+        if len(calls) != 1:
+            raise ConformanceError(f"distant recall was not called exactly once for missing memory: {calls!r}")
+        if "silver feather" not in missing_reply.lower():
+            raise ConformanceError(f"distant-memory reply did not use the recalled memory: {missing_reply!r}")
+
+        visible_driver.telegram_bot.distant_recall_scope_ready = lambda engine, session_id: False
+        disabled_reply = disabled_driver.send_user_message("Do you remember the blue lantern?")
+        if len(calls) != 1:
+            raise ConformanceError(f"distant recall was called while vector scope was not ready: {calls!r}")
+        if "silver feather" in disabled_reply.lower():
+            raise ConformanceError(f"disabled vector scope reply used distant memory: {disabled_reply!r}")
+
+        package = missing_driver.context_package("What profile facts are known?")
+        return DriverResult(
+            runtime_dir=runtime,
+            archive_id="telegram_distant_gate",
+            memory_unit_count=0,
+            core_fact_count=len(package.get("core_facts", [])),
+        )
+    finally:
+        visible_driver.telegram_bot.recall_distant_memory = original_recall
+        visible_driver.telegram_bot.distant_recall_scope_ready = original_scope_ready
+        if not keep_runtime:
+            shutil.rmtree(runtime, ignore_errors=True)
+
+
 def run_godot_headless(keep_runtime: bool, godot_bin: str | None) -> DriverResult:
     return run_godot_script(
         keep_runtime=keep_runtime,
@@ -1589,6 +1676,7 @@ def main() -> int:
             "direct-forced-recall",
             "direct-multispeaker",
             "telegram-local",
+            "telegram-distant-gate",
             "godot-headless",
             "chibigochi-spike",
             "chibigochi-ui",
@@ -1612,6 +1700,8 @@ def main() -> int:
             result = run_direct_multispeaker(args.keep_runtime)
         elif args.host == "telegram-local":
             result = run_telegram_local(args.keep_runtime)
+        elif args.host == "telegram-distant-gate":
+            result = run_telegram_distant_gate(args.keep_runtime)
         elif args.host == "godot-headless":
             result = run_godot_headless(args.keep_runtime, args.godot_bin)
         elif args.host == "chibigochi-spike":
