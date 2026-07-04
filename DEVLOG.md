@@ -5827,3 +5827,35 @@ Cross-language recall remains weaker with the current MiniLM model: an English q
 - `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/local_harness.py tests/host_conformance/host_conformance.py` passed.
 - `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate` passed.
 - `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall` passed.
+
+## Entry 129 - 2026-07-04 - Live Telegram memory-unit repair and embedder reuse (Codex, feature/forced-distant-recall-conformance)
+
+**Context:**
+The owner ran a long real Telegram conversation on clean memory. The system worked end-to-end: sleep triggered automatically, Core filled with real facts, fidelity completed, vectors became ready, and the bot answered from the resulting memory. One complete archive stayed weak: Gemini returned no usable `memory_unit_pass` output three times, so the archive had Core signals but no compact memory units and no vector rows.
+
+**What changed:**
+- The final `memory_unit_pass` retry now uses the stronger reasoning role.
+- The core can find complete archives with source events but empty memory units and emit repair requests later.
+- If the model still cannot produce memory units during repair because the provider blocks or returns unusable model output, the core builds conservative memory units from existing archive tracks: personal signals, facts, topic summaries, and only then archive gist.
+- Telegram runs this repair step after sleep completion and then backfills embeddings for repaired units.
+- The Telegram local embedder is now reused as a singleton instead of creating a fresh ONNX session for every vector query or embedding batch.
+- `docs/contracts.md` manifest schema list now includes the vector schemas already documented later in the file.
+
+**Live result:**
+- Owner scope `telegram_311422683` had archive `archive_1783159971443222600_98` with zero memory units.
+- A repair request was emitted and real Gemini blocked it again.
+- The new core fallback repaired the archive from existing tracks: 8 memory units were written, compact memory became non-empty, and vector rows increased from 9 to 17.
+- Pending tasks returned to zero and the Telegram bot was restarted through the dev harness.
+
+**Checks:**
+- `cargo fmt`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/local_harness.py tests/host_conformance/host_conformance.py`
+- `crates/python_adapter/.venv/Scripts/python.exe -m pytest crates/python_adapter/tests -q`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-vectors`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate`
+
+**Next:**
+Merge the vector Phase B/gate branch after review, then decide the next design step for contextual expansion: short always-visible memory plus scarce detailed memories pulled by the core when the current topic needs them.

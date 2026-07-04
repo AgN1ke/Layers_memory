@@ -46,6 +46,42 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-04 - Memory-unit repair for complete archives with missing theses
+
+A long live Telegram conversation exposed a partial sleep result: one complete archive had source events and Core signals, but no `MemoryUnit` theses because `memory_unit_pass` repeatedly returned no usable candidates. That made the archive weaker for long-memory prompt use and excluded that slice from vector backfill.
+
+**What changed:**
+- The sleep driver now escalates the final `memory_unit_pass` retry to the `reasoning` role.
+- New core/PyO3 APIs can inspect and repair complete archives whose `memory_units` are empty: `pending_memory_unit_repairs(session_id)` and `submit_memory_unit_repair_response(task_id, response)`.
+- Repair tasks reuse `memory_unit_pass` over the archived source events, so crash-rotated events remain usable for later self-healing.
+- If a repair response is blocked by the provider or otherwise fails as model output, the core creates conservative fallback memory units from already stored archive tracks (`personal_signals`, facts, topic-thread summaries, then gist as a last resort).
+- Transport failures still mark the repair task failed so they can be retried later.
+- Telegram host now runs memory-unit repair after sleep completion and backfills embeddings for repaired units.
+- Telegram local embedder is now a module-level singleton, so the ONNX session is reused instead of being recreated for every deep recall or embedding batch.
+
+**What is retracted (if applicable):**
+- The assumption that retrying `memory_unit_pass` later is sufficient for every empty-unit archive. Some real prompts can keep failing through provider blocking, so the core needs a deterministic fallback from already validated tracks.
+
+**What is still true:**
+- The Rust core still does not call providers or compute embeddings.
+- Vectors remain derived data over `MemoryUnit` theses.
+- Core facts are not changed by memory-unit repair; repair only fills archive memory units and compact long-memory text.
+- Archived source events remain the material for repair, but fallback units never invent new raw facts beyond existing archive tracks.
+
+**Live repair result:**
+- Owner Telegram scope `telegram_311422683`: archive `archive_1783159971443222600_98` was repaired after Gemini blocked the repair prompt.
+- The archive gained 8 memory units, `compact_memory` became non-empty, vector rows increased from 9 to 17, and pending tasks returned to zero.
+
+**Reproducibility anchor:**
+- `cargo fmt`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/local_harness.py tests/host_conformance/host_conformance.py`
+- `crates/python_adapter/.venv/Scripts/python.exe -m pytest crates/python_adapter/tests -q`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-vectors`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate`
+
 ## 2026-07-03 - Vector embedder default changed to fastembed-supported multilingual MiniLM
 
 Live calibration setup for vector recall installed `fastembed==0.8.0` and tried to load the model named in the vector-storage TZ. `TextEmbedding("intfloat/multilingual-e5-small")` failed because that model is not present in the installed fastembed registry. After switching to a supported 384-dimensional multilingual model, owner-scope calibration showed a lower cosine range than the original e5-family assumption.

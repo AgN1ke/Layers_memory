@@ -26,8 +26,8 @@ use crate::forgetting::{
     ForgetReviewResult, ForgetReviewStart, ForgottenMemoryUnits,
 };
 use crate::llm::{
-    CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmRequest, LlmResponse, SleepOutcome,
-    SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
+    CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmErrorKind, LlmRequest, LlmResponse,
+    SleepOutcome, SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
 };
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
 use crate::prompt_view::{

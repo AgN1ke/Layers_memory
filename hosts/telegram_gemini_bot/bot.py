@@ -77,6 +77,8 @@ ARCHIVE_DETAIL_LIMIT = 10
 MAX_CORE_CATEGORY_LENGTH = 64
 DEFAULT_DEEP_RECALL_MIN_SIM = 0.30
 DEFAULT_DEEP_RECALL_VIVID_SIM = 0.55
+_LOCAL_EMBEDDER: LocalEmbedder | None = None
+_LOCAL_EMBEDDER_LOCK = threading.Lock()
 DISTANT_RECALL_TRIGGERS = (
     "remember",
     "do you remember",
@@ -1149,6 +1151,12 @@ def complete_sleep_result(
         engine,
         outcome.get("embedding_requests", []),
     )
+    repair_summary = run_memory_unit_repair_requests(
+        engine,
+        gemini,
+        llm_config,
+        sleep_run.get("session_id") or updated.get("source_session_id") or "",
+    )
     compact_tokens = estimate_tokens(clean_string(updated.get("compact_memory")))
     log_sleep_compression_metrics(engine, sleep_run, updated)
     log_line(
@@ -1158,6 +1166,7 @@ def complete_sleep_result(
         f"failed_passes={','.join(outcome.get('failed_passes', [])) or 'none'} "
         f"fidelity={format_fidelity_summary_for_log(fidelity_summary)} "
         f"embeddings={format_embedding_summary_for_log(embedding_summary)} "
+        f"repairs={format_memory_unit_repair_summary_for_log(repair_summary)} "
         f"compact_tokens={compact_tokens}"
     )
     return (
@@ -1171,6 +1180,7 @@ def complete_sleep_result(
         f"Core signals: {format_core_signal_counts(core_summary)}\n"
         f"Fidelity: {format_fidelity_summary_for_user(fidelity_summary)}\n"
         f"Embeddings: {format_embedding_summary_for_user(embedding_summary)}\n"
+        f"Memory unit repairs: {format_memory_unit_repair_summary_for_user(repair_summary)}\n"
         f"Gist: {updated['gist']}"
     )
 
@@ -1225,6 +1235,91 @@ def execute_llm_request(
             "kind": "other",
             "detail": f"{type(err).__name__}: {err}",
         }
+
+
+def run_memory_unit_repair_requests(
+    engine: memory_engine.MemoryEngine,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    session_id: str,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "requested": 0,
+        "completed": 0,
+        "failed": 0,
+        "units": 0,
+        "embedding_requested": 0,
+        "embedding_completed": 0,
+        "embedding_appended": 0,
+        "embedding_failed": 0,
+    }
+    if not session_id:
+        return summary
+
+    try:
+        requests = json.loads(engine.pending_memory_unit_repairs(session_id))
+    except Exception as err:
+        summary["failed"] = 1
+        summary["error"] = f"{type(err).__name__}: {err}"
+        log_exception(f"memory unit repair inspection failed session={session_id}", err)
+        return summary
+
+    if not isinstance(requests, list) or not requests:
+        return summary
+
+    summary["requested"] = len(requests)
+    repaired_any = False
+    for request in requests:
+        if not isinstance(request, dict):
+            summary["failed"] += 1
+            continue
+        task_id = clean_string(request.get("task_id"))
+        response = execute_llm_request(request, gemini, llm_config)
+        try:
+            updated_raw = engine.submit_memory_unit_repair_response(
+                task_id,
+                json.dumps(response, ensure_ascii=False),
+            )
+            updated = json.loads(updated_raw) if updated_raw else None
+        except Exception as err:
+            summary["failed"] += 1
+            log_exception(f"memory unit repair failed task={task_id or 'unknown'}", err)
+            continue
+
+        if not isinstance(updated, dict):
+            summary["failed"] += 1
+            log_line(f"memory_unit_repair_failed task={task_id or 'unknown'}")
+            continue
+
+        units = updated.get("memory_units") if isinstance(updated.get("memory_units"), list) else []
+        summary["completed"] += 1
+        summary["units"] += len(units)
+        repaired_any = True
+        log_line(
+            "memory_unit_repair_completed "
+            f"task={task_id or 'unknown'} "
+            f"archive={updated.get('archive_id') or 'unknown'} "
+            f"units={len(units)}"
+        )
+
+    if repaired_any:
+        try:
+            embedding_summary = run_embedding_requests(
+                engine,
+                json.loads(engine.pending_embedding_backfill(session_id)),
+            )
+            summary["embedding_requested"] = embedding_summary.get("requested", 0)
+            summary["embedding_completed"] = embedding_summary.get("completed", 0)
+            summary["embedding_appended"] = embedding_summary.get("appended", 0)
+            summary["embedding_failed"] = embedding_summary.get("failed", 0)
+        except Exception as err:
+            summary["embedding_failed"] = summary.get("embedding_failed", 0) + 1
+            log_exception(
+                f"memory unit repair embedding backfill failed session={session_id}",
+                err,
+            )
+
+    return summary
 
 
 def run_memory_fidelity(
@@ -1368,13 +1463,7 @@ def run_embedding_requests(
     if not requests:
         return summary
 
-    try:
-        embedder = LocalEmbedder()
-    except LocalEmbedderUnavailable as err:
-        summary["failed"] = len(requests)
-        summary["error"] = str(err)
-        log_line(f"embedding_unavailable {err}")
-        return summary
+    embedder = local_embedder()
 
     for request in requests:
         task_id = clean_string(request.get("task_id"))
@@ -1440,7 +1529,7 @@ def recall_distant_memory(
     min_sim: float = DEFAULT_DEEP_RECALL_MIN_SIM,
 ) -> dict[str, Any]:
     try:
-        embedder = LocalEmbedder()
+        embedder = local_embedder()
         query_vec, telemetry = embedder.embed_query(query_text)
         log_embedding_usage(
             operation="recall_deep_query",
@@ -1501,6 +1590,14 @@ def recall_distant_memory(
         "memories": memories,
         "raw": result,
     }
+
+
+def local_embedder() -> LocalEmbedder:
+    global _LOCAL_EMBEDDER
+    with _LOCAL_EMBEDDER_LOCK:
+        if _LOCAL_EMBEDDER is None:
+            _LOCAL_EMBEDDER = LocalEmbedder()
+        return _LOCAL_EMBEDDER
 
 
 def should_consider_distant_recall(user_text: str) -> bool:
@@ -1694,6 +1791,34 @@ def format_embedding_summary_for_user(summary: dict[str, Any]) -> str:
 
 def format_embedding_summary(summary: dict[str, Any]) -> str:
     return "Embeddings: " + format_embedding_summary_for_user(summary)
+
+
+def format_memory_unit_repair_summary_for_log(summary: dict[str, Any]) -> str:
+    return (
+        f"requested:{summary.get('requested', 0)},"
+        f"completed:{summary.get('completed', 0)},"
+        f"failed:{summary.get('failed', 0)},"
+        f"units:{summary.get('units', 0)},"
+        f"embedding_appended:{summary.get('embedding_appended', 0)}"
+    )
+
+
+def format_memory_unit_repair_summary_for_user(summary: dict[str, Any]) -> str:
+    requested = int(summary.get("requested", 0) or 0)
+    if requested == 0:
+        return "0 needed"
+    base = (
+        f"{requested} requested, "
+        f"{summary.get('completed', 0)} completed, "
+        f"{summary.get('units', 0)} units repaired, "
+        f"{summary.get('failed', 0)} failed"
+    )
+    appended = int(summary.get("embedding_appended", 0) or 0)
+    if appended:
+        base += f", {appended} vector rows appended"
+    if summary.get("error"):
+        base += f" ({summary['error']})"
+    return base
 
 
 def promote_existing_archives(engine: memory_engine.MemoryEngine) -> dict[str, int]:

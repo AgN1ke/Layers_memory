@@ -98,6 +98,25 @@ impl PyMemoryEngine {
         dump_json(&runs, "pending sleep runs")
     }
 
+    fn pending_memory_unit_repairs(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let requests = run_without_gil(py, || self.inner.pending_memory_unit_repairs(session_id))?;
+        dump_json(&requests, "memory unit repair requests")
+    }
+
+    fn submit_memory_unit_repair_response(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        response_json: &str,
+    ) -> PyResult<String> {
+        let response: LlmResponse = parse_json(response_json, "memory unit repair response")?;
+        let updated = run_without_gil(py, || {
+            self.inner
+                .submit_memory_unit_repair_response(task_id, response)
+        })?;
+        dump_json(&updated, "memory unit repair result")
+    }
+
     fn cancel_sleep_run(&self, py: Python<'_>, sleep_task_id: &str) -> PyResult<String> {
         let run = run_without_gil(py, || self.inner.cancel_sleep_run(sleep_task_id))?;
         dump_json(&run, "sleep run")
