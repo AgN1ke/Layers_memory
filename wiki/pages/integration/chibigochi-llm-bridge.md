@@ -1,5 +1,13 @@
 # Chibigochi LLM Bridge
 
+## Related pages
+
+- [v0.3 acceptance](../releases/v0.3-acceptance.md) - host-conformance baseline before the Chibigochi bridge.
+- [Local development](local-development.md) - commands and local Godot/proxy setup.
+- [Architecture](../foundation/architecture.md) - adapter boundary and application responsibilities.
+- [LLM integration resources](llm-integration-resources.md) - model/key resources that a product bridge must provide.
+- [Roadmap](../planning/roadmap.md) - where Chibigochi/Godot work fits in the project plan.
+
 This document defines the current production-shaped LLM boundary for the
 Chibigochi Godot spike.
 

@@ -2,6 +2,21 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-07-05] link pass | Release and integration pages
+
+Added first-pass `Related pages` navigation blocks to release and integration
+pages:
+
+- `releases/v0.1-acceptance.md`;
+- `releases/v0.2-acceptance.md`;
+- `releases/v0.3-acceptance.md`;
+- `integration/local-development.md`;
+- `integration/llm-integration-resources.md`;
+- `integration/chibigochi-llm-bridge.md`.
+
+This pass connects acceptance documents, local setup, model resources, and the
+Godot/Chibigochi bridge without changing their underlying content.
+
 ## [2026-07-05] link pass | Foundation and planning pages
 
 Added first-pass `Related pages` navigation blocks to the core foundation and

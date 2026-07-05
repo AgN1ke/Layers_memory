@@ -1,5 +1,13 @@
 # LLM Integration Resources
 
+## Related pages
+
+- [Contracts](../foundation/contracts.md) - task and response shapes returned to the engine.
+- [Architecture](../foundation/architecture.md) - provider boundary and pull-based LLM task model.
+- [Configuration](../../../config/README.md) - example provider/model config shape.
+- [Provider landscape](../research/provider-landscape.md) - research behind provider choices.
+- [Contextual memory expansion](../research/contextual-memory-expansion-2026-07-05.md) - current plan that depends on query embeddings and model resources.
+
 ## Для чого існує цей документ
 
 Цей документ пояснює, які ресурси має надати програма, що вбудовує Memory

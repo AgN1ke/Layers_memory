@@ -5982,3 +5982,28 @@ Also added a matching maintenance entry to `wiki/log.md`.
 Continue in small batches. The next good batch is releases + integration:
 `v0.1/v0.2/v0.3 acceptance`, `local-development`, `llm-integration-resources`,
 and `chibigochi-llm-bridge`.
+
+## Entry 134 - 2026-07-05 - Release and integration wiki cross-links (Owner + Codex)
+
+**Context:**
+After the first wiki cross-link pass, the next small batch was the release and
+integration cluster. These pages are where future readers check what each
+release proved and how an embedding application provides local setup, model
+resources, and the Godot/Chibigochi bridge.
+
+**What changed:**
+Added first-pass `Related pages` blocks to:
+
+- `wiki/pages/releases/v0.1-acceptance.md`;
+- `wiki/pages/releases/v0.2-acceptance.md`;
+- `wiki/pages/releases/v0.3-acceptance.md`;
+- `wiki/pages/integration/local-development.md`;
+- `wiki/pages/integration/llm-integration-resources.md`;
+- `wiki/pages/integration/chibigochi-llm-bridge.md`.
+
+Also added a matching maintenance entry to `wiki/log.md`.
+
+**Next:**
+Continue with the research cluster in another small pass. Good candidates are
+the vector-memory documents and the contextual memory expansion note, because
+they now drive active implementation decisions.

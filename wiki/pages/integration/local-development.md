@@ -1,5 +1,13 @@
 # Local Development Environment
 
+## Related pages
+
+- [Project README](../../../README.md) - public entry point and basic commands.
+- [Configuration](../../../config/README.md) - provider/model config and local secret rules.
+- [LLM integration resources](llm-integration-resources.md) - model resources an embedding application must provide.
+- [v0.3 acceptance](../releases/v0.3-acceptance.md) - conformance checks this setup supports.
+- [Chibigochi LLM Bridge](chibigochi-llm-bridge.md) - local bridge/proxy path used by the Godot product loop.
+
 Цей документ потрібен для моделей або розробників, які відкривають проєкт без історії чату. Тут зафіксовано, що вже встановлено на цій машині, де воно лежить і якими командами перевіряти локальний цикл.
 
 Документ описує поточну Windows-машину користувача для `C:\Python_projects\Layers_memory`.
