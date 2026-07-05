@@ -5894,3 +5894,35 @@ Implement the provider/key documentation polish first if needed, then start
 Contextual Expansion Phase 1: the integrating application passes a query
 embedding, and the core adds at most a few relevant details when the ordinary
 memory package is too thin for the active topic.
+
+## Entry 131 - 2026-07-05 - LLM resource contract for integrators (Owner + Codex)
+
+**Context:**
+After Entry 130, the owner pointed out that "Telegram/Godot decides" is the
+wrong mental model. A transport or game surface does not choose memory resources;
+the application that embeds the library does. Developers need a concrete list of
+resources they must connect before Memory Engine can run in their product.
+
+**Decision:**
+Document the resource contract explicitly. Memory Engine remains provider-neutral
+and does not store keys or call provider APIs directly. The integrating
+application supplies model resources for strong semantic work, normal memory
+work, cheap/simple work, and optional local embeddings when vector memory is
+enabled.
+
+One text model may fill every text role for a simple product. A larger product
+may split roles across Gemini, GPT, Claude, DeepSeek, Kimi, local models, or
+other providers. The integration layer reads keys, calls provider APIs, handles
+timeouts/errors, and returns normalized results to the engine.
+
+**What changed in docs:**
+- Added `docs/llm-integration-resources.md`.
+- Linked it from `config/README.md`.
+- Linked it from
+  `docs/research/contextual-memory-expansion-2026-07-05.md`.
+
+**Next:**
+When provider work resumes, implement the documented generic provider layer:
+shared execution interface, config loading, examples for popular providers, and
+tests proving that model choice is integration configuration rather than memory
+logic.

@@ -10,6 +10,9 @@ or test modes. Those choices belong to the application that embeds the library.
 - `llm.example.toml` - example shape for choosing providers and model roles.
 - `local*.toml` - local files for real keys or personal testing. These files are ignored by git.
 
+For the full developer-facing resource contract, see
+[`docs/llm-integration-resources.md`](../docs/llm-integration-resources.md).
+
 ## Current Implementation Status
 
 The core library is provider-neutral. It emits work by role (`reasoning`,
