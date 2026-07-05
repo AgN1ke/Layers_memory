@@ -1,5 +1,16 @@
 # Контракти даних Memory Engine v0.1
 
+## Related pages
+
+- [Architecture](architecture.md) - conceptual boundaries behind these data
+  contracts.
+- [Strategy](strategy.md) - product-level principles these contracts protect.
+- [Vector storage implementation spec](../research/vector-storage-tz-2026-07-03.md)
+  - vector-specific contracts and payloads accepted after v0.3.
+- [LLM integration resources](../integration/llm-integration-resources.md) -
+  provider/model resources that execute LLM tasks outside the core.
+- [Roadmap](../planning/roadmap.md) - current and planned schema-impacting work.
+
 ## Для чого існує цей документ
 
 `wiki/pages/foundation/architecture.md` фіксує архітектурну форму Memory Engine: ядро системи, три шари пам'яті, PendingTask, recall, sleep, storage і адаптери.

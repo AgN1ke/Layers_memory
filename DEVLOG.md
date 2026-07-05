@@ -5958,3 +5958,27 @@ integration notes, governance notes, and research notes into `wiki/pages/`.
 Future project-text additions should go into the wiki and update both
 `wiki/index.md` and `wiki/log.md`. Behavior or compatibility changes still go to
 `HISTORY.md`; working-session notes still go to `DEVLOG.md`.
+
+## Entry 133 - 2026-07-05 - First wiki cross-link pass (Owner + Codex)
+
+**Context:**
+After the LLM-wiki migration, the owner asked to enrich the wiki gradually rather
+than trying to cross-link the whole documentation tree in one large pass. The
+goal is to make pages lead to related pages the way a real wiki does, while
+keeping each maintenance step small enough to review.
+
+**What changed:**
+Added first-pass `Related pages` blocks to the core foundation/planning cluster:
+
+- `wiki/pages/foundation/strategy.md`;
+- `wiki/pages/foundation/architecture.md`;
+- `wiki/pages/foundation/contracts.md`;
+- `wiki/pages/planning/roadmap.md`;
+- `wiki/pages/planning/audit-2026-06-10.md`.
+
+Also added a matching maintenance entry to `wiki/log.md`.
+
+**Next:**
+Continue in small batches. The next good batch is releases + integration:
+`v0.1/v0.2/v0.3 acceptance`, `local-development`, `llm-integration-resources`,
+and `chibigochi-llm-bridge`.

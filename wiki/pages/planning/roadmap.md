@@ -1,5 +1,19 @@
 # Roadmap Memory Engine
 
+## Related pages
+
+- [Strategy](../foundation/strategy.md) - long-term direction that drives the
+  roadmap.
+- [Architecture](../foundation/architecture.md) - implemented system shape and
+  boundaries.
+- [Contracts](../foundation/contracts.md) - schema/API surface affected by
+  roadmap items.
+- [Audit 2026-06-10](audit-2026-06-10.md) - cleanup queue that unblocked v0.3.
+- [Vector storage implementation spec](../research/vector-storage-tz-2026-07-03.md)
+  - accepted vector storage plan referenced by this roadmap.
+- [Multi-speaker geometry](../research/multi-speaker-geometry-2026-06-12.md) -
+  attribution work referenced by later phases.
+
 Цей документ — **жива дорожня карта** проєкту. Він не дублює стратегію (`wiki/pages/foundation/strategy.md`) чи архітектуру (`wiki/pages/foundation/architecture.md`). Він відповідає на одне питання: **куди ми йдемо і де зараз стоїмо**.
 
 Документ оновлюється у двох випадках: коли пункт стає зробленим (відмітка `[x]` + дата + посилання на коміт або файл), і коли з'являється нова велика мета, яку треба зафіксувати раніше реалізації. Дрібні правки і робочий процес живуть у `DEVLOG.md`, не тут.

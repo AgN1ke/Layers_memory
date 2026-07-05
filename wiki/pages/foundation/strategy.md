@@ -1,5 +1,18 @@
 # Стратегія окремого Memory Engine на Rust
 
+## Related pages
+
+- [Architecture](architecture.md) - concrete system boundaries and data flows
+  that implement this strategy.
+- [Contracts](contracts.md) - exact data shapes that turn the strategy into API
+  and storage contracts.
+- [Roadmap](../planning/roadmap.md) - current implementation state and planned
+  phases.
+- [Provider landscape](../research/provider-landscape.md) - research behind
+  model roles and provider choices.
+- [LLM integration resources](../integration/llm-integration-resources.md) -
+  resources an embedding application must provide.
+
 ## Для чого існує цей документ
 
 Цей документ описує стратегічний задум окремого проєкту Memory Engine. Його задача - зафіксувати намір, мотивацію, форму продукту і межі майбутньої розробки так, щоб на цій основі можна було створювати конкретні ТЗ, плани, контракти і задачі для коду.

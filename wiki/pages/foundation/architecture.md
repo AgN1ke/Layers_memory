@@ -1,5 +1,18 @@
 # Архітектура Memory Engine v0.2
 
+## Related pages
+
+- [Strategy](strategy.md) - why Memory Engine exists as a reusable Rust
+  library.
+- [Contracts](contracts.md) - exact schemas and file/API shapes implied by this
+  architecture.
+- [Roadmap](../planning/roadmap.md) - implementation state for v0.1/v0.2/v0.3
+  and deferred work.
+- [v0.3 acceptance](../releases/v0.3-acceptance.md) - conformance proof for
+  reusable adapters.
+- [Local development](../integration/local-development.md) - practical commands
+  for building and checking the architecture locally.
+
 ## Для чого існує цей документ
 
 Стратегія в `wiki/pages/foundation/strategy.md` пояснює задум: окрема Rust-бібліотека тришарової пам'яті, яка обслуговує кілька різних застосунків через тонкі адаптери. Архітектурний документ робить наступний крок. Він не дає Rust-коду і не дає точних JSON-схем. Він фіксує **межі**, на яких ми домовляємось перед першим рядком коду: які поняття існують, як вони називаються, як ядро системи спілкується з LLM, як працює recall, як влаштоване сховище, що вже увійшло у v0.1/v0.2 і що чесно відкладено на v0.3+.

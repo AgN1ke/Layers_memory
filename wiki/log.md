@@ -2,6 +2,20 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-07-05] link pass | Foundation and planning pages
+
+Added first-pass `Related pages` navigation blocks to the core foundation and
+planning pages:
+
+- `foundation/strategy.md`;
+- `foundation/architecture.md`;
+- `foundation/contracts.md`;
+- `planning/roadmap.md`;
+- `planning/audit-2026-06-10.md`.
+
+This pass focused on high-level navigation only. It did not rewrite the page
+content.
+
 ## [2026-07-05] restructure | Project docs moved into LLM wiki
 
 The project adopted an LLM-wiki structure for its written project knowledge.
