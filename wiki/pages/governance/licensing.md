@@ -1,5 +1,13 @@
 # Memory Engine Non-Commercial Public License
 
+## Related pages
+
+- [Project LICENSE](../../../LICENSE.md) - root license file shipped with the repository.
+- [Project README](../../../README.md) - public project entry point.
+- [Strategy](../foundation/strategy.md) - product and governance principles behind licensing choices.
+- [HISTORY](../../../HISTORY.md) - public record of behavior, compatibility, and trust-related changes.
+- [Security policy](../../../SECURITY.md) - vulnerability reporting and security expectations.
+
 Version 0.2
 
 Copyright (c) 2026 Mykyta Zagamula

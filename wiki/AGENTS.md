@@ -1,5 +1,13 @@
 # Memory Engine Wiki Rules
 
+## Related pages
+
+- [Wiki index](index.md) - main map of project knowledge pages.
+- [Wiki log](log.md) - chronological record of wiki maintenance operations.
+- [Project HISTORY](../HISTORY.md) - product-level behavior and compatibility log.
+- [DEVLOG](../DEVLOG.md) - working development diary.
+- [Strategy](pages/foundation/strategy.md) - project principles that wiki maintenance should preserve.
+
 ## Purpose
 
 This file is the schema for the project wiki. It tells future agents how to

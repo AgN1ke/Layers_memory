@@ -7,6 +7,12 @@ research, plans, audits, acceptance records, and integration notes. Operational
 files such as root README, HISTORY, DEVLOG, prompts, runtime README files, and
 crate/host README files stay outside the wiki.
 
+## Wiki Maintenance
+
+- [Wiki Rules](AGENTS.md) - maintenance schema for adding, moving, and linking
+  wiki pages.
+- [Wiki Log](log.md) - chronological log of wiki maintenance operations.
+
 ## Foundation
 
 - [Strategy](pages/foundation/strategy.md) - strategic intent, product

@@ -6052,3 +6052,22 @@ Also added a matching maintenance entry to `wiki/log.md`.
 Move to the last documentation navigation pass: governance/root operational
 documents and `wiki/index.md`, then check whether every wiki page has at least
 one path back to the index and one path toward its closest foundation/plan page.
+
+## Entry 137 - 2026-07-05 - Wiki shell and governance cross-links (Owner + Codex)
+
+**Context:**
+Foundation, planning, release, integration, and research pages already had a
+first navigation layer. The remaining wiki shell pages needed a small pass so
+future readers can move between the index, maintenance rules, maintenance log,
+and governance notes.
+
+**What changed:**
+- Added a `Wiki Maintenance` section to `wiki/index.md`.
+- Added `Related pages` to `wiki/AGENTS.md`.
+- Added `Related pages` to `wiki/log.md`.
+- Added `Related pages` to `wiki/pages/governance/licensing.md`.
+- Added a matching maintenance entry to `wiki/log.md`.
+
+**Next:**
+Run the final markdown link check and commit this as the closing batch of the
+first wiki navigation pass.

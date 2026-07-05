@@ -1,6 +1,24 @@
 # Memory Engine Wiki Log
 
+## Related pages
+
+- [Wiki index](index.md) - main map of project knowledge pages.
+- [Wiki rules](AGENTS.md) - maintenance schema this log follows.
+- [DEVLOG](../DEVLOG.md) - working development diary for broader context.
+
 This is the chronological maintenance log for the project wiki.
+
+## [2026-07-05] link pass | Wiki shell and governance
+
+Added navigation around the wiki shell and governance page:
+
+- `index.md` now links to wiki rules and the wiki log;
+- `AGENTS.md` links back to index, log, HISTORY, DEVLOG, and strategy;
+- `log.md` links back to index, rules, and DEVLOG;
+- `pages/governance/licensing.md` links to root license, README, strategy,
+  HISTORY, and SECURITY.
+
+This completes the first top-level wiki navigation pass.
 
 ## [2026-07-05] link pass | Remaining research pages
 
