@@ -5859,3 +5859,35 @@ The owner ran a long real Telegram conversation on clean memory. The system work
 
 **Next:**
 Merge the vector Phase B/gate branch after review, then decide the next design step for contextual expansion: short always-visible memory plus scarce detailed memories pulled by the core when the current topic needs them.
+
+## Entry 130 - 2026-07-05 - Contextual expansion plan and provider/key boundary (Owner + Codex)
+
+**Context:**
+After vector Phase B was merged, the owner clarified the product goal: the
+library should save tokens while still letting the assistant unfold detail when
+the current topic needs it. The owner also raised the packaging question: a user
+installing the library needs to know where keys go, how providers are selected,
+and whether Gemini is the only supported path.
+
+**Decision:**
+Contextual memory expansion will be core-side. The host may pass a query
+embedding for the current turn, but the engine decides whether to add scarce
+detail memories to the context package, deduplicates them against visible memory,
+and keeps them under the normal budget.
+
+Provider choice remains host-side. The core emits role-shaped work
+(`reasoning`, `balanced`, `fast`) and never stores API keys or chooses Google,
+OpenAI, Anthropic, DeepSeek, Kimi, or another provider. Current example hosts
+ship with Gemini executors; other providers require host executors that map the
+same roles to that provider's API and return the same normalized response shape.
+
+**What changed in docs:**
+- Added `docs/research/contextual-memory-expansion-2026-07-05.md`.
+- Updated `config/README.md` with current provider support, key locations, and
+  the host responsibility for provider/model selection.
+
+**Next:**
+Implement the provider/key documentation polish first if needed, then start
+Contextual Expansion Phase 1: host passes a query embedding, core adds at most a
+few relevant details when the ordinary memory package is too thin for the active
+topic.

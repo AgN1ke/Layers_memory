@@ -3,6 +3,12 @@
 #
 # This is only an example of the configuration shape. Do not put real keys
 # into this example file.
+#
+# Implementation note:
+# The Rust core is provider-neutral and can work with any host executor that
+# maps roles to provider API calls. The current included Telegram/Godot demo
+# executors are Gemini-based and read their keys from env/runtime cache. This
+# file records the intended generic provider shape for host applications.
 
 active_provider = "google"
 
