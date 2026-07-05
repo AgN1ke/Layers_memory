@@ -1,5 +1,13 @@
 # Мультимодальний І Голосовий Стек
 
+## Related pages
+
+- [Provider landscape](provider-landscape.md) - text-model provider research that pairs with this media research.
+- [LLM integration resources](../integration/llm-integration-resources.md) - resource contract for products that provide models to the library.
+- [Architecture](../foundation/architecture.md) - provider-neutral boundary for future media-capable applications.
+- [Chibigochi LLM Bridge](../integration/chibigochi-llm-bridge.md) - current Godot bridge shape that future voice/media work may extend.
+- [Roadmap](../planning/roadmap.md) - where deferred media work belongs.
+
 Огляд актуальний на 2026-04-04. Оновлено з конкретними моделями, цінами, latency, бенчмарками і порівняннями на основі офіційних docs і pricing pages провайдерів.
 
 ---

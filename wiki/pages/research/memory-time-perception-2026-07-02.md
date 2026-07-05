@@ -1,5 +1,13 @@
 # Відчуття часу в памʼяті: точний час свіжого, приблизний час старого (2026-07-02)
 
+## Related pages
+
+- [Architecture](../foundation/architecture.md) - time/source boundaries between core and embedding applications.
+- [Contracts](../foundation/contracts.md) - event/archive fields that carry timestamps.
+- [Roadmap](../planning/roadmap.md) - where time-label work sits relative to memory expansion.
+- [v0.2 acceptance](../releases/v0.2-acceptance.md) - living-memory lifecycle this time layer would enrich.
+- [Contextual memory expansion](contextual-memory-expansion-2026-07-05.md) - detail expansion that may use human-friendly time labels.
+
 ## Для чого існує цей документ
 
 Цей документ фіксує постановку власника проєкту, аналіз поточного стану Memory Engine проти коду (`prompt_view.rs`, `recall_stage1.rs`, `session_ops.rs`, контракти) і запропоноване рішення.

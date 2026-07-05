@@ -1,5 +1,13 @@
 # Агентивні Архітектури
 
+## Related pages
+
+- [Strategy](../foundation/strategy.md) - project principles for keeping memory decisions in the core.
+- [Architecture](../foundation/architecture.md) - current engine/host boundary used instead of a framework-owned agent loop.
+- [Contracts](../foundation/contracts.md) - task contracts that agent-like passes use.
+- [LLM integration resources](../integration/llm-integration-resources.md) - model roles an embedding application must provide.
+- [Provider landscape](provider-landscape.md) - provider and model research used by this note.
+
 Огляд актуальний на 2026-04-04. Оновлено з конкретними деталями по фреймворках, production-паттернах, протоколах і anti-patterns на основі офіційних docs, бенчмарків і engineering blog posts.
 
 ---

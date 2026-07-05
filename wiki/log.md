@@ -2,6 +2,19 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-07-05] link pass | Remaining research pages
+
+Added first-pass `Related pages` navigation blocks to the remaining research
+pages:
+
+- `research/agentic-architectures.md`;
+- `research/multimodal-media.md`;
+- `research/multi-speaker-geometry-2026-06-12.md`;
+- `research/memory-time-perception-2026-07-02.md`;
+- `research/history-discipline-reference.md`.
+
+This completes the first navigation pass over the current research cluster.
+
 ## [2026-07-05] link pass | Active vector and provider research
 
 Added first-pass `Related pages` navigation blocks to active research pages:

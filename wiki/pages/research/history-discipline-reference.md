@@ -1,5 +1,13 @@
 # MemPalace — History, Corrections, and Public Notices
 
+## Related pages
+
+- [Project HISTORY](../../../HISTORY.md) - this project's public compatibility and behavior log.
+- [DEVLOG](../../../DEVLOG.md) - working development record for decisions and review context.
+- [Strategy](../foundation/strategy.md) - project trust rules and public-claim discipline.
+- [Roadmap](../planning/roadmap.md) - planned work without benchmark claims.
+- [Wiki maintenance schema](../../AGENTS.md) - rules for maintaining this wiki.
+
 This file is the canonical record of post-launch corrections, public notices,
 and retractions that affect MemPalace's public claims. Newest first.
 

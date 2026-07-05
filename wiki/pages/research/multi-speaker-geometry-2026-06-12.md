@@ -1,5 +1,13 @@
 # Геометрія повідомлень і мультиспікерні сесії: проблема, дослідження, рішення (2026-06-12)
 
+## Related pages
+
+- [Architecture](../foundation/architecture.md) - session, scope, and host boundary this design must preserve.
+- [Contracts](../foundation/contracts.md) - event/session schema changes implied by multi-speaker attribution.
+- [Vector storage implementation TZ](vector-storage-tz-2026-07-03.md) - current vector gate that defers multi-speaker embedding.
+- [Roadmap](../planning/roadmap.md) - planned attribution work and its order.
+- [Audit 2026-06-10](../planning/audit-2026-06-10.md) - cleanup context before this deferred work.
+
 ## Для чого існує цей документ
 
 Цей документ фіксує постановку власника проєкту, результат дослідження поточного стану Memory Engine (за `wiki/pages/foundation/strategy.md`, `wiki/pages/planning/roadmap.md`, `audit-2026-06-10.md`, `DEVLOG.md`, `README.md`) і запропоноване рішення.

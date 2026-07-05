@@ -6029,3 +6029,26 @@ Also added a matching maintenance entry to `wiki/log.md`.
 Continue with the remaining research pages in another small pass: multi-speaker
 geometry, time perception, media/multimodal notes, agentic architectures, and
 history-discipline reference.
+
+## Entry 136 - 2026-07-05 - Remaining research wiki cross-links (Owner + Codex)
+
+**Context:**
+The active research pages already had first-pass wiki links. The remaining
+research pages still needed the same treatment so the research cluster would not
+split into connected and isolated documents.
+
+**What changed:**
+Added first-pass `Related pages` blocks to:
+
+- `wiki/pages/research/agentic-architectures.md`;
+- `wiki/pages/research/multimodal-media.md`;
+- `wiki/pages/research/multi-speaker-geometry-2026-06-12.md`;
+- `wiki/pages/research/memory-time-perception-2026-07-02.md`;
+- `wiki/pages/research/history-discipline-reference.md`.
+
+Also added a matching maintenance entry to `wiki/log.md`.
+
+**Next:**
+Move to the last documentation navigation pass: governance/root operational
+documents and `wiki/index.md`, then check whether every wiki page has at least
+one path back to the index and one path toward its closest foundation/plan page.
