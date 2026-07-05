@@ -5870,24 +5870,27 @@ installing the library needs to know where keys go, how providers are selected,
 and whether Gemini is the only supported path.
 
 **Decision:**
-Contextual memory expansion will be core-side. The host may pass a query
-embedding for the current turn, but the engine decides whether to add scarce
-detail memories to the context package, deduplicates them against visible memory,
-and keeps them under the normal budget.
+Contextual memory expansion will be core-side. The application that embeds the
+library may pass a query embedding for the current turn, but the engine decides
+whether to add scarce detail memories to the context package, deduplicates them
+against visible memory, and keeps them under the normal budget.
 
-Provider choice remains host-side. The core emits role-shaped work
-(`reasoning`, `balanced`, `fast`) and never stores API keys or chooses Google,
-OpenAI, Anthropic, DeepSeek, Kimi, or another provider. Current example hosts
-ship with Gemini executors; other providers require host executors that map the
-same roles to that provider's API and return the same normalized response shape.
+Provider choice belongs to the application that embeds the library. The core
+emits role-shaped work (`reasoning`, `balanced`, `fast`) and never stores API
+keys or chooses Google, OpenAI, Anthropic, DeepSeek, Kimi, or another provider.
+Current demo applications ship with Gemini executors; other providers require
+application executors that map the same roles to that provider's API and return
+the same normalized response shape. The minimum text setup is one capable model
+mapped to all text roles; a production setup may split strong, ordinary, and
+cheap work across different providers.
 
 **What changed in docs:**
 - Added `docs/research/contextual-memory-expansion-2026-07-05.md`.
 - Updated `config/README.md` with current provider support, key locations, and
-  the host responsibility for provider/model selection.
+  the integrating application's responsibility for provider/model selection.
 
 **Next:**
 Implement the provider/key documentation polish first if needed, then start
-Contextual Expansion Phase 1: host passes a query embedding, core adds at most a
-few relevant details when the ordinary memory package is too thin for the active
-topic.
+Contextual Expansion Phase 1: the integrating application passes a query
+embedding, and the core adds at most a few relevant details when the ordinary
+memory package is too thin for the active topic.

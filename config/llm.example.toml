@@ -5,10 +5,11 @@
 # into this example file.
 #
 # Implementation note:
-# The Rust core is provider-neutral and can work with any host executor that
-# maps roles to provider API calls. The current included Telegram/Godot demo
-# executors are Gemini-based and read their keys from env/runtime cache. This
-# file records the intended generic provider shape for host applications.
+# The Rust core is provider-neutral and can work with any integrating
+# application that maps model roles to provider API calls. The current included
+# Telegram/Godot demo applications use Gemini executors and read their keys from
+# env/runtime cache. This file records the intended generic provider shape for
+# applications that embed the library.
 
 active_provider = "google"
 
@@ -19,7 +20,7 @@ memory_dir = "memory"
 [providers.openai]
 enabled = false
 api_key_env = "OPENAI_API_KEY"
-# api_key = "" # local-only option if the host project allows direct test keys
+# api_key = "" # local-only option if the application allows direct test keys
 
 [providers.google]
 enabled = true
@@ -52,3 +53,8 @@ model = "put-balanced-model-name-here"
 [model_roles.fast]
 provider = "google"
 model = "put-fast-cheap-model-name-here"
+
+# Optional. Required only when vector memory is enabled.
+[embedding]
+provider = "local"
+model = "fastembed-compatible-model-name-here"

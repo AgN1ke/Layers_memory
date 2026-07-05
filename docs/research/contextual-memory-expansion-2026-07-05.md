@@ -14,13 +14,16 @@ of detailed memories related to that topic.
 
 Contextual memory expansion is a core-side feature.
 
-The host may provide a query embedding for the current turn. The engine then
-decides whether there are high-confidence detailed memories worth adding to the
-context package. Those details must be scarce, deduplicated against already
-visible memory, and counted inside the normal context budget.
+The application that embeds the library may provide a query embedding for the
+current turn. The engine then decides whether there are high-confidence detailed
+memories worth adding to the context package. Those details must be scarce,
+deduplicated against already visible memory, and counted inside the normal
+context budget.
 
-This keeps the host thin. Telegram, Godot, or another product should not each
-invent their own rules for when a Core fact needs supporting memory.
+This keeps memory policy inside the library. A chat app, game, web product, or
+other interface is only the surface; the actual integrating program supplies
+model resources and calls the library, while the library decides how memory is
+shaped.
 
 ## User-Facing Meaning
 
@@ -37,33 +40,46 @@ Example: Core may say "the user has a cat named Irzha". When the current topic
 is Irzha, the engine may add a few detailed memory units about Irzha's coloring,
 the naming story, or earlier discussion around her.
 
-## Provider and Key Boundary
+## LLM Resource Contract
 
 The Rust core does not own provider keys and does not choose Google, OpenAI,
 Anthropic, DeepSeek, or any other vendor.
 
-The core only says what kind of work it needs:
+The library must make its needs clear to the program that embeds it. The
+integrating program provides model resources for these roles:
 
-- reasoning: harder semantic work, validation, reflection, repair;
-- balanced: ordinary sleep passes, chat host defaults, moderate semantic work;
-- fast: cheap/simple work and embedding tasks where the host supports them.
+- reasoning: stronger model for validation, reflection, contradiction checks,
+  and repair;
+- balanced: normal semantic work such as sleep passes and ordinary memory
+  shaping;
+- fast: cheap/simple model for lightweight passes when the product wants to
+  save cost;
+- embedding: optional local embedding resource, required only when vector
+  features are enabled.
 
-The host maps those roles to concrete providers and model names.
+These are roles, not vendors. The same product may map them to any provider mix.
+One model may fill several roles if the product owner wants a simpler setup.
 
-For example, one host may map:
+For example, one integrating program may map:
 
 - reasoning -> Anthropic Claude;
 - balanced -> Gemini Flash;
 - fast -> DeepSeek or a small OpenAI model.
 
-Another host may map all three roles to Gemini. Both are valid as long as the
-host returns the expected response shape to the engine.
+Another program may map reasoning to DeepSeek, balanced to GPT, and fast to
+Gemini. Another may map all three text roles to one Gemini model. All are valid
+as long as the program returns the expected response shape to the engine.
+
+The minimum text setup is one capable model mapped to all text roles. The
+recommended production setup is at least one stronger model for reasoning and
+one cheaper model for routine work. The embedding resource is separate and is
+not needed when vector memory is disabled.
 
 ## Where Keys Live
 
-Keys live in the host application or local environment.
+Keys live in the integrating application or local environment.
 
-For the current Telegram development host:
+For the current Telegram development application:
 
 - GUI/dev harness stores keys in
   `hosts/telegram_gemini_bot/runtime/state/secrets.local.json`;
@@ -72,16 +88,18 @@ For the current Telegram development host:
 - the `/models` command shows the active role-to-model mapping.
 
 For a future packaged product, the product must provide its own settings UI or
-configuration file. The library should document the required roles and response
-contracts, then let the host decide how users enter keys.
+configuration file. The library documents the required roles and response
+contracts; the integrating program decides how users enter keys and which
+providers fill each role.
 
 ## Current Limitation
 
-The example hosts currently implement Gemini execution paths. The core is
-provider-agnostic, and `config/llm.example.toml` already shows the intended
-provider shape for OpenAI, Google, Anthropic, Kimi, and DeepSeek.
+The included demo applications currently implement Gemini execution paths. The
+core is provider-agnostic, and `config/llm.example.toml` already shows the
+intended provider shape for OpenAI, Google, Anthropic, Kimi, and DeepSeek.
 
-Supporting GPT, Claude, DeepSeek, or another provider is host work:
+Supporting GPT, Claude, DeepSeek, or another provider means adding an executor
+in the integrating program:
 
 1. read the user's key securely;
 2. map `reasoning`, `balanced`, and `fast` roles to provider model names;
@@ -94,15 +112,16 @@ The memory logic should not change for each provider.
 
 ### Step 1 - Documented Config Contract
 
-Add a short host-facing provider contract:
+Add a short integrator-facing provider contract:
 
 - required roles: reasoning, balanced, fast;
 - optional embedding provider, with local embedding as the recommended default;
 - key sources: environment variables, ignored local config, or product UI;
 - normalized output expected by the engine.
 
-Acceptance: a new host author can tell where keys go and how to choose models
-without reading the Telegram bot code.
+Acceptance: a new application author can tell what model resources the library
+needs, where keys go, and how to choose providers without reading the Telegram
+demo code.
 
 ### Step 2 - Contextual Expansion Phase 1
 
@@ -141,14 +160,15 @@ Acceptance:
 
 Do not move provider keys into the Rust core.
 
-Do not make every host inject its own expansion text into the prompt.
+Do not make every integrating program inject its own expansion text into the
+prompt.
 
 Do not start Phase 2 storage changes before Phase 1 proves the behavior with the
 existing memory-unit vector index.
 
 ## Next Concrete Work
 
-First implement Step 1 as documentation and small host cleanup if needed.
+First implement Step 1 as documentation and small integration cleanup if needed.
 
 Then implement Step 2 on a feature branch with deterministic conformance before
-running it in Telegram.
+running it through the included Telegram demo application.
