@@ -66,6 +66,19 @@ pub(super) fn validate_core_context_request(request: &CoreContextRequest) -> Res
         ));
     }
 
+    if let Some(embedding) = request.query_embedding.as_ref() {
+        if embedding.model_id.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "core context request query_embedding.model_id must not be empty".to_string(),
+            ));
+        }
+        if embedding.query_vec.is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "core context request query_embedding.query_vec must not be empty".to_string(),
+            ));
+        }
+    }
+
     Ok(())
 }
 

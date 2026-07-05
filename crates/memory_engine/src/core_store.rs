@@ -139,6 +139,8 @@ pub struct CoreContextRequest {
     pub core_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_embedding: Option<CoreContextQueryEmbedding>,
     #[serde(default)]
     pub recall_limit: usize,
     #[serde(default)]
@@ -157,6 +159,12 @@ pub struct CoreContextRequest {
     /// instead of rendering wrong ones.
     #[serde(default)]
     pub clock_untrusted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoreContextQueryEmbedding {
+    pub model_id: String,
+    pub query_vec: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

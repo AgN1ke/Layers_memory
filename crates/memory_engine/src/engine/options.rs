@@ -105,6 +105,8 @@ pub struct VectorConfig {
     pub deep_recall_min_sim: f32,
     pub deep_recall_recency_weight: f32,
     pub deep_recall_unit_weight: f32,
+    pub contextual_expansion_top_k: usize,
+    pub contextual_expansion_min_sim: f32,
 }
 
 impl Default for RecallStage1Config {
@@ -198,6 +200,8 @@ impl Default for VectorConfig {
             deep_recall_min_sim: 0.30,
             deep_recall_recency_weight: 0.10,
             deep_recall_unit_weight: 0.10,
+            contextual_expansion_top_k: 3,
+            contextual_expansion_min_sim: 0.45,
         }
     }
 }

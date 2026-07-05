@@ -1975,6 +1975,7 @@ def context_package(
     chat_id: int,
     text: str,
 ) -> dict[str, Any]:
+    query_embedding = maybe_context_query_embedding(engine, session_id, text)
     request = {
         "schema_version": "core_context_request.v1",
         "session_id": session_id,
@@ -1991,9 +1992,42 @@ def context_package(
         "include_core": True,
         "utc_offset_minutes": local_utc_offset_minutes(),
     }
+    if query_embedding is not None:
+        request["query_embedding"] = query_embedding
     package = json.loads(engine.core_context_package(json.dumps(request, ensure_ascii=False)))
     log_context_budget(package, session_id)
     return package
+
+
+def maybe_context_query_embedding(
+    engine: memory_engine.MemoryEngine,
+    session_id: str,
+    text: str,
+) -> dict[str, Any] | None:
+    if not text.strip():
+        return None
+    try:
+        if not distant_recall_scope_ready(engine, session_id):
+            return None
+        embedder = local_embedder()
+        query_vec, telemetry = embedder.embed_query(text)
+        log_embedding_usage(
+            operation="contextual_expansion_query",
+            model_id=telemetry.model_id,
+            dim=telemetry.dim,
+            count=1,
+            duration_ms=telemetry.duration_ms,
+            telemetry={"scope": session_id, "query_hash": text_hash(text)},
+        )
+        return {
+            "model_id": DEFAULT_EMBEDDING_MODEL,
+            "query_vec": query_vec,
+        }
+    except LocalEmbedderUnavailable as err:
+        log_line(f"contextual expansion embedding unavailable session={session_id}: {err}")
+    except Exception as err:
+        log_exception("contextual expansion embedding failed", err)
+    return None
 
 
 def local_utc_offset_minutes() -> int:

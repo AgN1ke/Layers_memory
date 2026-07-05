@@ -8,6 +8,20 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-07-05] content update | Contextual memory expansion Phase 1
+
+Updated wiki pages for the implemented first phase of contextual memory
+expansion:
+
+- `foundation/contracts.md` documents optional
+  `CoreContextRequest.query_embedding`;
+- `research/contextual-memory-expansion-2026-07-05.md` marks Step 1 and Step 2
+  as implemented and leaves Core-fact anchors as the next step;
+- `planning/roadmap.md` marks vector Phase B and contextual expansion Phase 1 as
+  complete.
+
+The matching behavior and contract change is recorded in root `HISTORY.md`.
+
 ## [2026-07-05] page added | Wiki home
 
 Added `README.md` as the first page to read inside the wiki. The page explains

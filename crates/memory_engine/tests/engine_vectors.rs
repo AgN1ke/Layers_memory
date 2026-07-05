@@ -1,12 +1,14 @@
 use memory_engine::archive::{
     ArchiveEntry, ArchiveStatus, FidelityStatus, MemoryUnit, MemoryUnitStatus,
 };
+use memory_engine::core_store::{CoreContextQueryEmbedding, CoreContextRequest};
 use memory_engine::event::IngestEvent;
 use memory_engine::llm::LlmResponse;
 use memory_engine::storage::Storage;
 use memory_engine::tasks::TaskType;
 use memory_engine::types::{
-    EVENT_SCHEMA_VERSION, FORGET_REVIEW_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION,
+    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, FORGET_REVIEW_RESULT_SCHEMA_VERSION,
+    MEMORY_UNIT_SCHEMA_VERSION,
 };
 use memory_engine::vector::{
     DeepRecallQuery, EmbedBatchResult, EmbedBatchVector, VectorScopeStatus, DEFAULT_VECTOR_DIM,
@@ -352,6 +354,126 @@ fn deep_recall_score_uses_recency_weight_and_top_k() {
     fs::remove_dir_all(root).ok();
 }
 
+#[test]
+fn core_context_package_expands_with_vector_detail_when_query_embedding_is_present() {
+    let root = unique_temp_dir("vectors_context_expansion");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+
+    create_archive_with_units_named(
+        &engine,
+        "vector_scope",
+        "current_topic",
+        "The current visible topic is garden planning.",
+        vec![("The current visible topic is garden planning.", 0.7)],
+    );
+    create_archive_with_units_named(
+        &engine,
+        "vector_scope",
+        "irzha_detail",
+        "Irzha detail.",
+        vec![(
+            "Irzha is a tortoiseshell cat with black fur and rusty orange patches.",
+            0.9,
+        )],
+    );
+    engine
+        .set_vector_scope("vector_scope", true, false)
+        .expect("enable vectors");
+    let requests = engine
+        .pending_embedding_backfill("vector_scope")
+        .expect("pending embedding backfill");
+    submit_embeddings(&engine, &requests[0], vec![0, 1]);
+
+    let without_embedding = engine
+        .core_context_package(CoreContextRequest {
+            recall_limit: 1,
+            query_text: Some("garden planning".to_string()),
+            ..context_request("vector_scope", None)
+        })
+        .expect("context without embedding");
+    assert_eq!(without_embedding.archive_relevant.len(), 1);
+    assert!(!without_embedding.archive_relevant[0]
+        .tags
+        .iter()
+        .any(|tag| tag == "contextual_expansion"));
+
+    let with_embedding = engine
+        .core_context_package(CoreContextRequest {
+            recall_limit: 1,
+            query_text: Some("garden planning".to_string()),
+            query_embedding: Some(CoreContextQueryEmbedding {
+                model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+                query_vec: unit_vector(DEFAULT_VECTOR_DIM, 1),
+            }),
+            ..context_request("vector_scope", None)
+        })
+        .expect("context with embedding");
+
+    assert_eq!(with_embedding.archive_relevant.len(), 2);
+    assert_eq!(
+        with_embedding.archive_relevant[0].compact_memory.as_deref(),
+        Some("Irzha is a tortoiseshell cat with black fur and rusty orange patches.")
+    );
+    assert!(with_embedding.archive_relevant[0]
+        .tags
+        .iter()
+        .any(|tag| tag == "contextual_expansion"));
+    assert!(with_embedding
+        .notes
+        .iter()
+        .any(|note| note.contains("contextual memory expansion added 1")));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn core_context_package_skips_contextual_detail_already_visible_in_long_memory() {
+    let root = unique_temp_dir("vectors_context_expansion_dedup");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+
+    create_archive_with_units(
+        &engine,
+        "vector_scope",
+        vec![(
+            "Irzha is a tortoiseshell cat with rusty orange patches.",
+            0.9,
+        )],
+    );
+    engine
+        .set_vector_scope("vector_scope", true, false)
+        .expect("enable vectors");
+    let requests = engine
+        .pending_embedding_backfill("vector_scope")
+        .expect("pending embedding backfill");
+    submit_embedding(&engine, &requests[0], 1);
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            recall_limit: 1,
+            query_text: Some("Irzha tortoiseshell rusty orange patches".to_string()),
+            query_embedding: Some(CoreContextQueryEmbedding {
+                model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+                query_vec: unit_vector(DEFAULT_VECTOR_DIM, 1),
+            }),
+            ..context_request("vector_scope", None)
+        })
+        .expect("context with visible long memory");
+
+    assert_eq!(package.archive_relevant.len(), 1);
+    assert!(!package.archive_relevant[0]
+        .tags
+        .iter()
+        .any(|tag| tag == "contextual_expansion"));
+    assert!(package
+        .notes
+        .iter()
+        .any(|note| note.contains("contextual memory expansion found only already-visible")));
+
+    fs::remove_dir_all(root).ok();
+}
+
 fn create_archive_with_units(
     engine: &MemoryEngine<FileStorage>,
     session_id: &str,
@@ -372,18 +494,48 @@ fn create_archive_with_units_at(
     session_id: &str,
     units: Vec<(&str, f64, &str)>,
 ) -> Vec<String> {
+    create_archive_with_units_named_at(engine, session_id, session_id, "Test archive.", units)
+}
+
+fn create_archive_with_units_named(
+    engine: &MemoryEngine<FileStorage>,
+    session_id: &str,
+    archive_suffix: &str,
+    gist: &str,
+    units: Vec<(&str, f64)>,
+) -> Vec<String> {
+    create_archive_with_units_named_at(
+        engine,
+        session_id,
+        archive_suffix,
+        gist,
+        units
+            .into_iter()
+            .map(|(thesis, weight)| (thesis, weight, "2020-01-01T10:00:00Z"))
+            .collect(),
+    )
+}
+
+fn create_archive_with_units_named_at(
+    engine: &MemoryEngine<FileStorage>,
+    session_id: &str,
+    archive_suffix: &str,
+    gist: &str,
+    units: Vec<(&str, f64, &str)>,
+) -> Vec<String> {
     let event = ingest_user_event(engine, session_id, "Hello memory.");
     let archive_time = units
         .first()
         .map(|(_, _, created_at)| (*created_at).to_string())
         .unwrap_or_else(|| "2020-01-01T10:00:00Z".to_string());
+    let archive_id = format!("archive_{archive_suffix}");
     let unit_values = units
         .into_iter()
         .enumerate()
         .map(|(index, (thesis, weight, created_at))| MemoryUnit {
             schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
-            memory_unit_id: format!("mu_{session_id}_{index}"),
-            archive_id: format!("archive_{session_id}"),
+            memory_unit_id: format!("mu_{archive_suffix}_{index}"),
+            archive_id: archive_id.clone(),
             source_session_id: session_id.to_string(),
             created_at: created_at.to_string(),
             updated_at: created_at.to_string(),
@@ -400,7 +552,7 @@ fn create_archive_with_units_at(
         .collect::<Vec<_>>();
     let archive = ArchiveEntry {
         schema_version: "archive_entry.v1".to_string(),
-        archive_id: format!("archive_{session_id}"),
+        archive_id,
         created_at: archive_time.clone(),
         updated_at: archive_time.clone(),
         source_session_id: session_id.to_string(),
@@ -411,8 +563,8 @@ fn create_archive_with_units_at(
         },
         theme: None,
         tags: Vec::new(),
-        gist: "Test archive.".to_string(),
-        narrative: "Test archive.".to_string(),
+        gist: gist.to_string(),
+        narrative: gist.to_string(),
         compact_memory: Some(
             unit_values
                 .iter()
@@ -553,6 +705,27 @@ fn deep_query(scope: &str, query_vec: Vec<f32>, top_k: usize, min_sim: f32) -> D
         top_k,
         min_sim,
         now: Some("2020-07-01T00:00:00Z".to_string()),
+    }
+}
+
+fn context_request(scope: &str, query_vec: Option<Vec<f32>>) -> CoreContextRequest {
+    CoreContextRequest {
+        schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+        session_id: scope.to_string(),
+        domain_state: json!({ "current_text": "Tell me about the current topic." }),
+        core_scope: Some(scope.to_string()),
+        query_text: Some("Tell me about the current topic.".to_string()),
+        query_embedding: query_vec.map(|query_vec| CoreContextQueryEmbedding {
+            model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+            query_vec,
+        }),
+        recall_limit: 0,
+        session_recent_limit: 0,
+        session_trace_event_limit: 0,
+        include_core: false,
+        token_budget: None,
+        utc_offset_minutes: 0,
+        clock_untrusted: false,
     }
 }
 

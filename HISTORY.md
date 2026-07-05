@@ -46,6 +46,37 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-05 - Context packages can expand active-topic detail from vectors
+
+Context. Vector storage already supported explicit distant recall. The owner
+clarified the product goal: keep the ordinary memory context small while adding
+specific detail when the active topic calls for it.
+
+**What changed:**
+- `core_context_request.v1` accepts optional `query_embedding` with `model_id`
+  and `query_vec`.
+- When `query_embedding` is present, `engine.core_context_package` can pull a
+  small number of high-confidence memory-unit details from the ready vector
+  scope into `archive_relevant`.
+- Contextual expansion items are deduplicated against visible Core, recent
+  session, trace, and ordinary archive memory, then passed through the existing
+  context budget.
+- The Telegram development host now supplies a query embedding when the chat
+  vector scope is ready and the local embedder is available.
+
+**What is retracted:**
+- Nothing.
+
+**What is still true:**
+- The Rust core remains provider-agnostic. Hosts provide vectors; the core
+  shapes memory.
+- Without `query_embedding`, existing context-package behavior is unchanged.
+- Vector storage remains opt-in and disabled by default.
+
+**What we are doing:**
+- Observe Phase 1 on real chat data before adding Core-fact vector anchors in
+  contextual expansion Phase 2.
+
 ## 2026-07-05 - Project documentation moved into `wiki/`
 
 Project knowledge was reorganized into an LLM-wiki structure. The old `docs/`

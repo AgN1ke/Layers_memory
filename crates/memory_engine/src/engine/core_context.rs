@@ -202,7 +202,7 @@ impl<S: Storage> MemoryEngine<S> {
             include_core: false,
             explain: false,
         })?;
-        let archive_relevant = recall_result.items;
+        let mut archive_relevant = recall_result.items;
 
         let (core_facts, core_read_warnings) = if request.include_core {
             self.core_context_facts(request.core_scope.as_deref())?
@@ -220,6 +220,21 @@ impl<S: Storage> MemoryEngine<S> {
         };
         notes.extend(recall_result.notes);
         notes.extend(storage_warning_notes(&core_read_warnings));
+        let (expansion_items, expansion_notes) = self.contextual_expansion_items(
+            &request,
+            &created_at,
+            &core_facts,
+            &session_recent,
+            &session_trace,
+            &archive_relevant,
+        )?;
+        if !expansion_items.is_empty() {
+            archive_relevant = expansion_items
+                .into_iter()
+                .chain(archive_relevant)
+                .collect::<Vec<_>>();
+        }
+        notes.extend(expansion_notes);
 
         let budget_config = request
             .token_budget
@@ -318,6 +333,133 @@ impl<S: Storage> MemoryEngine<S> {
         });
         Ok((facts, warnings))
     }
+
+    fn contextual_expansion_items(
+        &self,
+        request: &CoreContextRequest,
+        created_at: &str,
+        core_facts: &[CoreContextFact],
+        session_recent: &[CoreContextEvent],
+        session_trace: &[CoreContextEvent],
+        archive_relevant: &[RecallItem],
+    ) -> Result<(Vec<RecallItem>, Vec<String>)> {
+        let Some(embedding) = request.query_embedding.as_ref() else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+
+        let scope = request.core_scope.as_deref().unwrap_or(&request.session_id);
+        let result = self.recall_deep(DeepRecallQuery {
+            scope: scope.to_string(),
+            query_vec: embedding.query_vec.clone(),
+            model_id: embedding.model_id.clone(),
+            top_k: self.options.vectors.contextual_expansion_top_k,
+            min_sim: self.options.vectors.contextual_expansion_min_sim,
+            now: Some(created_at.to_string()),
+        })?;
+
+        if !result.found {
+            return Ok((
+                Vec::new(),
+                result
+                    .reason
+                    .map(|reason| format!("contextual memory expansion skipped: {reason}."))
+                    .into_iter()
+                    .collect(),
+            ));
+        }
+
+        let mut visible =
+            visible_memory_texts(core_facts, session_recent, session_trace, archive_relevant);
+        let mut items = Vec::new();
+        let mut seen_units = HashSet::new();
+        for hit in result.hits {
+            let normalized_thesis = normalize_match_text(&hit.thesis);
+            if normalized_thesis.is_empty()
+                || visible
+                    .iter()
+                    .any(|text| text.contains(normalized_thesis.as_str()))
+                || !seen_units.insert(hit.memory_unit_id.clone())
+            {
+                continue;
+            }
+            visible.push(normalized_thesis);
+            items.push(contextual_expansion_recall_item(hit, scope));
+        }
+
+        let notes = if items.is_empty() {
+            vec!["contextual memory expansion found only already-visible detail.".to_string()]
+        } else {
+            vec![format!(
+                "contextual memory expansion added {} detail memory item(s).",
+                items.len()
+            )]
+        };
+
+        Ok((items, notes))
+    }
+}
+
+fn contextual_expansion_recall_item(hit: DeepRecallHit, scope: &str) -> RecallItem {
+    RecallItem {
+        source_layer: RecallSourceLayer::Archive,
+        id: hit.memory_unit_id.clone(),
+        gist: hit.thesis.clone(),
+        compact_memory: Some(hit.thesis.clone()),
+        narrative: None,
+        facts: Vec::new(),
+        quotes: Vec::new(),
+        source_session_id: Some(scope.to_string()),
+        time_range: Some(TimeRange {
+            start: hit.created_at.clone(),
+            end: hit.created_at.clone(),
+        }),
+        tags: vec![
+            "contextual_expansion".to_string(),
+            "vector_recall".to_string(),
+        ],
+        theme: None,
+        weight: 1.0,
+        freshness: 1.0,
+        relevance_score: hit.score as f64,
+        relevance_explanation: Some(format!("contextual vector expansion sim={:.3}", hit.sim)),
+    }
+}
+
+fn visible_memory_texts(
+    core_facts: &[CoreContextFact],
+    session_recent: &[CoreContextEvent],
+    session_trace: &[CoreContextEvent],
+    archive_relevant: &[RecallItem],
+) -> Vec<String> {
+    let mut texts = Vec::new();
+    texts.extend(
+        core_facts
+            .iter()
+            .map(|fact| normalize_match_text(&fact.text)),
+    );
+    texts.extend(
+        session_recent
+            .iter()
+            .filter_map(|event| event.text.as_deref())
+            .map(normalize_match_text),
+    );
+    texts.extend(
+        session_trace
+            .iter()
+            .filter_map(|event| event.text.as_deref())
+            .map(normalize_match_text),
+    );
+    for item in archive_relevant {
+        texts.push(normalize_match_text(&item.gist));
+        if let Some(compact) = item.compact_memory.as_deref() {
+            texts.push(normalize_match_text(compact));
+        }
+        if let Some(narrative) = item.narrative.as_deref() {
+            texts.push(normalize_match_text(narrative));
+        }
+        texts.extend(item.facts.iter().map(|fact| normalize_match_text(fact)));
+    }
+    texts.into_iter().filter(|text| !text.is_empty()).collect()
 }
 
 fn timestamp_is_future(timestamp: &str, reference_at: &str) -> bool {

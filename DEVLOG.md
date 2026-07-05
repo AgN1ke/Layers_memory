@@ -6117,3 +6117,43 @@ operational roles outside the wiki.
 **Next:**
 Keep `wiki/README.md` short and update it only when the high-level project state
 changes.
+
+## Entry 140 - 2026-07-05 - Contextual memory expansion Phase 1 (Owner + Codex)
+
+**Context:**
+After the vector-storage live tests, the owner clarified the product behavior:
+short Core facts should stay cheap, while a current topic can unfold a few
+specific details from long memory when those details are useful for the reply.
+
+**What changed:**
+- Added optional `CoreContextRequest.query_embedding`.
+- Added core-side contextual expansion inside `core_context_package`: when a
+  query embedding is present, the engine searches the ready vector scope,
+  removes details already visible in the package, and inserts scarce detail
+  memories into `archive_relevant` before the normal context budget is applied.
+- Added `VectorConfig.contextual_expansion_top_k` and
+  `contextual_expansion_min_sim`.
+- Updated the Telegram development host to provide a current-turn query
+  embedding when the local vector scope is ready.
+- Added deterministic tests for expansion and visible-memory dedup.
+- Updated contracts, HISTORY, roadmap, and the contextual-expansion research
+  note.
+
+**Decision:**
+Phase 1 uses the existing memory-unit vector index. Core-fact vector anchors
+remain the next phase after this behavior is observed on real chat data.
+
+**Verification:**
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `crates/python_adapter/.venv/Scripts/python.exe -m pytest crates/python_adapter/tests -q`
+- `python tools/check_wiki_links.py --wiki-related-pages`
+- host conformance: `direct`, `direct-vectors`, `direct-forced-recall`,
+  `direct-multispeaker`, `telegram-local`, `telegram-distant-gate`,
+  `godot-headless`, `chibigochi-spike`, `chibigochi-ui`,
+  `chibigochi-llm-bridge`, `chibigochi-product-loop`
+
+**Next:**
+Use a short Telegram check on a ready vector scope to watch whether the package
+gains useful detail around active topics without flooding the prompt. If that
+holds, move to contextual expansion Phase 2 with Core-fact vector anchors.

@@ -123,6 +123,8 @@ The memory logic should not change for each provider.
 
 ### Step 1 - Documented Config Contract
 
+Status: implemented in `wiki/pages/integration/llm-integration-resources.md`.
+
 Add a short integrator-facing provider contract:
 
 - required roles: reasoning, balanced, fast;
@@ -135,6 +137,8 @@ needs, where keys go, and how to choose providers without reading the Telegram
 demo code.
 
 ### Step 2 - Contextual Expansion Phase 1
+
+Status: implemented on 2026-07-05.
 
 Add `query_embedding` to the context request path and keep behavior unchanged
 when it is absent.
@@ -152,6 +156,19 @@ Acceptance:
 - query where Core/long memory already covers the detail -> nothing extra is
   added;
 - unrelated query -> nothing extra is added.
+
+Implementation notes:
+
+- `CoreContextRequest.query_embedding` carries the current-turn embedding and
+  model id.
+- The engine searches the existing memory-unit vector index with
+  `VectorConfig.contextual_expansion_min_sim` and
+  `VectorConfig.contextual_expansion_top_k`.
+- Returned memories are inserted into `archive_relevant` with
+  `contextual_expansion` and `vector_recall` tags, then the normal context
+  budget is applied.
+- The Telegram development host sends a query embedding only when the current
+  chat scope has a ready vector index and the local embedder is available.
 
 ### Step 3 - Core-Anchored Expansion Phase 2
 
@@ -179,7 +196,6 @@ existing memory-unit vector index.
 
 ## Next Concrete Work
 
-First implement Step 1 as documentation and small integration cleanup if needed.
-
-Then implement Step 2 on a feature branch with deterministic conformance before
-running it through the included Telegram demo application.
+Next implement Step 3 after Phase 1 is observed on real chat data. The first
+signal to watch is whether direct memory-unit expansion gives enough useful
+detail around active topics before adding Core fact anchors.

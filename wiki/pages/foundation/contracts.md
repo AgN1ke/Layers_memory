@@ -738,6 +738,10 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
   },
   "core_scope": "telegram_311422683",
   "query_text": "літаки",
+  "query_embedding": {
+    "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "query_vec": [0.01, -0.02, 0.03]
+  },
   "recall_limit": 5,
   "session_recent_limit": 40,
   "session_trace_event_limit": 120,
@@ -754,6 +758,8 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
 ```
 
 `domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
+
+`query_embedding` необовʼязковий. Якщо інтегруюча програма передає вектор поточного запиту, ядро може додати до `archive_relevant` кілька детальних спогадів із готового vector scope. Ці деталі проходять дедуплікацію проти вже видимої памʼяті й рахуються в тому самому `token_budget`. Якщо поле відсутнє, пакет контексту збирається звичайним шляхом.
 
 `utc_offset_minutes` (default `0`) — локальний зсув хоста для календарних часових міток у prompt view («вчора» — локальне поняття, сховище лишається в UTC). `clock_untrusted` (default `false`) — хост може позначити свій годинник ненадійним; тоді prompt view опускає часові мітки замість рендерити хибні. Відносні мітки ніколи не зберігаються у файлах — вони обчислюються при рендері з абсолютних timestamp-ів і `created_at` пакета, тому не «гниють» після простою.
 
