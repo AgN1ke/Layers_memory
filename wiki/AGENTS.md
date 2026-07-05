@@ -62,6 +62,12 @@ When editing an existing page:
 5. Do not move provider keys, runtime memory, or generated artifacts into the
    wiki.
 
+After wiki link edits, run:
+
+```powershell
+python tools/check_wiki_links.py --wiki-related-pages
+```
+
 ## Linking Rules
 
 Use normal Markdown links, not only Obsidian-style wikilinks, because the project

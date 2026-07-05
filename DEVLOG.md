@@ -6071,3 +6071,28 @@ and governance notes.
 **Next:**
 Run the final markdown link check and commit this as the closing batch of the
 first wiki navigation pass.
+
+## Entry 138 - 2026-07-05 - Podcast transcript reviewed for wiki operating patterns (Owner + Codex)
+
+**Context:**
+The owner provided a local SRT transcript of a YouTube podcast about a
+Karpathy-style LLM wiki and asked to read it for useful ideas without importing
+Obsidian or unrelated tooling.
+
+**What changed:**
+- Added `wiki/pages/research/llm-wiki-operating-patterns-2026-07-05.md`.
+- Added the page to `wiki/index.md`.
+- Added `tools/check_wiki_links.py` as a repeatable wiki health check.
+- Updated `wiki/AGENTS.md` to tell future agents to run the checker after wiki
+  link edits.
+- Added a matching maintenance entry to `wiki/log.md`.
+
+**Decision:**
+The useful idea from the transcript is the operating pattern, not a specific
+app: keep knowledge in plain files, separate raw material from processed pages,
+link by meaning, and run regular health checks. For this repository, that means
+the LLM wiki stays Markdown-native and gains reproducible link validation.
+
+**Next:**
+Optionally add this checker to CI later. For now it is a local repository tool
+and should be run after wiki edits.

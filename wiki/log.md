@@ -8,6 +8,16 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-07-05] research note | LLM wiki operating patterns
+
+Added `research/llm-wiki-operating-patterns-2026-07-05.md` after reviewing a
+local Ukrainian transcript of a podcast about Karpathy-style LLM wikis.
+
+The note records reusable operating patterns for this repository: plain Markdown
+files, semantic cross-links, incremental maintenance, and repeatable wiki health
+checks. Added `tools/check_wiki_links.py` as the first repository-native wiki
+health check.
+
 ## [2026-07-05] link pass | Wiki shell and governance
 
 Added navigation around the wiki shell and governance page:

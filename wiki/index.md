@@ -72,6 +72,9 @@ crate/host README files stay outside the wiki.
   - accepted vector storage and deep recall implementation plan.
 - [HISTORY Discipline Reference](pages/research/history-discipline-reference.md)
   - reference note for HISTORY discipline and trust-document style.
+- [LLM Wiki Operating Patterns](pages/research/llm-wiki-operating-patterns-2026-07-05.md)
+  - useful operating patterns from a podcast transcript about Karpathy-style
+    LLM wikis.
 
 ## Operating Files Outside The Wiki
 
