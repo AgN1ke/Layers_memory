@@ -1,6 +1,6 @@
 //! Memory Engine core.
 //!
-//! This crate starts with the data contracts from `docs/contracts.md`.
+//! This crate starts with the data contracts from `wiki/pages/foundation/contracts.md`.
 //! The first implementation step is intentionally small: typed contracts,
 //! storage boundaries, and serialization tests.
 

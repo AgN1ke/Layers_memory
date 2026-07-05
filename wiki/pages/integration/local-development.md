@@ -507,5 +507,5 @@ cargo clippy --workspace --all-targets -- -D warnings
 Перед тим як називати v0.1 завершеним, пройти live-checklist:
 
 ```text
-docs/v0.1-acceptance.md
+wiki/pages/releases/v0.1-acceptance.md
 ```

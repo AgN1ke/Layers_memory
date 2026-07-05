@@ -6,7 +6,7 @@ This document records the next design step after vector storage Phase B and the
 owner question about providers, keys, and model choice.
 
 The concrete developer-facing resource contract lives in
-[`docs/llm-integration-resources.md`](../llm-integration-resources.md).
+[`wiki/pages/integration/llm-integration-resources.md`](../integration/llm-integration-resources.md).
 
 The goal is still token economy with usable memory. The ordinary prompt should
 stay small: current conversation, compressed long memory, and stable Core facts.

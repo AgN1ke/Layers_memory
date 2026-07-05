@@ -19,20 +19,24 @@ Experience moves upward only when it earns its place: it is validated against it
 - **Provider-independent by design** - the Rust core performs no network I/O and holds no model, vendor, or API key; the host runs language tasks through whatever model it chooses.
 - **Reusable** - one memory layer that any host (a bot, a game, an assistant) adopts through a thin adapter, instead of rebuilding memory.
 
-The strategic source of truth is [`docs/strategy.md`](docs/strategy.md). Current work is a Cargo workspace with the Rust memory core, PyO3 Python adapter, and runnable host examples.
+The strategic source of truth is the project wiki, starting from
+[`wiki/index.md`](wiki/index.md). Current work is a Cargo workspace with the
+Rust memory core, PyO3 Python adapter, and runnable host examples.
 
 ## Main Documents
 
-- [`docs/strategy.md`](docs/strategy.md) - strategic intent, product boundaries, and human-control principles.
-- [`docs/architecture.md`](docs/architecture.md) - architecture v0.1: terminology, data flows, storage, PendingTask, recall, sleep, adapters, and MVP scope.
-- [`docs/contracts.md`](docs/contracts.md) - data contracts v0.1: JSON/JSONL shapes for events, sessions, archive, core, recall, tasks, manifest, and journal.
-- [`docs/local-development.md`](docs/local-development.md) - local Windows/Rust setup, installed tools, paths, and verification commands.
-- [`docs/licensing.md`](docs/licensing.md) - Memory Engine non-commercial public license.
+- [`wiki/index.md`](wiki/index.md) - project knowledge index.
+- [`wiki/pages/foundation/strategy.md`](wiki/pages/foundation/strategy.md) - strategic intent, product boundaries, and human-control principles.
+- [`wiki/pages/foundation/architecture.md`](wiki/pages/foundation/architecture.md) - architecture v0.1: terminology, data flows, storage, PendingTask, recall, sleep, adapters, and MVP scope.
+- [`wiki/pages/foundation/contracts.md`](wiki/pages/foundation/contracts.md) - data contracts v0.1: JSON/JSONL shapes for events, sessions, archive, core, recall, tasks, manifest, and journal.
+- [`wiki/pages/integration/local-development.md`](wiki/pages/integration/local-development.md) - local Windows/Rust setup, installed tools, paths, and verification commands.
+- [`wiki/pages/governance/licensing.md`](wiki/pages/governance/licensing.md) - Memory Engine non-commercial public license.
 - [`LICENSE.md`](LICENSE.md) - root license file for GitHub publication.
 
 ## Current Structure
 
-- `docs/` - strategy and research notes.
+- `wiki/` - project knowledge base: strategy, architecture, contracts,
+  research, plans, acceptance records, and integration notes.
 - `crates/memory_engine/` - Rust memory core.
 - `crates/python_adapter/` - PyO3 adapter exposed to Python as `memory_engine`.
 - `hosts/` - runnable host applications that use Memory Engine without putting provider/model/API-key logic into the Rust core.
@@ -49,7 +53,7 @@ Required local tools:
 - Rust stable toolchain managed by `rustup`.
 - On Windows: Visual Studio Build Tools 2022 with the C++ build tools workload, because the MSVC Rust target needs `link.exe`.
 
-Detailed local paths and troubleshooting are documented in [`docs/local-development.md`](docs/local-development.md).
+Detailed local paths and troubleshooting are documented in [`wiki/pages/integration/local-development.md`](wiki/pages/integration/local-development.md).
 
 Useful checks:
 

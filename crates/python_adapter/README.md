@@ -44,7 +44,7 @@ Sleep is an explicit host decision in v0.1. A host calls `engine.sleep(session_i
 manually, from token-budget pressure, or from an idle schedule, then executes the
 returned tasks through its own LLM provider.
 
-All payloads follow the JSON contracts in `docs/contracts.md` at the
+All payloads follow the JSON contracts in `wiki/pages/foundation/contracts.md` at the
 repository root.
 
 ## What lives here vs the host

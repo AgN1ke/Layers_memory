@@ -2,7 +2,7 @@
 
 Memory Engine canonical record of post-launch corrections, schema changes, behavior changes, retracted claims, and any public notices that affect trust in the project. Newest first.
 
-This file is not a changelog of features. It is a document of trust. The format follows the practice we adopted from MemPalace's `HISTORY.md` (see `docs/research/`).
+This file is not a changelog of features. It is a document of trust. The format follows the practice we adopted from MemPalace's `HISTORY.md` (see `wiki/pages/research/`).
 
 For day-to-day working notes, use `DEVLOG.md`.
 
@@ -45,6 +45,37 @@ Context. Why this change exists.
 ```
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
+
+## 2026-07-05 - Project documentation moved into `wiki/`
+
+Project knowledge was reorganized into an LLM-wiki structure. The old `docs/`
+tree was moved into `wiki/pages/`, with `wiki/index.md` as the content index,
+`wiki/log.md` as the chronological wiki maintenance log, and `wiki/AGENTS.md` as
+the maintenance schema for future agents.
+
+**What changed:**
+- Strategy, architecture, contracts, roadmap, audit, acceptance, integration,
+  governance, and research documents now live under `wiki/pages/`.
+- Root README links now point to `wiki/index.md` and the moved foundation pages.
+- Existing internal references to moved project documents were updated to the
+  new paths.
+
+**What is retracted:**
+- The old public assumption that project knowledge lives under `docs/` is no
+  longer current.
+
+**What is still true:**
+- Runtime behavior, storage schemas, prompt contracts, adapters, and model
+  execution behavior are unchanged.
+- Root `README.md`, `HISTORY.md`, `DEVLOG.md`, `LICENSE.md`, `SECURITY.md`,
+  prompt files, runtime README files, crate README files, host README files, and
+  config README files remain in their operational locations.
+
+**How to verify:**
+- Open `wiki/index.md` and confirm that project documents are discoverable from
+  the wiki index.
+- Run `git status --short` after the migration commit and confirm the old docs
+  files are represented as moves into `wiki/pages/`.
 
 ## 2026-07-04 - Memory-unit repair for complete archives with missing theses
 
@@ -138,7 +169,7 @@ Vector storage Phase A created the derived index and `ComputeEmbedding` task bou
 
 ## 2026-07-03 - Vector storage Phase A: opt-in derived index and ComputeEmbedding tasks
 
-The owner accepted `docs/research/vector-storage-tz-2026-07-03.md` as the implementation contract for vector storage. This first phase adds the derived storage/index and task boundary only; it does not add deep recall, Telegram fastembed, or Stage 2 reranking yet.
+The owner accepted `wiki/pages/research/vector-storage-tz-2026-07-03.md` as the implementation contract for vector storage. This first phase adds the derived storage/index and task boundary only; it does not add deep recall, Telegram fastembed, or Stage 2 reranking yet.
 
 **What changed:**
 - New derived vector catalog under `memory/archive/vectors/<scope>/`: `manifest.json`, `vectors.f32`, `rows.jsonl`, and `tombstones.jsonl`.
@@ -164,12 +195,12 @@ The owner accepted `docs/research/vector-storage-tz-2026-07-03.md` as the implem
 
 ## 2026-07-03 - Multi-speaker branch 1: speaker contract, attributed transcript, Core gossip gate
 
-First slice of the multi-speaker geometry plan (`docs/research/multi-speaker-geometry-2026-06-12.md`, DEVLOG Запис 117). Linear hosts are unaffected: every new field is optional with serde defaults, and behavior without `speaker` is byte-identical to before.
+First slice of the multi-speaker geometry plan (`wiki/pages/research/multi-speaker-geometry-2026-06-12.md`, DEVLOG Запис 117). Linear hosts are unaffected: every new field is optional with serde defaults, and behavior without `speaker` is byte-identical to before.
 
 **What changed:**
 - `IngestEvent`/`StoredEvent`/`CoreContextEvent` gain optional `speaker: { id, name }` (stable host identity + prompt-facing name).
 - `render_memory_view` renders user-side events with a `speaker` under the speaker's name (`Жека: ...`) instead of `user:`; assistant rendering unchanged; current-message dedup now treats any non-assistant role as user-side.
-- The `reply_to` link kind is documented in `docs/contracts.md` (the typed `links` slot already existed; reply structure lives in the raw session layer and is not persisted into Archive/MemoryUnit).
+- The `reply_to` link kind is documented in `wiki/pages/foundation/contracts.md` (the typed `links` slot already existed; reply structure lives in the raw session layer and is not persisted into Archive/MemoryUnit).
 - Phase-1 Core protection, enforced in the core (not the host): when a session has >= 2 distinct `speaker.id` among user messages, the automatic Archive -> Core personal-signal bridge is disabled (signals are counted as skipped) and no unit is on the automatic Core fidelity path. Core still grows through explicit `/remember` and reflection candidates with manual review.
 - New conformance scenario `--host direct-multispeaker`: proves `speaker` survives the PyO3 JSON boundary, the transcript is attributed, memory-unit theses stay attributed, and a high-confidence gossip signal ("У Жеки є мотоцикл" said in a two-speaker chat) does not become a Core fact.
 
@@ -208,7 +239,7 @@ The rendered memory view previously carried no notion of time: the model saw nei
 
 **What we are doing:**
 - Live check on the Telegram host ("when did I tell you about X?") is the owner's next step; deterministic behavior is covered by unit tests and host conformance.
-- Design record: `docs/research/memory-time-perception-2026-07-02.md`.
+- Design record: `wiki/pages/research/memory-time-perception-2026-07-02.md`.
 
 **Reproducibility anchor:**
 - `cargo test -p memory_engine` — `age_labels_follow_calendar_buckets_and_local_offset`, `memory_view_labels_archive_age_and_marks_older_dialogue_days`, `memory_view_relabels_same_package_when_rendered_later`, `memory_view_omits_labels_when_clock_is_untrusted`.
@@ -219,10 +250,10 @@ The rendered memory view previously carried no notion of time: the model saw nei
 v0.3 closes the reusable-host proof: Memory Engine now has automated conformance for the direct/local Python boundary, the Telegram bot host path without Telegram transport, and a real Godot 4.6 headless GDExtension host.
 
 **What changed:**
-- `docs/v0.3-acceptance.md` now records the accepted v0.3 scope: direct/local, Telegram-local, and Godot-headless.
+- `wiki/pages/releases/v0.3-acceptance.md` now records the accepted v0.3 scope: direct/local, Telegram-local, and Godot-headless.
 - `tests/host_conformance/host_conformance.py` provides the shared scenario for all accepted hosts.
 - The Godot slice uses `crates/godot_adapter/` plus `hosts/godot_headless/` and was accepted with real Godot 4.6 stable console.
-- `docs/research/vector-recall.md` is tracked as a research draft for opt-in vector recall, not an implementation-ready spec.
+- `wiki/pages/research/vector-recall.md` is tracked as a research draft for opt-in vector recall, not an implementation-ready spec.
 
 **What is retracted (if applicable):**
 - Nothing is retracted. Telegram-live smoke and Telegram userbot support are clarified as deferred work, not v0.3 closure gates.
@@ -276,10 +307,10 @@ The post-audit review found that a small set of Ukrainian string literals had be
 The post-v0.2 audit found that the architecture described `memory/journal/` as an active crash-safety mechanism for multi-file sleep operations, while the runtime implementation actually relies on atomic single-file writes, durable `SleepRun` checkpoints, and idempotent Complete-archive event coverage.
 
 **What changed:**
-- `docs/architecture.md` now states that the journal is a reserved storage primitive and future target for migration/recovery-heavy operations, not the active runtime sleep transaction layer.
-- `docs/contracts.md` clarifies that `JournalOperation` is a reserved contract in v0.2: the schema and FileStorage methods exist, but runtime sleep/recovery do not consume journal records.
-- `docs/audit-2026-06-10.md` marks A3 closed as a scope decision rather than an open ambiguity.
-- `docs/roadmap.md` removes A3 from the pre-v0.3 open cleanup list.
+- `wiki/pages/foundation/architecture.md` now states that the journal is a reserved storage primitive and future target for migration/recovery-heavy operations, not the active runtime sleep transaction layer.
+- `wiki/pages/foundation/contracts.md` clarifies that `JournalOperation` is a reserved contract in v0.2: the schema and FileStorage methods exist, but runtime sleep/recovery do not consume journal records.
+- `wiki/pages/planning/audit-2026-06-10.md` marks A3 closed as a scope decision rather than an open ambiguity.
+- `wiki/pages/planning/roadmap.md` removes A3 from the pre-v0.3 open cleanup list.
 
 **What is retracted (if applicable):**
 - The earlier architecture claim that runtime sleep currently creates and replays `memory/journal/` records for crash safety is retracted.
@@ -324,14 +355,14 @@ The post-v0.2 audit found that `core_context_package` and sleep selection still 
 
 ## 2026-06-10 - Architecture docs no longer claim Archive/Core Markdown dumps are current storage
 
-The post-v0.2 audit found that `docs/architecture.md` still described `memory/archive/<YYYY>/<MM>/<spogad_id>.md` and `memory/core/store/<category>.md` as current storage files. The implementation writes pretty JSON for Archive/Core and only maintains `session.md` as a Markdown human log.
+The post-v0.2 audit found that `wiki/pages/foundation/architecture.md` still described `memory/archive/<YYYY>/<MM>/<spogad_id>.md` and `memory/core/store/<category>.md` as current storage files. The implementation writes pretty JSON for Archive/Core and only maintains `session.md` as a Markdown human log.
 
 **What changed:**
-- `docs/architecture.md` now states that Archive/Core use pretty-printed JSON as the current human-inspectable form.
-- `docs/contracts.md` now lists only Archive/Core JSON files as the current storage contract.
+- `wiki/pages/foundation/architecture.md` now states that Archive/Core use pretty-printed JSON as the current human-inspectable form.
+- `wiki/pages/foundation/contracts.md` now lists only Archive/Core JSON files as the current storage contract.
 - Archive/Core Markdown exports are explicitly deferred until a real workflow needs them.
 - The architecture document was also synchronized with current v0.2 behavior for host-owned prompt loading, pull-based LLM requests, fine-grained in-process locking, raw-event rotation, tolerant collection reads, and the implemented reflection/forgetting lifecycle.
-- `docs/roadmap.md` now reflects the actual post-v0.2 state and marks implemented partial sleep / active-tail behavior as complete.
+- `wiki/pages/planning/roadmap.md` now reflects the actual post-v0.2 state and marks implemented partial sleep / active-tail behavior as complete.
 
 **What is retracted (if applicable):**
 - The prior architecture claim that Archive entries have `<spogad_id>.md` files and Core categories have `<category>.md` files as part of the current storage layout is retracted.
@@ -479,7 +510,7 @@ The post-v0.2 audit found that the Telegram host created a second `MemoryEngine`
 v0.2 is ready to close as an end-to-end living-memory cycle in the reusable Rust core. This entry records the acceptance anchor; it does not claim external benchmark quality.
 
 **What changed:**
-- Added `docs/v0.2-acceptance.md`.
+- Added `wiki/pages/releases/v0.2-acceptance.md`.
 - Added deterministic integration test `crates/memory_engine/tests/living_memory_cycle.rs`.
 - The test composes the full core lifecycle: `ingest -> sleep driver -> Archive + MemoryUnit -> recall/context -> fidelity -> reflection candidate -> manual Core promotion -> contested Core -> forget_review -> remember_back`.
 - The acceptance path uses injected `LlmResponse` values, so the cycle is reproducible without a live provider.
@@ -502,7 +533,7 @@ v0.2 is ready to close as an end-to-end living-memory cycle in the reusable Rust
 
 **Reproducibility anchor:**
 - `cargo test -p memory_engine --test living_memory_cycle`
-- Full release gate is documented in `docs/v0.2-acceptance.md`.
+- Full release gate is documented in `wiki/pages/releases/v0.2-acceptance.md`.
 
 ## 2026-06-01 — Reversible forgetting review for low-signal memory units
 
@@ -916,7 +947,7 @@ The first `compact_memory_pass` prompt incorrectly told the model to return 5-7 
 - Multiple distinct episodes may produce multiple theses.
 - Routine repetition can be omitted.
 - Timestamps are explicitly available for ordering and time boundaries, but raw ISO timestamps should not be emitted unless useful.
-- `docs/architecture.md` and `docs/contracts.md` no longer describe compact memory as a fixed 5-7 item output.
+- `wiki/pages/foundation/architecture.md` and `wiki/pages/foundation/contracts.md` no longer describe compact memory as a fixed 5-7 item output.
 
 **What is retracted (if applicable):**
 - The fixed "5-7 short theses" instruction and the related claim in the previous HISTORY entry.
@@ -1047,7 +1078,7 @@ The live Telegram test proved the memory cycle works, but exposed concrete v0.1 
 - `sleep_consolidator` gets one JSON retry, then falls back to a complete archive assembled from the four successful specialized passes.
 - Telegram error UX now hides tracebacks from users and categorizes Gemini no-candidates, safety, invalid key, rate/quota, and generic memory errors.
 - `sleep_personal_signal_pass.md` was rewritten around criteria for stable user-grounded self-statements and free normalized categories, not a hardcoded category whitelist.
-- `docs/architecture.md`, `docs/contracts.md`, `docs/local-development.md`, and `docs/roadmap.md` now describe the compact prompt, free categories, and token telemetry.
+- `wiki/pages/foundation/architecture.md`, `wiki/pages/foundation/contracts.md`, `wiki/pages/integration/local-development.md`, and `wiki/pages/planning/roadmap.md` now describe the compact prompt, free categories, and token telemetry.
 
 **What is retracted (if applicable):**
 - The earlier category whitelist for Archive → Core bridge. Category mapping is now normalized free text; trust comes from source/confidence/duplicate gates, not from a closed topic list.
@@ -1077,10 +1108,10 @@ The live Telegram test proved the memory cycle works, but exposed concrete v0.1 
 The owner flagged that long technical identifiers and verbose storage-shaped JSON can waste the same token budget the engine is supposed to preserve. The architecture now explicitly separates canonical storage/debug data from the compact representation that should be sent to an LLM prompt.
 
 **What changed:**
-- `docs/architecture.md` now states that storage/debug views may keep full IDs and metadata, but prompt-facing memory must be semantically sufficient and compact.
-- `docs/contracts.md` now notes that `core_context_package.v1` is an API/debug shape, not necessarily the literal LLM prompt payload.
-- `docs/roadmap.md` adds an open v0.1 item for compact prompt representation.
-- `docs/v0.1-acceptance.md` adds acceptance checks that long IDs and debug metadata must not consume prompt budget unnecessarily.
+- `wiki/pages/foundation/architecture.md` now states that storage/debug views may keep full IDs and metadata, but prompt-facing memory must be semantically sufficient and compact.
+- `wiki/pages/foundation/contracts.md` now notes that `core_context_package.v1` is an API/debug shape, not necessarily the literal LLM prompt payload.
+- `wiki/pages/planning/roadmap.md` adds an open v0.1 item for compact prompt representation.
+- `wiki/pages/releases/v0.1-acceptance.md` adds acceptance checks that long IDs and debug metadata must not consume prompt budget unnecessarily.
 
 **What is retracted (if applicable):**
 - The implicit assumption that a full debug/API JSON package is acceptable as the literal prompt payload. It is useful for inspection, but too verbose for efficient live memory use.

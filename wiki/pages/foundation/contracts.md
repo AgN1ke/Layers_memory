@@ -2,7 +2,7 @@
 
 ## Для чого існує цей документ
 
-`docs/architecture.md` фіксує архітектурну форму Memory Engine: ядро системи, три шари пам'яті, PendingTask, recall, sleep, storage і адаптери.
+`wiki/pages/foundation/architecture.md` фіксує архітектурну форму Memory Engine: ядро системи, три шари пам'яті, PendingTask, recall, sleep, storage і адаптери.
 
 Цей документ фіксує наступний рівень: **точні форми даних**, які потрібні для першого MVP. Його задача - зробити так, щоб Rust-код, Python-адаптер, файлове сховище і майбутні тести говорили однією мовою.
 

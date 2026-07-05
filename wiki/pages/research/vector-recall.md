@@ -3,12 +3,12 @@
 Status: research draft, accepted as a working direction; not implementation-ready
 until the alignment notes below are resolved.
 Audience: implementation agent (Codex) and maintainer.
-Depends on: `docs/architecture.md` v0.1, `docs/contracts.md` v0.1, `docs/strategy.md`.
+Depends on: `wiki/pages/foundation/architecture.md` v0.1, `wiki/pages/foundation/contracts.md` v0.1, `wiki/pages/foundation/strategy.md`.
 
 > **Alignment note.** This spec was written against `README.md` only. Wherever it names
 > identifiers of existing contracts (scope id, record id field, task envelope shape,
 > journal entry shape, the canonical text field of an archive record), treat the names
-> as placeholders and align them with `docs/contracts.md` and `docs/architecture.md`
+> as placeholders and align them with `wiki/pages/foundation/contracts.md` and `wiki/pages/foundation/architecture.md`
 > before writing code. Such places are marked `TODO(align)`.
 >
 > **2026-06-10 maintainer note.** The project now has validated `MemoryUnit`s,
@@ -26,7 +26,7 @@ Depends on: `docs/architecture.md` v0.1, `docs/contracts.md` v0.1, `docs/strateg
 >   path instead of writing recall events on every query.
 >
 > **2026-07-03 maintainer note.** The implementation TZ
-> `docs/research/vector-storage-tz-2026-07-03.md` supersedes this draft. In
+> `wiki/pages/research/vector-storage-tz-2026-07-03.md` supersedes this draft. In
 > particular, the draft's `intfloat/multilingual-e5-small` default was retracted
 > after a live fastembed check: `fastembed==0.8.0` does not expose that model via
 > `TextEmbedding`. The v1 implementation default is
@@ -109,7 +109,7 @@ library.
   embedding happens in the hot message path.
 - **M6. Gentle, reversible fading.** `[core]` Ranking includes recency decay, so
   ancient never-recalled memories sink, but nothing is ever auto-deleted. Forgetting
-  stays human-controlled, per `docs/strategy.md`.
+  stays human-controlled, per `wiki/pages/foundation/strategy.md`.
 
 ## 3. Storage layout (per scope)
 
@@ -201,7 +201,7 @@ Append-only overlay, merged into `rows.jsonl` at compaction:
   compaction.
 - **Assumption A1:** exactly one engine process owns a memory root at a time (current
   architecture). No cross-process file locking in MVP; note it in
-  `docs/architecture.md` limitations.
+  `wiki/pages/foundation/architecture.md` limitations.
 
 ## 4. Scope state machine and configuration
 
@@ -570,9 +570,10 @@ id in `DEVLOG.md`.
 
 ## 14. Implementation order
 
-1. Add this file to `docs/`, link it from README "Main Documents", note the feature
-   in `HISTORY.md`.
-2. Extend `docs/contracts.md` with: `vectors/` file formats (section 3), the
+1. Historical draft location is now `wiki/pages/research/`; the accepted
+   implementation spec is
+   [`vector-storage-tz-2026-07-03.md`](vector-storage-tz-2026-07-03.md).
+2. Extend `wiki/pages/foundation/contracts.md` with: `vectors/` file formats (section 3), the
    `embed_batch` payloads (section 5), the recall result shape (section 8.3).
 3. Core: `flat_index` module (open / append / search / tombstone / compact / R1
    recovery, atomic writes, per-scope cache).

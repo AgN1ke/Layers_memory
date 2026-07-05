@@ -4,7 +4,7 @@
 
 Це імплементаційне ТЗ для Кодекса. Власник ухвалив рішення: робимо векторне сховище зараз, з можливістю повністю вимкнути його, і тестуємо на живих даних.
 
-Документ базується на драфті `docs/research/vector-recall.md` (прийнятий як напрям) і **розв'язує всі його `TODO(align)`** проти фактичного коду v0.2/v0.3: MemoryUnits, fidelity, forgetting, buffered recall stats, multi-speaker gate, реальна розкладка `memory/` (без per-scope каталогів верхнього рівня). Де це ТЗ суперечить драфту — діє це ТЗ; розбіжності перелічені в розділі 2 з причинами.
+Документ базується на драфті `wiki/pages/research/vector-recall.md` (прийнятий як напрям) і **розв'язує всі його `TODO(align)`** проти фактичного коду v0.2/v0.3: MemoryUnits, fidelity, forgetting, buffered recall stats, multi-speaker gate, реальна розкладка `memory/` (без per-scope каталогів верхнього рівня). Де це ТЗ суперечить драфту — діє це ТЗ; розбіжності перелічені в розділі 2 з причинами.
 
 Порядок роботи: фази A → B → C, кожна — окрема гілка з review, HISTORY-записом (зміни контрактів/поведінки), DEVLOG-записом і оновленням roadmap. Фаза C вмикається тільки після калібрування на живих даних фази B.
 
@@ -105,7 +105,7 @@ pub fn recall_deep(&self, query: DeepRecallQuery) -> Result<DeepRecallResult>;
 
 ## 6. Host-частина (Telegram, Фаза B)
 
-1. Новий модуль `hosts/telegram_gemini_bot/local_embedder.py`: fastembed `TextEmbedding("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")`, `embed_passages` / `embed_query`, L2-нормалізація, lazy-ініціалізація (перше завантаження ONNX — повідомити в лог). `fastembed` — нова dev-залежність venv, зафіксувати в `docs/local-development.md`.
+1. Новий модуль `hosts/telegram_gemini_bot/local_embedder.py`: fastembed `TextEmbedding("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")`, `embed_passages` / `embed_query`, L2-нормалізація, lazy-ініціалізація (перше завантаження ONNX — повідомити в лог). `fastembed` — нова dev-залежність venv, зафіксувати в `wiki/pages/integration/local-development.md`.
 2. Виконання `ComputeEmbedding`-тасків: після sleep (з `SleepOutcome.embedding_requests`) і по `pending_embedding_backfill` при enable — батчами через local_embedder, submit через `resume_compute_embedding`.
 3. Gemini function-calling tool `recall_distant_memory` (декларація і system-prompt доповнення — з драфту §8.2, перекласти в `chibigochi/telegram` персону відповідно): виклик → typing-екшн → `embed_query` → `engine.recall_deep` → tool result `{found, reason, memories:[{when: <мітка з існуючого time-labels bucketing — реюз>, sim, strength: vivid|faint, text: thesis}]}`. Немає збігів → модель чесно каже, що не пам'ятає.
 4. Команди: `/vectors` (status), `/vectors_on`, `/vectors_off`, `/vectors_purge` (з підтвердженням другим повідомленням), scope = поточний чат.
