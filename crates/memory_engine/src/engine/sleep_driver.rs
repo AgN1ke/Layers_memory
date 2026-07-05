@@ -240,6 +240,50 @@ pub(super) fn build_memory_unit_task(
     })
 }
 
+pub(super) fn build_memory_unit_repair_task(
+    session_id: &str,
+    events: &[&StoredEvent],
+    archive_entry: &ArchiveEntry,
+    now: &str,
+) -> Result<PendingTask> {
+    Ok(PendingTask {
+        schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
+        task_id: new_id("task")?,
+        task_type: TaskType::MemoryUnitPass,
+        state: TaskState::Pending,
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+        prompt_id: "memory_unit_pass".to_string(),
+        prompt_version: 1,
+        role_hint: ModelRole::Reasoning,
+        expected_output_schema: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+        inputs: json!({
+            "session_id": session_id,
+            "preliminary_archive_id": &archive_entry.archive_id,
+            "repair_reason": "complete_archive_without_memory_units",
+            "events": events.iter().map(|event| json!({
+                "event_id": &event.event_id,
+                "type": &event.event_type,
+                "timestamp": &event.timestamp,
+                "payload": &event.payload,
+                "tags": &event.tags,
+                "theme": &event.theme,
+                "initial_weight": event.initial_weight,
+                "weight_reason": &event.weight_reason,
+            })).collect::<Vec<Value>>(),
+            "hints": {
+                "target_style": "atomic_human_memory_units",
+                "return_json": true,
+                "do_not_invent_facts": true,
+                "use_source_event_ids": true,
+                "repair_missing_memory_units": true
+            }
+        }),
+        attempts: Vec::new(),
+        last_error: None,
+    })
+}
+
 pub(super) fn render_compact_memory_from_units(units: &[MemoryUnit]) -> Option<String> {
     let lines = units
         .iter()
@@ -665,6 +709,9 @@ pub(super) fn handle_sleep_pass_error(
     state.last_error = Some(error.clone());
     if state.attempts < run.max_pass_attempts {
         state.request.prompt_inputs = add_retry_instruction(&state.request.prompt_inputs, &error);
+        if state.track == SleepTrack::MemoryUnit && state.attempts + 1 >= run.max_pass_attempts {
+            state.request.role_hint = ModelRole::Reasoning;
+        }
         return Ok(());
     }
 

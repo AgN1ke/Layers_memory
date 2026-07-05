@@ -200,7 +200,7 @@ def load_cache() -> dict[str, str]:
     if not SECRETS_CACHE_PATH.exists():
         return {}
     try:
-        payload = json.loads(SECRETS_CACHE_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(SECRETS_CACHE_PATH.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return {}
     if not isinstance(payload, dict):
@@ -359,7 +359,10 @@ def process_local_text(
 
     package = bot.context_package(engine, session_id, 0, text)
     model = llm_config.chat_model().model
-    prompt = bot.chat_prompt(package, text)
+    prompt = bot.chat_prompt(engine, package, text)
+    distant_recall = bot.maybe_add_distant_memory(engine, session_id, text, package, prompt)
+    if distant_recall and distant_recall.get("used"):
+        prompt = bot.chat_prompt(engine, package, text)
     answer_response = gemini.generate_text(
         model=model,
         system_instruction=bot.chat_system_instruction(),

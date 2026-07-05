@@ -5748,3 +5748,114 @@ Manual Telegram or Godot checks stay final smoke tests only.
 
 **Deferred:**
 Stage 2 recall integration remains after this behavior layer. The next useful milestone is natural distant remembering in a live host, then ordinary recall reranking.
+
+## Entry 126 - 2026-07-03 - Scripted forced distant-memory recall conformance (Codex, feature/forced-distant-recall-conformance)
+
+**Context:**
+After Entry 125, the next planned step was to stop relying on the owner as the test harness for vector recall behavior. The library already had vector storage, local embedding, calibrated `recall_deep`, and manual `/recall_deep`; what was missing was a scripted proof that a host can deliberately fetch a distant episodic memory and use it in an answer path.
+
+**What changed:**
+- Added `--host direct-forced-recall` to `tests/host_conformance/host_conformance.py`.
+- The scenario stores profile facts plus one episodic memory: the player hid a silver feather under an old bridge.
+- The scenario sleeps the conversation, validates the produced memory units, enables vectors, submits deterministic fake embeddings, and then clears the visible memory package.
+- The host then performs a forced deep-recall call for the keepsake episode, asserts that the returned scarce hit is the silver-feather memory, and builds a reply from that hit.
+- An unrelated fake vector is also queried and must return `found:false` with `reason:below_threshold`.
+
+**What this proves:**
+The full distant-memory chain works without manual Telegram/Godot probing: old memory exists as a validated unit, vector backfill indexes it, a host can call deep recall on demand, the engine returns the relevant memory, and weak unrelated queries stay below threshold.
+
+**What is still next:**
+This is a forced behavior scenario. The next product step is the deterministic recall-decision gate in the host path for explicit memory-seeking language, followed by live tuning and only then an optional LLM router if the deterministic gate is too noisy or misses real recall moments.
+
+**Checks:**
+- `python -m py_compile tests/host_conformance/host_conformance.py` passed.
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall` passed.
+- Existing adjacent conformance hosts still passed: `direct`, `direct-vectors`.
+
+## Entry 127 - 2026-07-03 - Deterministic distant-recall decision gate for Telegram host (Codex, feature/forced-distant-recall-conformance)
+
+**Context:**
+After the forced distant-memory scenario passed, the owner clarified the correct behavior: if the normal three-layer memory package already contains the answer, vector recall should not run. Vector storage is a distant fallback for explicit remembering moments where visible memory is insufficient, not a replacement for Core/long/short memory.
+
+**What changed:**
+- Telegram chat flow now builds the normal memory view first.
+- A deterministic gate considers distant recall only for explicit memory-seeking language such as "remember", "what did I say", "we talked about", and Ukrainian/Russian equivalents.
+- Before calling deep recall, the host checks the visible memory sections (`core_memory`, `long_memory`, `short_memory`) for meaningful query terms. If the answer appears to be present, deep recall is skipped.
+- The check includes a conservative stem match for Cyrillic terms, so inflected forms such as "Іржу" can match visible memory containing "Іржа".
+- Deep recall is skipped unless the vector scope is already `ready`; this preserves the opt-in/privacy invariant that disabled vector scopes do not send chat text to the local embedder.
+- When deep recall returns hits, the host injects them into the existing `archive_relevant`/`<long_memory>` prompt shape, so the model sees distant memories through the same memory geometry.
+
+**Conformance:**
+- Added `--host telegram-distant-gate`.
+- Case 1: visible Core memory already contains "silver feather"; the gate skips deep recall.
+- Case 2: visible memory lacks it and vector scope is test-ready; fake deep recall is called once and the reply uses the returned memory.
+- Case 3: vector scope is not ready; the gate skips deep recall even for a memory-seeking query.
+- The scenario also asserts the Ukrainian inflection guard for `Іржу` vs `Іржа`.
+
+**What is still next:**
+Run a live Telegram smoke with vectors enabled on the owner scope and a few explicit "пам'ятаєш..." prompts. If the deterministic gate misses real recall moments or calls too often, add the optional small LLM router described in Entry 125.
+
+**Checks:**
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py tests/host_conformance/host_conformance.py` passed.
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate` passed.
+- Adjacent host checks passed: `direct-forced-recall`, `direct-vectors`, `telegram-local`.
+- `crates/python_adapter/.venv/Scripts/python.exe -m pytest crates/python_adapter/tests -q` passed: 13 tests.
+
+## Entry 128 - 2026-07-03 - Live Telegram-host distant recall check with real Gemini and local embeddings (Codex, feature/forced-distant-recall-conformance)
+
+**Context:**
+After Entry 127, the owner asked Codex to run the live check instead of relying on manual Telegram probing. The check used the Telegram host code path with an isolated temporary memory runtime, real Gemini sleep/fidelity/chat calls, and the local fastembed-backed embedder.
+
+**What happened:**
+- The first attempt could not read the cached Gemini key because `secrets.local.json` had a UTF-8 BOM. `local_harness.load_cache()` now reads with `utf-8-sig`.
+- The local harness also still called the old `chat_prompt(package, text)` shape. It now calls the current `chat_prompt(engine, package, text)` and runs the same distant-memory pre-prompt hook as the Telegram host.
+- A live isolated session stored an episode: Mykyta hid a silver feather under an old bridge during a rainy walk.
+- Real Gemini sleep completed, real fidelity completed, and local embeddings appended 2 vector rows.
+- With normal visible memory intact, a Ukrainian "пам'ятаєш срібне перо?" query was recognized as already answered by the visible memory package, so deep recall was skipped.
+- With the visible memory package cleared for the test, the Ukrainian query "пам'ятаєш срібне перо і старий міст?" triggered deep recall, found the silver-feather memory (`sim=0.5269`), inserted it into the prompt, and Gemini answered using that memory.
+
+**Fixes from the live check:**
+- The host now strips memory-request boilerplate before embedding a distant-memory query. Example: "Do you remember the silver feather?" searches for "silver feather".
+- Telegram deep recall now passes the calibrated `min_sim=0.30` explicitly instead of relying on `0.0`/default interpretation across installed adapter builds.
+- The vivid/faint threshold is now a named host constant (`0.55`).
+
+**Observed limitation:**
+Cross-language recall remains weaker with the current MiniLM model: an English query against a Ukrainian sleep-produced thesis can miss the threshold. Ukrainian query -> Ukrainian thesis worked. This is a calibration/product note, not a blocker for the current Ukrainian Telegram path.
+
+**Checks:**
+- Live isolated Telegram-host path with real Gemini and local embeddings passed.
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/local_harness.py tests/host_conformance/host_conformance.py` passed.
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate` passed.
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall` passed.
+
+## Entry 129 - 2026-07-04 - Live Telegram memory-unit repair and embedder reuse (Codex, feature/forced-distant-recall-conformance)
+
+**Context:**
+The owner ran a long real Telegram conversation on clean memory. The system worked end-to-end: sleep triggered automatically, Core filled with real facts, fidelity completed, vectors became ready, and the bot answered from the resulting memory. One complete archive stayed weak: Gemini returned no usable `memory_unit_pass` output three times, so the archive had Core signals but no compact memory units and no vector rows.
+
+**What changed:**
+- The final `memory_unit_pass` retry now uses the stronger reasoning role.
+- The core can find complete archives with source events but empty memory units and emit repair requests later.
+- If the model still cannot produce memory units during repair because the provider blocks or returns unusable model output, the core builds conservative memory units from existing archive tracks: personal signals, facts, topic summaries, and only then archive gist.
+- Telegram runs this repair step after sleep completion and then backfills embeddings for repaired units.
+- The Telegram local embedder is now reused as a singleton instead of creating a fresh ONNX session for every vector query or embedding batch.
+- `docs/contracts.md` manifest schema list now includes the vector schemas already documented later in the file.
+
+**Live result:**
+- Owner scope `telegram_311422683` had archive `archive_1783159971443222600_98` with zero memory units.
+- A repair request was emitted and real Gemini blocked it again.
+- The new core fallback repaired the archive from existing tracks: 8 memory units were written, compact memory became non-empty, and vector rows increased from 9 to 17.
+- Pending tasks returned to zero and the Telegram bot was restarted through the dev harness.
+
+**Checks:**
+- `cargo fmt`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py hosts/telegram_gemini_bot/local_harness.py tests/host_conformance/host_conformance.py`
+- `crates/python_adapter/.venv/Scripts/python.exe -m pytest crates/python_adapter/tests -q`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-vectors`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host direct-forced-recall`
+- `crates/python_adapter/.venv/Scripts/python.exe tests/host_conformance/host_conformance.py --host telegram-distant-gate`
+
+**Next:**
+Merge the vector Phase B/gate branch after review, then decide the next design step for contextual expansion: short always-visible memory plus scarce detailed memories pulled by the core when the current topic needs them.

@@ -1390,6 +1390,9 @@ embeddings.
     "pending_task": "pending_task.v1",
     "evidence_pack": "evidence_pack.v1",
     "fidelity_review": "fidelity_review.v1",
+    "vector_index": "vector_index.v1",
+    "embed_batch_result": "embed_batch_result.v1",
+    "deep_recall": "deep_recall.v1",
     "journal_operation": "journal_operation.v1"
   },
   "active_embedding_model_id": null,

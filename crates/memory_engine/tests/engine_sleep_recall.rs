@@ -7,13 +7,13 @@ use memory_engine::core_store::{
 };
 use memory_engine::event::IngestEvent;
 use memory_engine::fidelity::EvidenceEventRole;
-use memory_engine::llm::{LlmResponse, SleepRunStage, SleepTrack};
+use memory_engine::llm::{LlmErrorKind, LlmResponse, SleepRunStage, SleepTrack};
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::storage::Storage;
 use memory_engine::tasks::{TaskState, TaskType};
 use memory_engine::types::{
-    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
+    ModelRole, CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
     CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, FIDELITY_REVIEW_SCHEMA_VERSION,
     MEMORY_UNITS_RESULT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
     SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
@@ -2191,6 +2191,340 @@ fn engine_sleep_run_persists_and_recovers_after_restart() {
         .pending_sleep_runs()
         .expect("pending runs after finish")
         .is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_memory_unit_retry_escalates_final_attempt_to_reasoning() {
+    let root = unique_temp_dir("memory_unit_retry_escalates_final_attempt");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said their cat is named Irzha.",
+        vec!["pet"],
+    );
+
+    let run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let mut step = engine.next_sleep_batch(run).expect("first batch");
+
+    let request = step
+        .batch
+        .as_ref()
+        .expect("first extraction batch")
+        .requests
+        .iter()
+        .find(|request| request.prompt_id == "memory_unit_pass")
+        .expect("memory unit request")
+        .clone();
+    assert_eq!(request.role_hint, ModelRole::Balanced);
+    step = engine
+        .submit_sleep_batch(
+            step.run,
+            vec![LlmResponse::Err {
+                request_id: request.request_id,
+                kind: LlmErrorKind::Other,
+                detail: "Gemini returned no candidates".to_string(),
+            }],
+        )
+        .expect("submit first memory unit failure");
+
+    let request = step
+        .batch
+        .as_ref()
+        .expect("second extraction batch")
+        .requests
+        .iter()
+        .find(|request| request.prompt_id == "memory_unit_pass")
+        .expect("memory unit retry")
+        .clone();
+    assert_eq!(request.role_hint, ModelRole::Balanced);
+    step = engine
+        .submit_sleep_batch(
+            step.run,
+            vec![LlmResponse::Err {
+                request_id: request.request_id,
+                kind: LlmErrorKind::Other,
+                detail: "Gemini returned no candidates again".to_string(),
+            }],
+        )
+        .expect("submit second memory unit failure");
+
+    let request = step
+        .batch
+        .expect("third extraction batch")
+        .requests
+        .into_iter()
+        .find(|request| request.prompt_id == "memory_unit_pass")
+        .expect("final memory unit retry");
+    assert_eq!(request.role_hint, ModelRole::Reasoning);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_repairs_complete_archive_without_memory_units() {
+    let root = unique_temp_dir("repairs_complete_archive_without_memory_units");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said their cat is named Irzha.",
+        vec!["pet"],
+    );
+
+    let mut run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let mut step = engine.next_sleep_batch(run).expect("first batch");
+    let event_id = step.batch.as_ref().expect("batch").requests[0].prompt_inputs["sleep_task"]
+        ["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+    let archive_id = step.run.archive_id.clone();
+
+    while step.run.stage == SleepRunStage::Extraction {
+        let batch = step.batch.expect("extraction batch");
+        let responses = batch
+            .requests
+            .into_iter()
+            .map(|request| match request.prompt_id.as_str() {
+                "memory_unit_pass" => LlmResponse::Err {
+                    request_id: request.request_id,
+                    kind: LlmErrorKind::Other,
+                    detail: "Gemini returned no candidates".to_string(),
+                },
+                "sleep_emotional_pass" => LlmResponse::Ok {
+                    request_id: request.request_id,
+                    text: json!({"emotional_markers": []}).to_string(),
+                },
+                "sleep_topic_thread_pass" => LlmResponse::Ok {
+                    request_id: request.request_id,
+                    text: json!({"topic_thread": []}).to_string(),
+                },
+                "sleep_personal_signal_pass" => LlmResponse::Ok {
+                    request_id: request.request_id,
+                    text: json!({
+                        "personal_signals": [{
+                            "text": "The user has a cat named Irzha.",
+                            "category": "pet",
+                            "confidence": 0.95,
+                            "source_event_ids": [event_id.clone()]
+                        }]
+                    })
+                    .to_string(),
+                },
+                "sleep_relational_pass" => LlmResponse::Ok {
+                    request_id: request.request_id,
+                    text: json!({"relational_tone": null}).to_string(),
+                },
+                other => panic!("unexpected extraction request: {other}"),
+            })
+            .collect();
+        step = engine
+            .submit_sleep_batch(step.run, responses)
+            .expect("submit extraction batch");
+    }
+
+    run = step.run;
+    let batch = step.batch.expect("consolidator batch");
+    let step = engine
+        .submit_sleep_batch(
+            run,
+            vec![LlmResponse::Ok {
+                request_id: batch.requests[0].request_id.clone(),
+                text: "GIST: User named their cat Irzha.\n\nThe user shared a stable pet fact."
+                    .to_string(),
+            }],
+        )
+        .expect("submit consolidator");
+    run = step.run;
+
+    let outcome = engine.finish_sleep_run(run).expect("finish sleep");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert!(outcome.archive_entry.memory_units.is_empty());
+    assert!(outcome
+        .failed_passes
+        .contains(&"memory_unit_pass".to_string()));
+    assert_eq!(outcome.core_summary.created, 1);
+
+    let archived_events = engine
+        .storage()
+        .read_session_archived_events("live_session")
+        .expect("archived events remain available for repair");
+    assert!(archived_events
+        .iter()
+        .any(|event| event.event_id == event_id));
+
+    let repair_requests = engine
+        .pending_memory_unit_repairs("live_session")
+        .expect("repair requests");
+    assert_eq!(repair_requests.len(), 1);
+    assert_eq!(repair_requests[0].role_hint, ModelRole::Reasoning);
+    assert_eq!(repair_requests[0].prompt_id, "memory_unit_pass");
+
+    let repaired = engine
+        .submit_memory_unit_repair_response(
+            &repair_requests[0].task_id,
+            LlmResponse::Ok {
+                request_id: repair_requests[0].request_id.clone(),
+                text: json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": archive_id,
+                    "memory_units": [{
+                        "thesis": "The user has a cat named Irzha.",
+                        "source_event_ids": [event_id],
+                        "tags": ["pet"],
+                        "weight": 0.9
+                    }]
+                })
+                .to_string(),
+            },
+        )
+        .expect("submit repair")
+        .expect("repaired archive");
+    assert_eq!(repaired.memory_units.len(), 1);
+    assert_eq!(
+        repaired.compact_memory.as_deref(),
+        Some("The user has a cat named Irzha.")
+    );
+    assert!(engine
+        .pending_memory_unit_repairs("live_session")
+        .expect("no more repairs")
+        .is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_repair_falls_back_to_archive_tracks_when_provider_blocks() {
+    let root = unique_temp_dir("repair_falls_back_to_archive_tracks_when_provider_blocks");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let storage_probe = storage.clone();
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said their cat is named Irzha.",
+        vec!["pet"],
+    );
+
+    let run = engine
+        .begin_sleep_run("live_session")
+        .expect("begin sleep run");
+    let mut step = engine.next_sleep_batch(run).expect("first batch");
+    let event_id = step.batch.as_ref().expect("batch").requests[0].prompt_inputs["sleep_task"]
+        ["events"][0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_string();
+
+    while step.run.stage == SleepRunStage::Extraction {
+        let batch = step.batch.expect("extraction batch");
+        let responses = batch
+            .requests
+            .into_iter()
+            .map(|request| match request.prompt_id.as_str() {
+                "memory_unit_pass" => LlmResponse::Err {
+                    request_id: request.request_id,
+                    kind: LlmErrorKind::Other,
+                    detail: "Gemini returned no candidates".to_string(),
+                },
+                "sleep_emotional_pass" => LlmResponse::Ok {
+                    request_id: request.request_id,
+                    text: json!({"emotional_markers": []}).to_string(),
+                },
+                "sleep_topic_thread_pass" => LlmResponse::Ok {
+                    request_id: request.request_id,
+                    text: json!({
+                        "topic_thread": [{
+                            "topic": "pet",
+                            "summary": "The user discussed a cat named Irzha.",
+                            "source_event_ids": [event_id.clone()]
+                        }]
+                    })
+                    .to_string(),
+                },
+                "sleep_personal_signal_pass" => LlmResponse::Ok {
+                    request_id: request.request_id,
+                    text: json!({
+                        "personal_signals": [{
+                            "text": "The user has a cat named Irzha.",
+                            "category": "pet",
+                            "confidence": 0.95,
+                            "source_event_ids": [event_id.clone()]
+                        }]
+                    })
+                    .to_string(),
+                },
+                "sleep_relational_pass" => LlmResponse::Ok {
+                    request_id: request.request_id,
+                    text: json!({"relational_tone": null}).to_string(),
+                },
+                other => panic!("unexpected extraction request: {other}"),
+            })
+            .collect();
+        step = engine
+            .submit_sleep_batch(step.run, responses)
+            .expect("submit extraction batch");
+    }
+
+    let batch = step.batch.expect("consolidator batch");
+    let step = engine
+        .submit_sleep_batch(
+            step.run,
+            vec![LlmResponse::Ok {
+                request_id: batch.requests[0].request_id.clone(),
+                text: "GIST: User named their cat Irzha.\n\nThe user shared a stable pet fact."
+                    .to_string(),
+            }],
+        )
+        .expect("submit consolidator");
+    let outcome = engine.finish_sleep_run(step.run).expect("finish sleep");
+    assert!(outcome.archive_entry.memory_units.is_empty());
+
+    let repair_requests = engine
+        .pending_memory_unit_repairs("live_session")
+        .expect("repair requests");
+    assert_eq!(repair_requests.len(), 1);
+
+    let repaired = engine
+        .submit_memory_unit_repair_response(
+            &repair_requests[0].task_id,
+            LlmResponse::Err {
+                request_id: repair_requests[0].request_id.clone(),
+                kind: LlmErrorKind::ProviderBlocked,
+                detail: "provider blocked the repair prompt".to_string(),
+            },
+        )
+        .expect("provider-blocked repair falls back")
+        .expect("repaired archive");
+
+    assert_eq!(repaired.memory_units.len(), 2);
+    assert_eq!(
+        repaired.compact_memory.as_deref(),
+        Some("The user has a cat named Irzha.\nThe user discussed a cat named Irzha.")
+    );
+    assert!(repaired.memory_units[0]
+        .tags
+        .contains(&"repair_from_personal_signal".to_string()));
+    let task = storage_probe
+        .load_task(&repair_requests[0].task_id)
+        .expect("read repair task");
+    assert_eq!(task.state, TaskState::Completed);
+    assert!(task
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("archive-track fallback")));
 
     fs::remove_dir_all(root).ok();
 }

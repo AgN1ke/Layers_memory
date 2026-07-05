@@ -219,6 +219,297 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(runs)
     }
 
+    pub fn pending_memory_unit_repairs(&self, session_id: &str) -> Result<Vec<LlmRequest>> {
+        if session_id.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "repair session_id must not be empty".to_string(),
+            ));
+        }
+        self.ensure_manifest()?;
+
+        self.with_resource_lock(session_lock_key(session_id), || {
+            let active_repair_archive_ids = self
+                .storage
+                .load_tasks()?
+                .into_items()
+                .into_iter()
+                .filter(|task| {
+                    task.task_type == TaskType::MemoryUnitPass
+                        && matches!(task.state, TaskState::Pending | TaskState::Submitted)
+                })
+                .filter_map(|task| {
+                    task.inputs
+                        .get("preliminary_archive_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<HashSet<_>>();
+
+            let all_events = self.read_session_events_with_archived(session_id)?;
+            let event_by_id = all_events
+                .iter()
+                .map(|event| (event.event_id.as_str(), event))
+                .collect::<HashMap<_, _>>();
+
+            let mut archives = self
+                .storage
+                .read_archive(&ArchiveFilters::default())?
+                .into_items()
+                .into_iter()
+                .filter(|archive| {
+                    archive.source_session_id == session_id
+                        && archive.status == ArchiveStatus::Complete
+                        && archive.memory_units.is_empty()
+                        && !archive.source_event_ids.is_empty()
+                        && !active_repair_archive_ids.contains(&archive.archive_id)
+                })
+                .collect::<Vec<_>>();
+            archives.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.archive_id.cmp(&right.archive_id))
+            });
+
+            let now = now_rfc3339()?;
+            let mut requests = Vec::new();
+            for archive in archives {
+                let events = archive
+                    .source_event_ids
+                    .iter()
+                    .filter_map(|event_id| event_by_id.get(event_id.as_str()).copied())
+                    .collect::<Vec<_>>();
+                if events.is_empty() {
+                    continue;
+                }
+                let task = build_memory_unit_repair_task(session_id, &events, &archive, &now)?;
+                self.storage.save_task(&task)?;
+                requests.push(llm_request_from_task(
+                    &task,
+                    "memory_unit_pass",
+                    json!({ "sleep_task": task.inputs }),
+                )?);
+            }
+            Ok(requests)
+        })
+    }
+
+    pub fn submit_memory_unit_repair_response(
+        &self,
+        task_id: &str,
+        response: LlmResponse,
+    ) -> Result<Option<ArchiveEntry>> {
+        if task_id.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "memory unit repair task_id must not be empty".to_string(),
+            ));
+        }
+        self.ensure_manifest()?;
+
+        let task = self.storage.load_task(task_id)?;
+        if task.task_type != TaskType::MemoryUnitPass {
+            return Err(MemoryEngineError::Validation(format!(
+                "task is not memory_unit_pass: {task_id}"
+            )));
+        }
+        let archive_id = task
+            .inputs
+            .get("preliminary_archive_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                MemoryEngineError::Validation(format!(
+                    "memory_unit_pass task has no preliminary_archive_id: {task_id}"
+                ))
+            })?
+            .to_string();
+
+        let result = match response {
+            LlmResponse::Ok { text, .. } => {
+                let parsed = parse_json_value_from_llm_text(&text)
+                    .and_then(|value| {
+                        serde_json::from_value::<MemoryUnitPassResult>(value).map_err(Into::into)
+                    })
+                    .map(|mut result| {
+                        if result.schema_version.trim().is_empty() {
+                            result.schema_version = MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string();
+                        }
+                        if result.archive_id != archive_id {
+                            result.archive_id = archive_id.clone();
+                        }
+                        result
+                    });
+                match parsed {
+                    Ok(result) => result,
+                    Err(err) => {
+                        self.mark_memory_unit_task_failed_best_effort(
+                            task_id,
+                            format!("memory unit repair parse failed: {err}"),
+                        );
+                        return Err(err);
+                    }
+                }
+            }
+            LlmResponse::Err { kind, detail, .. } => {
+                if kind == LlmErrorKind::Transport {
+                    self.mark_memory_unit_task_failed_best_effort(
+                        task_id,
+                        format!("{kind:?}: {detail}"),
+                    );
+                    return Ok(None);
+                }
+                return self
+                    .repair_memory_units_from_archive_tracks(
+                        task_id,
+                        &archive_id,
+                        format!("{kind:?}: {detail}"),
+                    )
+                    .map(Some);
+            }
+        };
+
+        self.resume_memory_unit_pass(task_id, result).map(Some)
+    }
+
+    fn repair_memory_units_from_archive_tracks(
+        &self,
+        task_id: &str,
+        archive_id: &str,
+        failure_detail: String,
+    ) -> Result<ArchiveEntry> {
+        let mut task = self.storage.load_task(task_id)?;
+        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
+        let now = now_rfc3339()?;
+        if task.state == TaskState::Completed || !archive_entry.memory_units.is_empty() {
+            task.state = TaskState::Completed;
+            task.updated_at = now;
+            task.last_error = None;
+            self.storage.save_task(&task)?;
+            return Ok(archive_entry);
+        }
+
+        let mut units = Vec::new();
+        let mut seen = HashSet::new();
+
+        for signal in &archive_entry.personal_signals {
+            if units.len() >= REPAIR_FALLBACK_MAX_UNITS {
+                break;
+            }
+            push_repair_memory_unit(
+                &mut units,
+                &mut seen,
+                &archive_entry,
+                &now,
+                RepairMemoryUnitInput {
+                    thesis: &signal.text,
+                    source_event_ids: signal.source_event_ids.clone(),
+                    evidence: signal.evidence.clone(),
+                    tags: vec![
+                        "memory_unit_repair".to_string(),
+                        "repair_from_personal_signal".to_string(),
+                        format!("signal_category:{}", signal.category),
+                    ],
+                    weight: signal.confidence.clamp(0.55, 0.95),
+                },
+            )?;
+        }
+
+        for fact in &archive_entry.facts {
+            if units.len() >= REPAIR_FALLBACK_MAX_UNITS {
+                break;
+            }
+            push_repair_memory_unit(
+                &mut units,
+                &mut seen,
+                &archive_entry,
+                &now,
+                RepairMemoryUnitInput {
+                    thesis: &fact.text,
+                    source_event_ids: fact.source_event_ids.clone(),
+                    evidence: None,
+                    tags: vec![
+                        "memory_unit_repair".to_string(),
+                        "repair_from_fact".to_string(),
+                    ],
+                    weight: fact.confidence.clamp(0.50, 0.90),
+                },
+            )?;
+        }
+
+        for item in &archive_entry.topic_thread {
+            if units.len() >= REPAIR_FALLBACK_MAX_UNITS {
+                break;
+            }
+            let thesis = item
+                .summary
+                .as_deref()
+                .map(normalize_whitespace)
+                .filter(|summary| !summary.is_empty())
+                .unwrap_or_else(|| {
+                    let mut parts = vec![item.topic.trim().to_string()];
+                    parts.extend(
+                        item.subtopics
+                            .iter()
+                            .map(|subtopic| subtopic.trim().to_string()),
+                    );
+                    normalize_whitespace(&parts.join(": "))
+                });
+            push_repair_memory_unit(
+                &mut units,
+                &mut seen,
+                &archive_entry,
+                &now,
+                RepairMemoryUnitInput {
+                    thesis: &thesis,
+                    source_event_ids: item.source_event_ids.clone(),
+                    evidence: None,
+                    tags: vec![
+                        "memory_unit_repair".to_string(),
+                        "repair_from_topic_thread".to_string(),
+                    ],
+                    weight: archive_entry.weight.clamp(0.45, 0.75),
+                },
+            )?;
+        }
+
+        if units.is_empty() {
+            push_repair_memory_unit(
+                &mut units,
+                &mut seen,
+                &archive_entry,
+                &now,
+                RepairMemoryUnitInput {
+                    thesis: &archive_entry.gist,
+                    source_event_ids: archive_entry.source_event_ids.clone(),
+                    evidence: Some(archive_entry.narrative.clone()),
+                    tags: vec![
+                        "memory_unit_repair".to_string(),
+                        "repair_from_archive_gist".to_string(),
+                    ],
+                    weight: archive_entry.weight.clamp(0.40, 0.70),
+                },
+            )?;
+        }
+
+        for unit in &units {
+            self.storage.write_memory_unit(unit)?;
+        }
+
+        archive_entry.updated_at = now.clone();
+        archive_entry.memory_units = units;
+        archive_entry.compact_memory =
+            render_compact_memory_from_units(&archive_entry.memory_units);
+        self.storage
+            .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
+
+        task.state = TaskState::Completed;
+        task.updated_at = now;
+        task.last_error = Some(format!(
+            "memory unit repair used archive-track fallback after LLM failure: {failure_detail}"
+        ));
+        self.storage.save_task(&task)?;
+
+        Ok(archive_entry)
+    }
+
     pub fn cancel_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun> {
         let run = self.storage.load_sleep_run(sleep_task_id)?;
         validate_sleep_run(&run)?;
@@ -711,6 +1002,59 @@ impl<S: Storage> MemoryEngine<S> {
 
         Ok(archive_entry)
     }
+
+    pub(super) fn mark_memory_unit_task_failed_best_effort(&self, task_id: &str, detail: String) {
+        if let Ok(mut task) = self.storage.load_task(task_id) {
+            if task.task_type == TaskType::MemoryUnitPass {
+                task.state = TaskState::Failed;
+                task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
+                task.last_error = Some(detail);
+                let _ = self.storage.save_task(&task);
+            }
+        }
+    }
+}
+
+struct RepairMemoryUnitInput<'a> {
+    thesis: &'a str,
+    source_event_ids: Vec<String>,
+    evidence: Option<String>,
+    tags: Vec<String>,
+    weight: f64,
+}
+
+const REPAIR_FALLBACK_MAX_UNITS: usize = 8;
+
+fn push_repair_memory_unit(
+    units: &mut Vec<MemoryUnit>,
+    seen: &mut HashSet<String>,
+    archive_entry: &ArchiveEntry,
+    now: &str,
+    input: RepairMemoryUnitInput<'_>,
+) -> Result<()> {
+    let thesis = normalize_whitespace(input.thesis);
+    if thesis.is_empty() || !seen.insert(thesis.to_lowercase()) {
+        return Ok(());
+    }
+
+    units.push(MemoryUnit {
+        schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
+        memory_unit_id: new_id("mu")?,
+        archive_id: archive_entry.archive_id.clone(),
+        source_session_id: archive_entry.source_session_id.clone(),
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+        thesis,
+        source_event_ids: input.source_event_ids,
+        evidence: normalize_optional_string(input.evidence.as_deref()),
+        tags: input.tags,
+        weight: input.weight,
+        status: MemoryUnitStatus::ActiveArchive,
+        fidelity_status: FidelityStatus::Unchecked,
+        fidelity_review: None,
+        forget_review: None,
+    });
+    Ok(())
 }
 
 /// A session is multi-speaker when at least two distinct human speaker ids
