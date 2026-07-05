@@ -6007,3 +6007,25 @@ Also added a matching maintenance entry to `wiki/log.md`.
 Continue with the research cluster in another small pass. Good candidates are
 the vector-memory documents and the contextual memory expansion note, because
 they now drive active implementation decisions.
+
+## Entry 135 - 2026-07-05 - Active research wiki cross-links (Owner + Codex)
+
+**Context:**
+The owner asked to enrich the wiki gradually. After foundation/planning and
+release/integration pages, the next useful batch was active research: vector
+memory, contextual memory expansion, and provider-resource choices.
+
+**What changed:**
+Added first-pass `Related pages` blocks to:
+
+- `wiki/pages/research/vector-recall.md`;
+- `wiki/pages/research/vector-storage-tz-2026-07-03.md`;
+- `wiki/pages/research/contextual-memory-expansion-2026-07-05.md`;
+- `wiki/pages/research/provider-landscape.md`.
+
+Also added a matching maintenance entry to `wiki/log.md`.
+
+**Next:**
+Continue with the remaining research pages in another small pass: multi-speaker
+geometry, time perception, media/multimodal notes, agentic architectures, and
+history-discipline reference.

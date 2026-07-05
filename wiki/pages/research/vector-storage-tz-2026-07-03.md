@@ -1,5 +1,13 @@
 # ТЗ: Векторне сховище і глибокий recall (opt-in, вимикається) — 2026-07-03
 
+## Related pages
+
+- [Vector recall draft](vector-recall.md) - original research draft that this TZ aligns and supersedes.
+- [Contextual memory expansion](contextual-memory-expansion-2026-07-05.md) - next design step after vector Phase B.
+- [Architecture](../foundation/architecture.md) - core/host boundary and concurrency assumptions.
+- [Contracts](../foundation/contracts.md) - schemas and task shapes updated by vector storage.
+- [Roadmap](../planning/roadmap.md) - current phase status and deferred vector work.
+
 ## Для чого існує цей документ
 
 Це імплементаційне ТЗ для Кодекса. Власник ухвалив рішення: робимо векторне сховище зараз, з можливістю повністю вимкнути його, і тестуємо на живих даних.

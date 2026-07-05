@@ -1,5 +1,13 @@
 # Contextual Memory Expansion and Provider Configuration - 2026-07-05
 
+## Related pages
+
+- [Vector storage implementation TZ](vector-storage-tz-2026-07-03.md) - vector layer this plan builds on.
+- [LLM integration resources](../integration/llm-integration-resources.md) - developer-facing resource contract for models, keys, and embeddings.
+- [Provider landscape](provider-landscape.md) - provider research behind model choices.
+- [Contracts](../foundation/contracts.md) - context package and request shapes affected by expansion.
+- [Roadmap](../planning/roadmap.md) - where expansion fits after v0.3 and vector Phase B.
+
 ## Purpose
 
 This document records the next design step after vector storage Phase B and the

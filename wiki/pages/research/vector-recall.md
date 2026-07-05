@@ -1,5 +1,13 @@
 # Vector Recall over Archive (spec v0.1)
 
+## Related pages
+
+- [Vector storage implementation TZ](vector-storage-tz-2026-07-03.md) - implementation spec that supersedes this draft.
+- [Contextual memory expansion](contextual-memory-expansion-2026-07-05.md) - current plan that builds on vector recall.
+- [Architecture](../foundation/architecture.md) - host/core boundary used by embedding work.
+- [Contracts](../foundation/contracts.md) - task and response contracts this draft must align with.
+- [LLM integration resources](../integration/llm-integration-resources.md) - model and local embedding resources required from an embedding application.
+
 Status: research draft, accepted as a working direction; not implementation-ready
 until the alignment notes below are resolved.
 Audience: implementation agent (Codex) and maintainer.

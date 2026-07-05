@@ -1,5 +1,13 @@
 # Ландшафт Провайдерів
 
+## Related pages
+
+- [LLM integration resources](../integration/llm-integration-resources.md) - stable developer-facing resource contract derived from this research.
+- [Configuration](../../../config/README.md) - local config shape for provider/model selection.
+- [Contextual memory expansion](contextual-memory-expansion-2026-07-05.md) - current feature plan that depends on provider and embedding resources.
+- [Architecture](../foundation/architecture.md) - provider-neutral core boundary.
+- [Strategy](../foundation/strategy.md) - project-level reason for keeping providers out of the core.
+
 Огляд актуальний на 2026-04-04. Оновлено з конкретними моделями, цінами за 1M токенів, контекстними вікнами, capability maps і бенчмарками Chatbot Arena.
 
 ---

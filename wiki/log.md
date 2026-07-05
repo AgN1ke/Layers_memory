@@ -2,6 +2,18 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-07-05] link pass | Active vector and provider research
+
+Added first-pass `Related pages` navigation blocks to active research pages:
+
+- `research/vector-recall.md`;
+- `research/vector-storage-tz-2026-07-03.md`;
+- `research/contextual-memory-expansion-2026-07-05.md`;
+- `research/provider-landscape.md`.
+
+This pass connects the original vector draft, the implementation TZ, the current
+contextual expansion plan, and the provider-resource research.
+
 ## [2026-07-05] link pass | Release and integration pages
 
 Added first-pass `Related pages` navigation blocks to release and integration
