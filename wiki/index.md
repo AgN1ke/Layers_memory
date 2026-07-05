@@ -1,5 +1,8 @@
 # Memory Engine Wiki Index
 
+Start at [Wiki Home](README.md) if you are reading this project for the first
+time.
+
 This is the content index for the Memory Engine project wiki.
 
 The wiki contains project knowledge: strategy, architecture, contracts,
@@ -9,6 +12,7 @@ crate/host README files stay outside the wiki.
 
 ## Wiki Maintenance
 
+- [Wiki Home](README.md) - first page to read before using the index.
 - [Wiki Rules](AGENTS.md) - maintenance schema for adding, moving, and linking
   wiki pages.
 - [Wiki Log](log.md) - chronological log of wiki maintenance operations.

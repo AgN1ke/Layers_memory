@@ -2,6 +2,7 @@
 
 ## Related pages
 
+- [Wiki home](README.md) - first page to read before navigating the wiki.
 - [Wiki index](index.md) - main map of project knowledge pages.
 - [Wiki log](log.md) - chronological record of wiki maintenance operations.
 - [Project HISTORY](../HISTORY.md) - product-level behavior and compatibility log.

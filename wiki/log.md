@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-07-05] page added | Wiki home
+
+Added `README.md` as the first page to read inside the wiki. The page explains
+what Memory Engine is, what state the project is in, how to navigate the wiki,
+and which operational files still live outside the wiki.
+
 ## [2026-07-05] research note | LLM wiki operating patterns
 
 Added `research/llm-wiki-operating-patterns-2026-07-05.md` after reviewing a

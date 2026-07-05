@@ -6096,3 +6096,24 @@ the LLM wiki stays Markdown-native and gains reproducible link validation.
 **Next:**
 Optionally add this checker to CI later. For now it is a local repository tool
 and should be run after wiki edits.
+
+## Entry 139 - 2026-07-05 - Wiki home page added (Owner + Codex)
+
+**Context:**
+After the wiki migration and cross-link passes, the owner pointed out that the
+wiki had a content index but not a clear first page like a README.
+
+**What changed:**
+- Added `wiki/README.md` as the first page to read inside the wiki.
+- Linked it from `wiki/index.md`.
+- Linked it from `wiki/AGENTS.md`.
+- Added a matching maintenance entry to `wiki/log.md`.
+
+**Decision:**
+`wiki/README.md` is the human/agent landing page. `wiki/index.md` remains the
+complete map. Root `README.md`, `HISTORY.md`, and `DEVLOG.md` keep their
+operational roles outside the wiki.
+
+**Next:**
+Keep `wiki/README.md` short and update it only when the high-level project state
+changes.
