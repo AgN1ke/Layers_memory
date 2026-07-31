@@ -46,6 +46,117 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Current-topic vector memories become an explicit associative layer
+
+Context. Live Chibigochi verification of `d5d5f40` showed that ordinary Stage 2
+correctly ranked Titan first, while `CoreContextPackage.items[0]` was a Mars
+memory inserted by the older contextual-expansion path. The two items were
+relevant, but Stage 2 and deep recall use different score formulas. Prepending
+both into one `archive_relevant` list made the final package order disagree with
+its recall debug and let the token budget describe unlike scores as one rank.
+
+**What changed:**
+- `core_context_package` keeps ordinary Archive recall structural and no longer
+  sends its current-turn embedding through ordinary Stage 2 at the same time as
+  contextual expansion.
+- High-confidence deep-recall details now use the additive
+  `associative_memory` field. Each item retains its `memory_unit_id`, parent
+  `archive_id`, scope, timestamp, semantic similarity, deep-recall score, and
+  activation explanation.
+- The canonical prompt view renders a separate `<associative_memory>` section
+  and identifies its contents as older memories activated by the current topic.
+- Compressed-memory budgeting reports associative and ordinary Archive
+  trimming separately. Empty associative fields and zero counters are omitted,
+  preserving the non-vector serialized path.
+- Explicit `engine.recall(...)` continues to support opt-in unit-focused Stage 2.
+
+**What is retracted:**
+- The Phase 1 implementation note that contextual vector details should be
+  inserted into `archive_relevant` as if they shared its ranking semantics.
+
+**What is still true:**
+- Session, Archive, and Core remain the three persisted memory layers.
+- Vector rows remain an optional local, purgeable, rebuildable sidecar over
+  validated active memory units; files remain the source of truth.
+- The Rust core owns selection, deduplication, budgeting, and prompt assembly;
+  the host only supplies the current-turn embedding.
+- Associative memory is rebuilt independently for every package and does not
+  persist or carry a previous topic into the next turn.
+
+**What we are doing:**
+- Run a live Chibigochi topic-switch acceptance (Mars to dinosaurs), verify the
+  explicit old-memory label in the actual prompt, and close `v0.4.0` only after
+  that package behavior passes.
+
+## 2026-08-01 — License clarifies the Licensor's retained rights
+
+Context. The non-commercial public license already reserved the Licensor's
+right to offer the Software under commercial, open-source, private, exclusive,
+or custom terms. It did not state as directly that restrictions imposed on
+licensees do not bind the Licensor's own lawful exercise of rights in the
+Software.
+
+**What changed:**
+- The Memory Engine Non-Commercial Public License is identified as Version 0.3.
+- Section 13 now explicitly states that restrictions and conditions imposed on
+  `You` do not restrict the Licensor's own lawful use, copying, modification,
+  distribution, commercialization, or licensing of the Software.
+- The normative license body in root `LICENSE.md` and the governance wiki copy
+  remains identical; the wiki page keeps only its separate navigation header.
+
+**What did not change:**
+- The public grant remains non-commercial.
+- Commercial use by third parties still requires a separate written agreement.
+- This clarification reserves the ability to license the Software in parallel;
+  it does not by itself publish a second commercial license.
+- The library/package version is unaffected by the license document's own
+  version number.
+
+## 2026-08-01 — Release versions adopt one SemVer policy
+
+Context. Git tags `v0.2.0` and `v0.3.0` recorded accepted project milestones,
+while the Cargo workspace and Python distribution remained at `0.1.0`. That
+made the repository's three-number labels unsuitable as a reliable dependency
+compatibility signal.
+
+**What changed:**
+- `wiki/pages/governance/versioning.md` is now the normative release policy.
+- Before `1.0.0`, compatible fixes increment PATCH; public features and
+  intentional breaking changes increment MINOR, with breaking changes called
+  out explicitly and accompanied by migration notes.
+- After `1.0.0`, ordinary SemVer applies: breaking change -> MAJOR, compatible
+  feature -> MINOR, compatible fix -> PATCH.
+- The root Cargo workspace version is the release source of truth. Rust crates,
+  the Python package, immutable Git tag, acceptance record, and HISTORY must
+  agree before a release is tagged.
+- `tools/check_release_versions.py` now enforces the manifest boundary in the
+  normal CI path. Its strict tag mode additionally requires an exact
+  three-number accepted evidence page and matching HISTORY heading; GitHub
+  Actions runs that mode automatically for future `v*` tags.
+- Library SemVer is separate from named storage/wire schemas. Compatible
+  optional fields may remain in `.v1`; incompatible schema changes require a
+  new schema version and tested migration.
+
+**What is retracted:**
+- The implicit claim that historical `v0.2.0`/`v0.3.0` tags also represented
+  synchronized Cargo and Python distribution versions.
+
+**What is still true:**
+- The historical tags and their acceptance evidence remain valid milestone
+  records and will not be moved or rewritten.
+- No package version changes in this policy/gate change.
+
+**What we are doing:**
+- After live acceptance of vector Stage 2 and unit-focused recall, prepare the
+  first synchronized release as `0.4.0`, including an automated manifest/tag
+  consistency gate. The gate is now implemented; the live acceptance,
+  acceptance record, synchronized version bump, and tag remain intentionally
+  open.
+
+**Thanks:**
+- The owner and Yevhen for forcing the project to distinguish actual dependency
+  compatibility from merely writing three numbers in a tag.
+
 ## 2026-07-31 — Stage 2 preserves MemoryUnit provenance and focus
 
 Context. The first Chibigochi verification of vector Stage 2 passed the main

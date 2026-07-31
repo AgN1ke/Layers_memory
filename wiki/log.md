@@ -8,6 +8,67 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] context architecture | Ephemeral associative memory
+
+Corrected the Phase 1 contextual-expansion package role after live Chibigochi
+verification showed a valid Stage 2 Titan winner and a separately prepended
+deep-recall Mars detail in one flat list. The wiki now distinguishes explicit
+semantic `recall()` from chat context assembly: `archive_relevant` keeps its
+structural rank, while current-turn vector hits are exposed as per-request
+`associative_memory` with unit/archive provenance and an explicit old-memory
+prompt section. Session, Archive, and Core remain the persisted layers; the
+vector catalog remains a rebuildable sidecar. The roadmap requires Mars to
+dinosaurs topic-switch acceptance before v0.4 closure.
+
+## [2026-08-01] governance | Licensor rights clarification
+
+Updated the governance copy of the Memory Engine Non-Commercial Public License
+to Version 0.3 and kept its normative license body identical to root
+`LICENSE.md`; the wiki page retains only a separate navigation header. Section
+13 now states explicitly that restrictions imposed on licensees do not restrict
+the Licensor's own lawful use, distribution, commercialization, or parallel
+licensing of the Software. The roadmap and project HISTORY record that this is
+a clarification of retained rights, not a second published commercial license
+and not a library SemVer change.
+
+## [2026-08-01] governance | SemVer and schema-version policy
+
+Added `pages/governance/versioning.md` as the normative policy for library,
+adapter, Git-tag, and schema versions.
+
+The page defines the public compatibility surface, pre-1.0 rules, strict SemVer
+after 1.0, separation between release versions and named `*.v1` schemas, the
+root Cargo workspace as release source of truth, and the release checklist.
+It also records the historical mismatch between milestone tags
+`v0.2.0`/`v0.3.0` and `0.1.0` package manifests without rewriting old tags.
+
+Linked the policy from the wiki index and root README. The decision and public
+compatibility correction are recorded in DEVLOG and HISTORY.
+
+Follow-up in the same governance pass added the executable release gate,
+documented its normal and strict tag modes, and updated the roadmap with an
+explicit v0.4 closure milestone. The roadmap now distinguishes implemented
+unit-level Stage 2 from its still-open Chibigochi acceptance and retracts the
+obsolete plan to populate archive-level embedding fields.
+
+## [2026-07-31] semantic provenance | Unit-focused Stage 2 recall
+
+Updated the accepted recall documents after Chibigochi live verification showed
+that unit-level vector ranking still returned an archive-wide prompt projection.
+
+- `foundation/architecture.md` now distinguishes unit-level embedding/search
+  from the parent archive's structural and statistics boundary.
+- `foundation/contracts.md` adds optional `matched_memory_unit_id` to
+  `RecallItem` and candidate debug, and specifies winning-unit projection.
+- `planning/roadmap.md` records semantic provenance as the completed foundation
+  for the future Recall Inspector while leaving the CLI itself open.
+- `research/vector-storage-tz-2026-07-03.md` records the live follow-up and
+  mixed-archive regression requirement.
+- `index.md` now calls out the unit-level recall boundary in foundation page
+  descriptions.
+
+No scoring weights, vector model, or Stage 1 behavior changed in this wiki pass.
+
 ## [2026-07-31] contracts + roadmap | Recall Stage 2 implemented
 
 Updated the stable contracts and accepted vector-storage spec after implementing
@@ -114,24 +175,6 @@ Added first-pass `Related pages` navigation blocks to active research pages:
 
 This pass connects the original vector draft, the implementation TZ, the current
 contextual expansion plan, and the provider-resource research.
-
-## [2026-07-31] semantic provenance | Unit-focused Stage 2 recall
-
-Updated the accepted recall documents after Chibigochi live verification showed
-that unit-level vector ranking still returned an archive-wide prompt projection.
-
-- `foundation/architecture.md` now distinguishes unit-level embedding/search
-  from the parent archive's structural and statistics boundary.
-- `foundation/contracts.md` adds optional `matched_memory_unit_id` to
-  `RecallItem` and candidate debug, and specifies winning-unit projection.
-- `planning/roadmap.md` records semantic provenance as the completed foundation
-  for the future Recall Inspector while leaving the CLI itself open.
-- `research/vector-storage-tz-2026-07-03.md` records the live follow-up and
-  mixed-archive regression requirement.
-- `index.md` now calls out the unit-level recall boundary in foundation page
-  descriptions.
-
-No scoring weights, vector model, or Stage 1 behavior changed in this wiki pass.
 
 ## [2026-07-05] link pass | Release and integration pages
 

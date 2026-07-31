@@ -186,6 +186,31 @@ pub struct CoreContextEvent {
     pub theme: Option<String>,
 }
 
+/// A transient older memory activated by the current conversational focus.
+///
+/// This is a prompt projection from the rebuildable vector sidecar, not a
+/// fourth persisted memory layer and not an item in the Archive recall rank.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssociativeMemoryItem {
+    pub memory_unit_id: Id,
+    pub archive_id: Id,
+    pub scope: String,
+    pub thesis: String,
+    pub created_at: Timestamp,
+    pub activation: AssociativeMemoryActivation,
+    pub semantic_similarity: f32,
+    pub deep_recall_score: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why_recalled: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssociativeMemoryActivation {
+    CurrentTopicVector,
+    CoreAnchor,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoreContextPackage {
     pub schema_version: String,
@@ -202,6 +227,8 @@ pub struct CoreContextPackage {
     pub session_trace: Vec<CoreContextEvent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archive_relevant: Vec<RecallItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub associative_memory: Vec<AssociativeMemoryItem>,
     #[serde(default)]
     pub domain_state: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -243,11 +270,19 @@ pub struct CoreContextBudgetReport {
     pub estimated_compressed_memory_tokens: usize,
     pub estimated_core_tokens: usize,
     pub estimated_domain_state_tokens: usize,
+    #[serde(default, skip_serializing_if = "usize_is_zero")]
+    pub estimated_associative_memory_tokens: usize,
     pub dropped_session_recent: usize,
     pub dropped_session_trace: usize,
     pub dropped_archive_relevant: usize,
+    #[serde(default, skip_serializing_if = "usize_is_zero")]
+    pub dropped_associative_memory: usize,
     pub dropped_core_facts: usize,
     pub budget_exceeded: bool,
+}
+
+fn usize_is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

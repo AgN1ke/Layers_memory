@@ -13,11 +13,11 @@ use crate::archive::{
     ForgetReviewRecord, MemoryUnit, MemoryUnitStatus,
 };
 use crate::core_store::{
-    CandidateBelief, CandidateReviewInput, CandidateReviewResult, CandidateStatus,
-    CoreContextBudgetReport, CoreContextEvent, CoreContextFact, CoreContextPackage,
-    CoreContextRequest, CoreContextTokenBudget, CoreFact, CoreFactInput, CoreFactPatchInput,
-    CoreFactPatchResult, CoreFactStatus, CoreFactUpsertResult, PromotionChecks, ReviewDecision,
-    ReviewRecord,
+    AssociativeMemoryActivation, AssociativeMemoryItem, CandidateBelief, CandidateReviewInput,
+    CandidateReviewResult, CandidateStatus, CoreContextBudgetReport, CoreContextEvent,
+    CoreContextFact, CoreContextPackage, CoreContextRequest, CoreContextTokenBudget, CoreFact,
+    CoreFactInput, CoreFactPatchInput, CoreFactPatchResult, CoreFactStatus, CoreFactUpsertResult,
+    PromotionChecks, ReviewDecision, ReviewRecord,
 };
 use crate::event::{IngestEvent, StoredEvent};
 use crate::fidelity::{EvidenceEvent, EvidenceEventRole, EvidencePack, MemoryFidelityPassStart};
@@ -31,9 +31,9 @@ use crate::llm::{
 };
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
 use crate::prompt_view::{
-    render_archive_memory_prompt_lines, render_context_event_prompt_line,
-    render_core_fact_prompt_line, TimeLabelContext, ARCHIVE_MEMORY_PROMPT_LIMIT,
-    OLDER_TRACE_MAX_TEXT_CHARS, RECENT_MAX_TEXT_CHARS,
+    render_archive_memory_prompt_lines, render_associative_memory_prompt_lines,
+    render_context_event_prompt_line, render_core_fact_prompt_line, TimeLabelContext,
+    ARCHIVE_MEMORY_PROMPT_LIMIT, OLDER_TRACE_MAX_TEXT_CHARS, RECENT_MAX_TEXT_CHARS,
 };
 use crate::recall::{
     RecallCandidateDebug, RecallDebug, RecallFilters, RecallItem, RecallQuery,

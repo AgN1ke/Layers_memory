@@ -508,6 +508,25 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+Версії workspace і Python package перевіряються окремим gate:
+
+```powershell
+python tools\check_release_versions.py
+python -m unittest discover -s tools/tests -p "test_*.py"
+```
+
+На release commit перед тегом потрібен strict mode, наприклад:
+
+```powershell
+python tools\check_release_versions.py `
+  --tag v0.4.0 `
+  --require-release-evidence
+```
+
+Strict mode не дозволить тег, доки manifests не дорівнюють `0.4.0`, exact
+`wiki/pages/releases/v0.4.0-acceptance.md` не має `Status: accepted`, а HISTORY
+не містить heading із `v0.4.0`.
+
 Якщо змінюються залежності в `Cargo.toml`, треба оновити і комітити `Cargo.lock`.
 
 `target/` не комітити: це локальний build output і він ігнорується через `.gitignore`.

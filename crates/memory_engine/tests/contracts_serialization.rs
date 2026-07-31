@@ -1,6 +1,7 @@
 use memory_engine::archive::{
     ArchiveEntry, ArchiveStatus, EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem,
 };
+use memory_engine::core_store::CoreContextPackage;
 use memory_engine::event::{IngestEvent, StoredEvent};
 use memory_engine::file_storage::FileStorage;
 use memory_engine::recall::{RecallCandidateDebug, RecallItem};
@@ -14,6 +15,21 @@ use memory_engine::types::{
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[test]
+fn core_context_package_adds_associative_memory_compatibly() {
+    let raw = json!({
+        "schema_version": "core_context_package.v1",
+        "created_at": "2026-08-01T10:00:00Z",
+        "domain_state": {}
+    });
+
+    let package: CoreContextPackage = serde_json::from_value(raw).unwrap();
+    assert!(package.associative_memory.is_empty());
+
+    let serialized = serde_json::to_value(package).unwrap();
+    assert!(serialized.get("associative_memory").is_none());
+}
 
 #[test]
 fn recall_candidate_debug_adds_optional_memory_unit_provenance_compatibly() {

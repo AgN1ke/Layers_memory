@@ -760,7 +760,14 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
 
 `domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
 
-`query_embedding` необовʼязковий. Якщо інтегруюча програма передає вектор поточного запиту, ядро може додати до `archive_relevant` кілька детальних спогадів із готового vector scope. Ці деталі проходять дедуплікацію проти вже видимої памʼяті й рахуються в тому самому `token_budget`. Якщо поле відсутнє, пакет контексту збирається звичайним шляхом.
+`query_embedding` необовʼязковий. У `core_context_package` він представляє
+актуальний user turn і активує окремий ephemeral `associative_memory` над
+готовим vector scope. Інтегруюча програма не повинна embed-ити вже зібраний
+prompt або раніше підтягнуті асоціативні спогади: інакше старий retrieval сам
+підтримуватиме власну тему. `archive_relevant` у цьому API лишається звичайним
+structural recall; opt-in Stage 2 доступний через explicit `engine.recall(...)`.
+Якщо embedding відсутній, associative section порожня, а non-vector package path
+не змінюється.
 
 `explain_recall` (default `false`) вмикає структурований `recall_debug` у відповіді. Це debug/telemetry payload, а не prompt content: він показує Stage 1 множники, початковий і фінальний ранги, vector status та Stage 2 складові, але не повинен передаватися LLM у звичайному chat prompt.
 
@@ -830,6 +837,19 @@ Core Context Package не обов'язково зберігається на д
       "relevance_score": 0.8
     }
   ],
+  "associative_memory": [
+    {
+      "memory_unit_id": "mu_01J00000000000000000000009",
+      "archive_id": "archive_01J00000000000000000000007",
+      "scope": "2026-05-17_005",
+      "thesis": "Раніше обговорювали Марс і умови на планетах земного типу.",
+      "created_at": "2026-02-10T12:00:00.000Z",
+      "activation": "current_topic_vector",
+      "semantic_similarity": 0.71,
+      "deep_recall_score": 0.76,
+      "why_recalled": "current topic vector matched an older memory unit"
+    }
+  ],
   "budget": {
     "estimator": "unicode_chars_div_2_ceil_json_v1",
     "total_budget_tokens": 11000,
@@ -841,35 +861,35 @@ Core Context Package не обов'язково зберігається на д
     "estimated_compressed_memory_tokens": 520,
     "estimated_core_tokens": 250,
     "estimated_domain_state_tokens": 40,
+    "estimated_associative_memory_tokens": 45,
     "dropped_session_recent": 0,
     "dropped_session_trace": 0,
     "dropped_archive_relevant": 0,
+    "dropped_associative_memory": 0,
     "dropped_core_facts": 0,
     "budget_exceeded": false
   },
   "recall_debug": {
-    "stage_used": "stage2_embeddings",
+    "stage_used": "stage1",
     "candidate_count": 12,
     "filtered_count": 12,
     "vector_stage": {
-      "status": "applied",
-      "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "status": "not_requested",
+      "reason": "query_embedding was not provided",
       "candidate_limit": 40,
       "candidate_count": 12,
-      "matched_archive_count": 12,
+      "matched_archive_count": 0,
       "vector_weight": 0.5,
       "stage1_weight": 0.5
     },
     "candidates": [
       {
         "archive_id": "archive_01J00000000000000000000001",
-        "stage1_rank": 3,
+        "stage1_rank": 1,
         "final_rank": 1,
         "selected": true,
         "stage1_score": 0.22,
-        "matched_memory_unit_id": "mu_01J00000000000000000000001",
-        "semantic_similarity": 0.81,
-        "final_score": 0.515,
+        "final_score": 0.22,
         "components": {
           "weight": 0.9,
           "stored_freshness": 1.0,
@@ -895,9 +915,24 @@ Core Context Package не обов'язково зберігається на д
 
 На v0.1 `core_facts` заповнюється стабільними фактами поточного `core_scope`; категорії є вільними normalized `snake_case`, а не закритим списком. Хости мають використовувати `CoreContextPackage` як єдину точку збору prompt-контексту, а не дублювати session/recent/archive/core логіку в кожному host-і.
 
-`budget` завжди показує, скільки memory context приблизно займає після trimming. Active session events зберігаються від найсвіжіших назад, `archive_relevant` — за recall ranking, `core_facts` — за confidence. Якщо `budget_exceeded: true`, host має логувати це як warning і перевірити `domain_state` або власний prompt overhead.
+`budget` завжди показує, скільки memory context приблизно займає після trimming.
+Active session events зберігаються від найсвіжіших назад,
+`archive_relevant` — за власним recall ranking, `core_facts` — за confidence.
+Високопороговий `associative_memory` отримує перший доступ до
+compressed-memory budget, бо це явна активація поточною темою; звичайні Archive
+items використовують залишок і зберігають внутрішній rank. Звіт рахує dropped
+items окремо, тому не називає associative detail переможцем іншої формули. Якщо
+`budget_exceeded: true`, host має логувати це як warning і перевірити
+`domain_state` або власний prompt overhead.
 
 `archive_relevant` пріоритезує `compact_memory`, якщо archive entry має це поле. У такому випадку `gist` у recall item дорівнює compact thesis, а `narrative`, `facts` і `quotes` не повертаються в prompt-facing форму. Full archive із narrative, tracks і цитатами лишається у storage/debug entry.
+
+`associative_memory` не є четвертим persisted memory layer. Це per-request
+prompt projection із rebuildable vector index. Кожний item зберігає atomic
+`memory_unit_id`, parent `archive_id`, час, similarity, deep-recall score і
+пояснення активації. Canonical prompt view рендерить його окремим
+`<associative_memory>` блоком із явною позначкою, що це давні спогади,
+активовані поточною темою.
 
 Важливо: цей JSON-контракт є API/debug формою, а не обовʼязковим дослівним prompt payload. Для LLM має використовуватись компактне prompt-facing представлення: без `schema_version`, довгих `event_id` / `archive_id` / `core_fact_id`, службових `source`, зайвих timestamp/source полів і дубльованих технічних ключів, якщо вони не потрібні для конкретної відповіді або debug-команди. Канонічні storage-файли лишаються повними; prompt view має нести сенс, а не аудитну обвʼязку. На v0.1 Telegram host реалізує compact projection перед chat prompt через role transcript і compact memory theses; спільний engine-level `prompt_view` контракт лишається задачею v0.2.
 

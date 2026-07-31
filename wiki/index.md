@@ -32,7 +32,8 @@ crate/host README files stay outside the wiki.
 ## Planning
 
 - [Roadmap](pages/planning/roadmap.md) - current implementation state, completed
-  vector Stage 2, open work, deferred items, and phase ordering.
+  unit-focused vector Stage 2, explicit v0.4 release closure, open work,
+  deferred items, and phase ordering.
 - [Audit 2026-06-10](pages/planning/audit-2026-06-10.md) - post-v0.2 audit,
   cleanup queue, risks, and resolved findings.
 
@@ -58,6 +59,8 @@ crate/host README files stay outside the wiki.
 
 - [Licensing](pages/governance/licensing.md) - non-commercial license rationale
   and license text history.
+- [Versioning](pages/governance/versioning.md) - normative SemVer policy,
+  pre-1.0 compatibility rules, schema-version separation, and release checklist.
 
 ## Research
 

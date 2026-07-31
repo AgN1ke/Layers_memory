@@ -1,6 +1,6 @@
 # Memory Engine Non-Commercial Public License
 
-Version 0.2
+Version 0.3
 
 Copyright (c) 2026 Mykyta Zagamula
 
@@ -174,6 +174,11 @@ All rights not expressly granted by this license are reserved by the Licensor.
 Nothing in this license prevents the Licensor from offering the Software under
 different terms, including open-source, commercial, private, exclusive, or
 custom terms.
+
+For clarity, the restrictions and conditions imposed on You by this license do
+not restrict the Licensor's own use, copying, modification, distribution,
+commercialization, or licensing of the Software, to the extent the Licensor has
+the legal right to exercise those rights.
 
 ## 14. Commercial Licensing Contact
 

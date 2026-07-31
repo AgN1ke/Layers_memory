@@ -37,6 +37,39 @@ other interface is only the surface; the actual integrating program supplies
 model resources and calls the library, while the library decides how memory is
 shaped.
 
+### Architecture correction after live Stage 2 verification — 2026-08-01
+
+The owner intent is an ephemeral associative layer for the active conversation,
+not a second vector rank inside ordinary long memory. Session, Archive, and Core
+remain the canonical memory layers. The memory-unit vector store is a derived,
+purgeable, rebuildable sidecar index; it is not a fourth source of truth.
+
+`core_context_package` therefore keeps two mechanisms separate:
+
+- `archive_relevant` is ordinary structural Archive recall and preserves its
+  own ranking contract;
+- `associative_memory` is a small per-request set of older `MemoryUnit` details
+  activated by the current-turn embedding.
+
+An explicit `engine.recall(...)` call may still request opt-in Stage 2 semantic
+re-ranking. That search primitive is independent from contextual prompt
+assembly. The same query embedding must not silently run both mechanisms inside
+one flat `archive_relevant` list.
+
+Associative memory has no persistence or carry-over of its own. Every context
+package rebuilds it from the current turn. When the conversation changes from
+Mars to dinosaurs, the Mars association disappears unless the new turn itself
+still activates it. The embedding input must be derived from the current user
+turn (or a future core-defined active-focus projection) and must never include
+previously injected associative memory; this prevents retrieval feedback loops.
+
+The live Chibigochi verification that motivated this correction showed a Titan
+Stage 2 winner while a Mars deep-recall detail was prepended as `items[0]`.
+Both memories were relevant, but their scores came from different formulas and
+the flat list made the package order and debug contract appear contradictory.
+The correction preserves the useful Mars association and gives it its intended
+role instead of sorting incomparable scores together.
+
 ## User-Facing Meaning
 
 From a product user's point of view, memory should feel like this:
@@ -139,7 +172,8 @@ demo code.
 
 ### Step 2 - Contextual Expansion Phase 1
 
-Status: implemented on 2026-07-05.
+Status: original behavior implemented on 2026-07-05; package-role correction in
+progress on 2026-08-01 after live Stage 2 verification.
 
 Add `query_embedding` to the context request path and keep behavior unchanged
 when it is absent.
@@ -165,9 +199,11 @@ Implementation notes:
 - The engine searches the existing memory-unit vector index with
   `VectorConfig.contextual_expansion_min_sim` and
   `VectorConfig.contextual_expansion_top_k`.
-- Returned memories are inserted into `archive_relevant` with
-  `contextual_expansion` and `vector_recall` tags, then the normal context
-  budget is applied.
+- Returned memories are emitted as typed `associative_memory` items with both
+  `memory_unit_id` and parent `archive_id`; they do not participate in the
+  `archive_relevant` rank.
+- The normal compressed-memory budget remains authoritative and reports
+  associative and ordinary Archive trimming separately.
 - The Telegram development host sends a query embedding only when the current
   chat scope has a ready vector index and the local embedder is available.
 

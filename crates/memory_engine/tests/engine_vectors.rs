@@ -1,7 +1,9 @@
 use memory_engine::archive::{
     ArchiveEntry, ArchiveStatus, FidelityStatus, MemoryUnit, MemoryUnitStatus,
 };
-use memory_engine::core_store::{CoreContextQueryEmbedding, CoreContextRequest};
+use memory_engine::core_store::{
+    AssociativeMemoryActivation, CoreContextQueryEmbedding, CoreContextRequest,
+};
 use memory_engine::event::IngestEvent;
 use memory_engine::llm::LlmResponse;
 use memory_engine::recall::{
@@ -608,26 +610,35 @@ fn core_context_package_expands_with_vector_detail_when_query_embedding_is_prese
         })
         .expect("context with embedding");
 
-    assert_eq!(with_embedding.archive_relevant.len(), 2);
+    assert_eq!(with_embedding.archive_relevant.len(), 1);
+    assert_eq!(with_embedding.associative_memory.len(), 1);
     assert_eq!(
-        with_embedding.archive_relevant[0].compact_memory.as_deref(),
-        Some("Irzha is a tortoiseshell cat with black fur and rusty orange patches.")
+        with_embedding.associative_memory[0].thesis,
+        "Irzha is a tortoiseshell cat with black fur and rusty orange patches."
     );
-    assert!(with_embedding.archive_relevant[0]
-        .tags
-        .iter()
-        .any(|tag| tag == "contextual_expansion"));
+    assert_eq!(
+        with_embedding.associative_memory[0].activation,
+        AssociativeMemoryActivation::CurrentTopicVector
+    );
+    assert_eq!(
+        with_embedding.associative_memory[0].archive_id,
+        "archive_irzha_detail"
+    );
+    assert_eq!(
+        with_embedding.associative_memory[0].memory_unit_id,
+        "mu_irzha_detail_0"
+    );
     assert!(with_embedding
         .notes
         .iter()
-        .any(|note| note.contains("contextual memory expansion added 1")));
+        .any(|note| note.contains("associative memory added 1")));
     assert_eq!(
         with_embedding
             .recall_debug
             .as_ref()
             .and_then(|debug| debug.vector_stage.as_ref())
             .map(|debug| debug.status),
-        Some(RecallVectorStageStatus::Applied)
+        Some(RecallVectorStageStatus::NotRequested)
     );
 
     fs::remove_dir_all(root).ok();
@@ -669,6 +680,7 @@ fn core_context_package_skips_contextual_detail_already_visible_in_long_memory()
         .expect("context with visible long memory");
 
     assert_eq!(package.archive_relevant.len(), 1);
+    assert!(package.associative_memory.is_empty());
     assert!(!package.archive_relevant[0]
         .tags
         .iter()
@@ -676,7 +688,79 @@ fn core_context_package_skips_contextual_detail_already_visible_in_long_memory()
     assert!(package
         .notes
         .iter()
-        .any(|note| note.contains("contextual memory expansion found only already-visible")));
+        .any(|note| note.contains("associative memory found only already-visible")));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn associative_memory_rebuilds_for_each_current_topic_without_stale_carry_over() {
+    let root = unique_temp_dir("vectors_associative_topic_switch");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+
+    create_archive_with_units_named(
+        &engine,
+        "vector_scope",
+        "garden",
+        "The visible structural topic is garden planning.",
+        vec![("The visible structural topic is garden planning.", 0.7)],
+    );
+    create_archive_with_units_named(
+        &engine,
+        "vector_scope",
+        "mars",
+        "An older Mars conversation.",
+        vec![("We once discussed the atmosphere and surface of Mars.", 0.9)],
+    );
+    create_archive_with_units_named(
+        &engine,
+        "vector_scope",
+        "dinosaurs",
+        "An older dinosaur conversation.",
+        vec![("We once discussed feathered dinosaurs.", 0.9)],
+    );
+    engine
+        .set_vector_scope("vector_scope", true, false)
+        .expect("enable vectors");
+    let requests = engine
+        .pending_embedding_backfill("vector_scope")
+        .expect("embedding backfill");
+    submit_embeddings_by_unit(&engine, &requests[0], |memory_unit_id| {
+        if memory_unit_id.contains("mars") {
+            1
+        } else if memory_unit_id.contains("dinosaurs") {
+            2
+        } else {
+            0
+        }
+    });
+
+    let package_for = |hot_index| {
+        engine
+            .core_context_package(CoreContextRequest {
+                recall_limit: 1,
+                query_text: Some("continue the current topic".to_string()),
+                query_embedding: Some(CoreContextQueryEmbedding {
+                    model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+                    query_vec: unit_vector(DEFAULT_VECTOR_DIM, hot_index),
+                }),
+                ..context_request("vector_scope", None)
+            })
+            .expect("context package")
+    };
+
+    let mars = package_for(1);
+    assert_eq!(mars.associative_memory.len(), 1);
+    assert!(mars.associative_memory[0].thesis.contains("Mars"));
+
+    let dinosaurs = package_for(2);
+    assert_eq!(dinosaurs.associative_memory.len(), 1);
+    assert!(dinosaurs.associative_memory[0].thesis.contains("dinosaurs"));
+    assert!(dinosaurs
+        .associative_memory
+        .iter()
+        .all(|item| !item.thesis.contains("Mars")));
 
     fs::remove_dir_all(root).ok();
 }

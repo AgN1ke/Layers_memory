@@ -108,6 +108,16 @@ Recall у ядрі системи спроєктований як **трирів
 
 **Implementation update 2026-07-31.** Реалізація після v0.3 уточнила ранній дизайн: vector rows належать validated active `MemoryUnit`, не цілому archive entry. Stage 2 лишає Archive структурною межею Stage 1, але semantic score бере від найкращого unit усередині archive. У фінальний `RecallItem` ядро проєктує тезу саме цього unit і повертає `matched_memory_unit_id`; денний archive не повинен знову змішувати кілька тем у prompt лише тому, що одна з них семантично збіглась. Без query embedding Stage 1 projection не змінюється.
 
+**Context assembly correction 2026-08-01.** Explicit `recall()` і
+`core_context_package()` мають різні вихідні ролі. Explicit recall може
+застосовувати Stage 2 до свого єдиного ranked result. Chat context натомість
+залишає `archive_relevant` структурним Stage 1 recall і використовує current-turn
+embedding для окремого ephemeral `associative_memory`. Цей шар додає кілька
+давніх деталей, релевантних актуальній темі, але не змішує deep-recall score з
+Stage 1/2 score і не змінює Archive ranking. Він перебудовується на кожен запит,
+не записується в Session/Archive/Core і не переносить стару тему в наступний
+turn.
+
 На практиці Stage 2 не входить у найближчу v0.2. Векторне сховище вмикається тільки після стабілізації Core/reflection/forgetting і тільки як opt-in feature. Частина користувачів не захоче зберігати семантичні вектори про себе; хост має мати явний перемикач "без embeddings" / "з embeddings". При вимкнених embeddings Stage 1 лишається повністю працездатним.
 
 **Стадія 3 — LLM re-ranking.** На v0.1 не реалізована, але передбачена. Промпт типу "ось запит у такому контексті, ось N кандидатів, поверни тих, що дійсно релевантні, з поясненням". Виконується через `PendingTask`. Корисна там, де embeddings і фільтри пропускають семантично складні випадки.
@@ -126,6 +136,11 @@ Crash safety реалізується двома механізмами:
 2. **Журнал операцій для мульти-файлових змін:** у v0.2 це зарезервований storage primitive і цільовий механізм для майбутніх migration/recovery-heavy операцій. Runtime sleep зараз не пише transaction journal; crash safety забезпечується атомарним записом окремих файлів, durable `SleepRun` checkpoints і ідемпотентним coverage-cache.
 
 Чому файли як правда: принцип "керованість для людини" зі стратегії — це обмеження, а не побажання. Людина має могти зайти у `memory/sessions/2026-05-17_001/session.md` і прочитати живий журнал сесії, а archive/core записи мають бути відкритими як pretty JSON, не схованими в opaque базі. SQLite-only це порушує. Файли як правда — єдиний варіант, що чесно дотримує принцип. Абстракція `Storage` страхує нас від тупика, коли архів виросте і знадобиться індекс.
+
+Vector storage дотримується тієї самої межі: rows над `MemoryUnit` є derived
+sidecar index, який можна purge/rebuild із канонічного Archive. Наявність row не
+робить Archive векторним джерелом істини. Rust core володіє політикою пошуку й
+context assembly; host лише локально обчислює запитані embeddings.
 
 ### 3.4 Перший хост: Telegram-бот через PyO3
 

@@ -194,12 +194,10 @@ impl<S: Storage> MemoryEngine<S> {
             session_id: Some(request.session_id.clone()),
             context: json!({ "recent_text": query_text.clone().unwrap_or_default() }),
             query_text,
-            query_embedding: request.query_embedding.as_ref().map(|embedding| {
-                RecallQueryEmbedding {
-                    model_id: embedding.model_id.clone(),
-                    query_vec: embedding.query_vec.clone(),
-                }
-            }),
+            // Chat context keeps ordinary Archive recall structural. The same
+            // current-turn embedding is consumed below by the separate
+            // associative-memory path, never by both mechanisms in one list.
+            query_embedding: None,
             filters: RecallFilters {
                 source_layers: vec![RecallSourceLayer::Archive],
                 ..RecallFilters::default()
@@ -208,7 +206,7 @@ impl<S: Storage> MemoryEngine<S> {
             include_core: false,
             explain: request.explain_recall,
         })?;
-        let mut archive_relevant = recall_result.items;
+        let archive_relevant = recall_result.items;
         let recall_debug = recall_result.debug;
 
         let (core_facts, core_read_warnings) = if request.include_core {
@@ -227,7 +225,7 @@ impl<S: Storage> MemoryEngine<S> {
         };
         notes.extend(recall_result.notes);
         notes.extend(storage_warning_notes(&core_read_warnings));
-        let (expansion_items, expansion_notes) = self.contextual_expansion_items(
+        let (associative_memory, expansion_notes) = self.associative_memory_items(
             &request,
             &created_at,
             &core_facts,
@@ -235,12 +233,6 @@ impl<S: Storage> MemoryEngine<S> {
             &session_trace,
             &archive_relevant,
         )?;
-        if !expansion_items.is_empty() {
-            archive_relevant = expansion_items
-                .into_iter()
-                .chain(archive_relevant)
-                .collect::<Vec<_>>();
-        }
         notes.extend(expansion_notes);
 
         let budget_config = request
@@ -252,10 +244,13 @@ impl<S: Storage> MemoryEngine<S> {
             request.clock_untrusted,
         );
         let budgeted = apply_context_token_budget(
-            core_facts,
-            session_recent,
-            session_trace,
-            archive_relevant,
+            ContextMemoryLayers {
+                core_facts,
+                session_recent,
+                session_trace,
+                archive_relevant,
+                associative_memory,
+            },
             &request.domain_state,
             budget_config,
             &time_labels,
@@ -267,6 +262,12 @@ impl<S: Storage> MemoryEngine<S> {
             .iter()
             .filter_map(|item| item.time_range.as_ref())
             .map(|range| range.end.as_str())
+            .chain(
+                budgeted
+                    .associative_memory
+                    .iter()
+                    .map(|item| item.created_at.as_str()),
+            )
             .chain(
                 budgeted
                     .session_recent
@@ -296,6 +297,7 @@ impl<S: Storage> MemoryEngine<S> {
             session_recent: budgeted.session_recent,
             session_trace: budgeted.session_trace,
             archive_relevant: budgeted.archive_relevant,
+            associative_memory: budgeted.associative_memory,
             domain_state: request.domain_state,
             budget: Some(budgeted.report),
             recall_debug,
@@ -342,7 +344,7 @@ impl<S: Storage> MemoryEngine<S> {
         Ok((facts, warnings))
     }
 
-    fn contextual_expansion_items(
+    fn associative_memory_items(
         &self,
         request: &CoreContextRequest,
         created_at: &str,
@@ -350,7 +352,7 @@ impl<S: Storage> MemoryEngine<S> {
         session_recent: &[CoreContextEvent],
         session_trace: &[CoreContextEvent],
         archive_relevant: &[RecallItem],
-    ) -> Result<(Vec<RecallItem>, Vec<String>)> {
+    ) -> Result<(Vec<AssociativeMemoryItem>, Vec<String>)> {
         let Some(embedding) = request.query_embedding.as_ref() else {
             return Ok((Vec::new(), Vec::new()));
         };
@@ -370,7 +372,7 @@ impl<S: Storage> MemoryEngine<S> {
                 Vec::new(),
                 result
                     .reason
-                    .map(|reason| format!("contextual memory expansion skipped: {reason}."))
+                    .map(|reason| format!("associative memory skipped: {reason}."))
                     .into_iter()
                     .collect(),
             ));
@@ -391,14 +393,14 @@ impl<S: Storage> MemoryEngine<S> {
                 continue;
             }
             visible.push(normalized_thesis);
-            items.push(contextual_expansion_recall_item(hit, scope));
+            items.push(associative_memory_item(hit, scope));
         }
 
         let notes = if items.is_empty() {
-            vec!["contextual memory expansion found only already-visible detail.".to_string()]
+            vec!["associative memory found only already-visible detail.".to_string()]
         } else {
             vec![format!(
-                "contextual memory expansion added {} detail memory item(s).",
+                "associative memory added {} current-topic detail item(s).",
                 items.len()
             )]
         };
@@ -407,30 +409,20 @@ impl<S: Storage> MemoryEngine<S> {
     }
 }
 
-fn contextual_expansion_recall_item(hit: DeepRecallHit, scope: &str) -> RecallItem {
-    RecallItem {
-        source_layer: RecallSourceLayer::Archive,
-        id: hit.memory_unit_id.clone(),
-        matched_memory_unit_id: Some(hit.memory_unit_id.clone()),
-        gist: hit.thesis.clone(),
-        compact_memory: Some(hit.thesis.clone()),
-        narrative: None,
-        facts: Vec::new(),
-        quotes: Vec::new(),
-        source_session_id: Some(scope.to_string()),
-        time_range: Some(TimeRange {
-            start: hit.created_at.clone(),
-            end: hit.created_at.clone(),
-        }),
-        tags: vec![
-            "contextual_expansion".to_string(),
-            "vector_recall".to_string(),
-        ],
-        theme: None,
-        weight: 1.0,
-        freshness: 1.0,
-        relevance_score: hit.score as f64,
-        relevance_explanation: Some(format!("contextual vector expansion sim={:.3}", hit.sim)),
+fn associative_memory_item(hit: DeepRecallHit, scope: &str) -> AssociativeMemoryItem {
+    AssociativeMemoryItem {
+        memory_unit_id: hit.memory_unit_id,
+        archive_id: hit.archive_id,
+        scope: scope.to_string(),
+        thesis: hit.thesis,
+        created_at: hit.created_at,
+        activation: AssociativeMemoryActivation::CurrentTopicVector,
+        semantic_similarity: hit.sim,
+        deep_recall_score: hit.score,
+        why_recalled: Some(format!(
+            "current topic vector matched an older memory unit (sim={:.3})",
+            hit.sim
+        )),
     }
 }
 

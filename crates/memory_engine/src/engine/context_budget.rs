@@ -38,19 +38,32 @@ pub(super) struct BudgetedContextPackage {
     pub(super) session_recent: Vec<CoreContextEvent>,
     pub(super) session_trace: Vec<CoreContextEvent>,
     pub(super) archive_relevant: Vec<RecallItem>,
+    pub(super) associative_memory: Vec<AssociativeMemoryItem>,
     pub(super) report: CoreContextBudgetReport,
     pub(super) notes: Vec<String>,
 }
 
+pub(super) struct ContextMemoryLayers {
+    pub(super) core_facts: Vec<CoreContextFact>,
+    pub(super) session_recent: Vec<CoreContextEvent>,
+    pub(super) session_trace: Vec<CoreContextEvent>,
+    pub(super) archive_relevant: Vec<RecallItem>,
+    pub(super) associative_memory: Vec<AssociativeMemoryItem>,
+}
+
 pub(super) fn apply_context_token_budget(
-    core_facts: Vec<CoreContextFact>,
-    session_recent: Vec<CoreContextEvent>,
-    session_trace: Vec<CoreContextEvent>,
-    archive_relevant: Vec<RecallItem>,
+    layers: ContextMemoryLayers,
     domain_state: &Value,
     budget: CoreContextTokenBudget,
     time_labels: &TimeLabelContext,
 ) -> BudgetedContextPackage {
+    let ContextMemoryLayers {
+        core_facts,
+        session_recent,
+        session_trace,
+        archive_relevant,
+        associative_memory,
+    } = layers;
     let estimated_domain_state_tokens = estimate_json_tokens(domain_state);
 
     let (core_facts, estimated_core_tokens, dropped_core_facts) = keep_front_within_budget_by(
@@ -77,6 +90,19 @@ pub(super) fn apply_context_token_budget(
             estimate_trace_event_prompt_tokens,
         );
 
+    // Associative memory is a high-threshold activation by the current turn.
+    // Give it first access to the compressed-memory budget, while preserving a
+    // separate result type and score domain from ordinary Archive recall.
+    let (associative_memory, estimated_associative_memory_tokens, dropped_associative_memory) =
+        keep_front_within_budget_by(
+            associative_memory,
+            budget.compressed_memory_tokens,
+            |item| estimate_associative_memory_prompt_tokens(item, time_labels),
+        );
+    let remaining_compressed_budget = budget
+        .compressed_memory_tokens
+        .saturating_sub(estimated_associative_memory_tokens);
+
     let original_archive_count = archive_relevant.len();
     let archive_relevant = archive_relevant
         .into_iter()
@@ -85,12 +111,12 @@ pub(super) fn apply_context_token_budget(
     let dropped_by_prompt_archive_limit =
         original_archive_count.saturating_sub(archive_relevant.len());
     let (archive_relevant, estimated_compressed_memory_tokens, dropped_by_compressed_budget) =
-        keep_front_within_budget_by(
-            archive_relevant,
-            budget.compressed_memory_tokens,
-            |archive| estimate_archive_prompt_tokens(archive, time_labels),
-        );
+        keep_front_within_budget_by(archive_relevant, remaining_compressed_budget, |archive| {
+            estimate_archive_prompt_tokens(archive, time_labels)
+        });
     let dropped_archive_relevant = dropped_by_prompt_archive_limit + dropped_by_compressed_budget;
+    let estimated_compressed_memory_tokens =
+        estimated_associative_memory_tokens + estimated_compressed_memory_tokens;
 
     let estimated_current_memory_tokens = estimated_domain_state_tokens
         + estimated_session_recent_tokens
@@ -126,6 +152,11 @@ pub(super) fn apply_context_token_budget(
             "token budget dropped {dropped_archive_relevant} archive_relevant item(s); highest-ranked recall items were kept."
         ));
     }
+    if dropped_associative_memory > 0 {
+        notes.push(format!(
+            "token budget dropped {dropped_associative_memory} associative memory item(s); highest-scored current-topic associations were kept."
+        ));
+    }
     if dropped_core_facts > 0 {
         notes.push(format!(
             "token budget dropped {dropped_core_facts} core fact(s); highest-confidence facts were kept."
@@ -143,6 +174,7 @@ pub(super) fn apply_context_token_budget(
         session_recent,
         session_trace,
         archive_relevant,
+        associative_memory,
         report: CoreContextBudgetReport {
             estimator: "unicode_chars_div_2_ceil_json_v1".to_string(),
             total_budget_tokens: budget.total_tokens,
@@ -154,9 +186,11 @@ pub(super) fn apply_context_token_budget(
             estimated_compressed_memory_tokens,
             estimated_core_tokens,
             estimated_domain_state_tokens,
+            estimated_associative_memory_tokens,
             dropped_session_recent,
             dropped_session_trace,
             dropped_archive_relevant,
+            dropped_associative_memory,
             dropped_core_facts,
             budget_exceeded,
         },
@@ -215,6 +249,13 @@ pub(super) fn estimate_archive_prompt_tokens(
     time_labels: &TimeLabelContext,
 ) -> usize {
     estimate_text_tokens(&render_archive_memory_prompt_lines(archive, time_labels).join("\n"))
+}
+
+pub(super) fn estimate_associative_memory_prompt_tokens(
+    item: &AssociativeMemoryItem,
+    time_labels: &TimeLabelContext,
+) -> usize {
+    estimate_text_tokens(&render_associative_memory_prompt_lines(item, time_labels).join("\n"))
 }
 
 pub(super) fn estimate_recent_event_prompt_tokens(event: &CoreContextEvent) -> usize {

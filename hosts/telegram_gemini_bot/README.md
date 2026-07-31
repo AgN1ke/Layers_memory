@@ -140,16 +140,19 @@ hosts/telegram_gemini_bot/runtime/logs/bot.log
 Структурована діагностика recall пишеться окремо в
 `runtime/logs/recall_trace.jsonl`. На кожен context package host просить
 `explain_recall`, але не додає debug payload у LLM prompt. Trace містить hash
-запиту, archive ids, winning `matched_memory_unit_id`, Stage 1 множники,
-початковий/фінальний ранг, vector status, cosine і фінальний score; текст запиту
-та тексти спогадів у trace не пишуться. Для Stage 2 `RecallItem` уже містить
-unit-focused `gist`/`compact_memory`, тому хост не має сам розбирати змішаний
-денний archive, щоб знайти семантично matched тезу.
+запиту, ordinary Archive rank і окрему associative-memory telemetry:
+`memory_unit_id`, parent `archive_id`, activation, cosine та deep score. Текст
+запиту й тексти спогадів у trace не пишуться. У chat context current-turn
+embedding живить тільки ephemeral `associative_memory`; explicit `/recall` може
+окремо запускати unit-focused Stage 2.
 
 Python-конструктор `MemoryEngine` приймає необовʼязкові
 `stage2_candidate_limit` (default `40`) і `stage2_vector_weight` (default
 `0.5`). Це лише host-facing налаштування Rust-політики; embeddings і далі
 рахуються локально через `fastembed` та передаються в ядро готовими векторами.
+Context embedding рахується тільки з поточного user text, не з уже зібраного
+memory prompt, тому підтягнутий старий спогад не може сам підтримувати тему на
+наступному turn.
 
 Telegram polling offset зберігається тут:
 

@@ -2015,7 +2015,7 @@ def maybe_context_query_embedding(
         embedder = local_embedder()
         query_vec, telemetry = embedder.embed_query(text)
         log_embedding_usage(
-            operation="contextual_expansion_query",
+            operation="associative_memory_query",
             model_id=telemetry.model_id,
             dim=telemetry.dim,
             count=1,
@@ -2027,9 +2027,9 @@ def maybe_context_query_embedding(
             "query_vec": query_vec,
         }
     except LocalEmbedderUnavailable as err:
-        log_line(f"contextual expansion embedding unavailable session={session_id}: {err}")
+        log_line(f"associative memory embedding unavailable session={session_id}: {err}")
     except Exception as err:
-        log_exception("contextual expansion embedding failed", err)
+        log_exception("associative memory embedding failed", err)
     return None
 
 
@@ -2413,9 +2413,11 @@ def log_context_budget(package: dict[str, Any], session_id: str) -> None:
         f"archive={budget.get('estimated_compressed_memory_tokens')}/{budget.get('compressed_memory_budget_tokens')} "
         f"core={budget.get('estimated_core_tokens')}/{budget.get('core_budget_tokens')} "
         f"domain={budget.get('estimated_domain_state_tokens')} "
+        f"associative={budget.get('estimated_associative_memory_tokens', 0)} "
         f"dropped_recent={budget.get('dropped_session_recent')} "
         f"dropped_trace={budget.get('dropped_session_trace')} "
         f"dropped_archive={budget.get('dropped_archive_relevant')} "
+        f"dropped_associative={budget.get('dropped_associative_memory', 0)} "
         f"dropped_core={budget.get('dropped_core_facts')} "
         f"exceeded={budget.get('budget_exceeded')}"
     )
@@ -2425,6 +2427,21 @@ def log_recall_trace(package: dict[str, Any], session_id: str, query_text: str) 
     debug = package.get("recall_debug")
     if not isinstance(debug, dict):
         return
+
+    raw_associative = package.get("associative_memory")
+    associative = []
+    if isinstance(raw_associative, list):
+        associative = [
+            {
+                "memory_unit_id": item.get("memory_unit_id"),
+                "archive_id": item.get("archive_id"),
+                "activation": item.get("activation"),
+                "semantic_similarity": item.get("semantic_similarity"),
+                "deep_recall_score": item.get("deep_recall_score"),
+            }
+            for item in raw_associative
+            if isinstance(item, dict)
+        ]
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     record = {
@@ -2437,6 +2454,7 @@ def log_recall_trace(package: dict[str, Any], session_id: str, query_text: str) 
         "filtered_count": debug.get("filtered_count"),
         "vector_stage": debug.get("vector_stage"),
         "candidates": debug.get("candidates", []),
+        "associative_memory": associative,
         "notes": debug.get("notes", []),
     }
     with RECALL_TRACE_PATH.open("a", encoding="utf-8") as file:
@@ -2446,10 +2464,12 @@ def log_recall_trace(package: dict[str, Any], session_id: str, query_text: str) 
     vector_status = vector_stage.get("status") if isinstance(vector_stage, dict) else None
     candidates = record["candidates"] if isinstance(record["candidates"], list) else []
     top_id = candidates[0].get("archive_id") if candidates and isinstance(candidates[0], dict) else None
+    top_associative_id = associative[0].get("memory_unit_id") if associative else None
     log_line(
         "recall_trace "
         f"session={session_id} stage={record.get('stage_used')} vector={vector_status or '-'} "
         f"candidates={record.get('candidate_count')} top={top_id or '-'} "
+        f"associative={len(associative)} associative_top={top_associative_id or '-'} "
         f"query={record['query_hash']}"
     )
 
@@ -2590,6 +2610,12 @@ def chat_prompt_telemetry(package: dict[str, Any], session_id: str, prompt: str)
         "context_budget_dropped_session_recent": budget.get("dropped_session_recent"),
         "context_budget_dropped_session_trace": budget.get("dropped_session_trace"),
         "context_budget_dropped_archive_relevant": budget.get("dropped_archive_relevant"),
+        "context_budget_estimated_associative_memory_tokens": budget.get(
+            "estimated_associative_memory_tokens", 0
+        ),
+        "context_budget_dropped_associative_memory": budget.get(
+            "dropped_associative_memory", 0
+        ),
         "context_budget_dropped_core_facts": budget.get("dropped_core_facts"),
     }
 

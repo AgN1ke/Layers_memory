@@ -6280,3 +6280,169 @@ query ще треба пояснити winning unit-ом; він не є дос�
 визначити, яка теза реально дала 0.559. Робочий Chibigochi process треба
 штатно перезапустити перед тестом: він тримав старий `.pyd`, тому перевірка
 нового wheel виконувалась в ізольованій venv без зупинки live session.
+
+## Запис 144 — 2026-08-01 — Єдина SemVer-політика релізів
+
+**Проблематика:**
+Власник уточнив, чи бібліотека реально дотримується правила
+`MAJOR.MINOR.PATCH`. Перевірка показала розрив: Git має milestone tags
+`v0.2.0`/`v0.3.0`, але Cargo workspace, усі Rust crates і Python package досі
+мають `0.1.0`. Отже три цифри використовувались, але не були єдиним
+compatibility-контрактом для споживачів.
+
+**Рішення:**
+- Прийняти SemVer як нормативну release-політику, а не лише стиль назв тегів.
+- До `1.0.0`: backward-compatible fix піднімає PATCH; нова публічна функція або
+  intentional breaking change піднімає MINOR. Breaking pre-1.0 release
+  обов'язково позначається в HISTORY і має migration note.
+- Після `1.0.0`: breaking -> MAJOR, compatible feature -> MINOR, compatible
+  fix -> PATCH.
+- Public surface включає Rust API, JSON engine boundary, Python adapter,
+  Godot/GDExtension boundary, документовані defaults/behavior і сумісність
+  persisted data.
+- Library SemVer і `schema_version` розділені. Additive optional поле може
+  лишатись у `*.v1`; incompatible required-field/storage change потребує нової
+  schema та міграції і може одночасно вимагати breaking library release.
+- Canonical release number живе в root Cargo workspace. На release commit йому
+  мають точно відповідати Python package, Git tag, acceptance record і HISTORY.
+
+**Історичне рішення:**
+Старі `v0.2.0` і `v0.3.0` не пересуваємо й не переписуємо: це чесний історичний
+слід milestone-практики. Перший синхронізований release target після live
+acceptance поточного vector Stage 2/unit-focused recall — `0.4.0`; manifests не
+піднімаємо до самого release-preparation commit.
+
+**Що змінено в документації:**
+- Root `README.md` отримав коротку публічну політику й пояснення історичного
+  mismatch.
+- Створено нормативний `wiki/pages/governance/versioning.md` із public-surface
+  definition, pre-1.0 rules, schema separation і release checklist.
+- Wiki index/log та HISTORY пов'язані з рішенням.
+
+**Наступні кроки:**
+Перед `v0.4.0` додати автоматичний release gate, який порівнює Cargo workspace,
+Python package і requested Git tag; сам version bump робити тільки після live
+acceptance.
+
+## Запис 145 — 2026-08-01 — Release gate і чесний v0.4 closure
+
+**Проблематика:**
+Після прийняття SemVer-політики вона лишалась тільки текстом. Root Cargo і
+Python package могли знову розійтися, crate міг отримати власну version, а тег
+можна було створити без exact acceptance evidence. Одночасно roadmap мав
+застарілий current-state: vector Stage 2 уже працював на MemoryUnit, але план
+ще містив старий пункт про заповнення archive-level embedding fields і не мав
+окремої v0.4 release-віхи.
+
+**Що зроблено:**
+- Додано `tools/check_release_versions.py`. Звичайний режим перевіряє stable
+  `MAJOR.MINOR.PATCH` у root Cargo workspace, `version.workspace = true` для
+  кожного `crates/*/Cargo.toml` і точний збіг Python package version.
+- Strict mode приймає `--tag vX.Y.Z --require-release-evidence`, звіряє tag із
+  manifests, вимагає exact `wiki/pages/releases/vX.Y.Z-acceptance.md` із
+  `Release: vX.Y.Z` та `Status: accepted`, а також HISTORY heading із тим самим
+  тегом.
+- Додано 6 stdlib `unittest` cases: happy path, Python mismatch, crate-local
+  version, tag mismatch, accepted evidence і pending evidence.
+- Додано GitHub Actions workflow: на commits/PR перевіряє manifests і tests, на
+  `v*` tag автоматично вмикає strict evidence gate.
+- README, local development і versioning policy отримали канонічні команди.
+- Roadmap оновлено до 2026-08-01, додано окрему `v0.4 — Explainable semantic
+  recall` closure, unit-focused Stage 2 позначено фактичним станом, старий план
+  archive-level embedding fields позначено superseded, natural-language time
+  intent записано як наступний core-owned planning boundary.
+
+**Що навмисно не зроблено:**
+- Manifests лишились `0.1.0`; назва майбутнього target не є release.
+- Не створено `v0.4.0-acceptance.md` зі статусом accepted і не створено tag.
+- Не змінено recall weights: живий broad-query результат ще треба пояснити
+  через winning `matched_memory_unit_id` на реально перезібраному Chibigochi.
+
+**Перевірки:**
+- `python -m py_compile tools/check_release_versions.py
+  tools/tests/test_check_release_versions.py` — пройшло;
+- `python -m unittest discover -s tools/tests -p "test_*.py" -v` — 6/6;
+- `python tools/check_release_versions.py` — `0.1.0`, 3 Rust crates + Python
+  узгоджені.
+- `cargo fmt --check`, `cargo test --workspace` і
+  `cargo clippy --workspace --all-targets -- -D warnings` — пройшли; cargo test
+  лишив тільки environment warning про cleanup одного incremental build cache.
+
+**Наступний крок:**
+Передати `d5d5f40` на живий Chibigochi acceptance. Після PASS окремим
+release-preparation commit створити acceptance evidence, синхронно підняти
+Cargo/Python до `0.4.0`, прогнати повний gate і лише тоді тегувати.
+
+## Запис 146 — 2026-08-01 — Явне збереження прав Licensor у public license
+
+**Проблематика:**
+Власник попросив явно зафіксувати dual/multi-licensing boundary: публічна
+non-commercial ліцензія не повинна виглядати так, ніби її обмеження зв'язують
+самого правовласника. Section 13 уже дозволяв пропонувати Software на інших
+умовах, але не проговорював власне використання Licensor настільки прямо.
+
+**Що зроблено:**
+- Ліцензійний документ піднято з Version 0.2 до Version 0.3; це версія тексту
+  ліцензії, не SemVer бібліотеки.
+- У Section 13 додано уточнення: умови й обмеження, накладені на `You`, не
+  обмежують законне використання, копіювання, модифікацію, поширення,
+  комерціалізацію чи ліцензування Software самим Licensor.
+- Застереження обмежене формулюванням `to the extent the Licensor has the legal
+  right`, щоб текст не приписував Licensor прав, яких він не має.
+- Root `LICENSE.md`, wiki-копію, HISTORY і roadmap синхронізовано.
+
+**Що це означає:**
+Це явна reservation для паралельного ліцензування, але не окрема commercial
+license сама по собі. Права сторонніх користувачів лишилися non-commercial, а
+commercial use і далі потребує окремої письмової угоди.
+
+## Запис 147 — 2026-08-01 — Асоціативна памʼять актуальної теми відокремлена від recall rank
+
+**Проблематика:**
+Живий Chibigochi-тест `d5d5f40` одночасно показав правильний Stage 2 winner
+Титан і `items[0]` Марс із нижчим deep-recall score. Це не був дефект cosine:
+старий contextual expansion prepended свій результат перед ranked
+`archive_relevant`. Після додавання Stage 2 один `query_embedding` запускав два
+різні механізми й змішував їхні непорівнювані формули в одному списку.
+
+**Повторна архітектурна перевірка:**
+- Початковий contextual-expansion plan уже вимагав саме актуально-тематичну
+  поведінку: відома тема підтягує 1–3 давні деталі, unrelated query — нічого.
+- Session/Archive/Core лишаються persisted шарами без vector truth; unit vectors
+  є derived sidecar index, який можна purge/rebuild.
+- Persisted active-topic state для v1 не потрібен: per-request embedding
+  перебудовує асоціації й природно прибирає Марс на dinosaur turn.
+- Embedding має походити з актуального user turn, не з prompt, який уже містить
+  retrieval; інакше виник би feedback loop.
+
+**Що зроблено:**
+- `core_context_package` повернуто до structural Archive recall;
+  query embedding більше не запускає ordinary Stage 2 усередині chat package.
+  Explicit `engine.recall(...)` і далі підтримує Stage 2.
+- Додано additive `AssociativeMemoryItem` і
+  `CoreContextPackage.associative_memory` з unit/archive provenance, часом,
+  similarity, deep score та поясненням активації.
+- Context budget дає high-threshold associative items перший доступ до
+  compressed budget, а ordinary Archive використовує залишок; dropped counters
+  і estimates розведені.
+- Prompt view додає `<associative_memory>` тільки коли є hits і прямо називає
+  їх older memories, активованими поточною темою. Empty path лишається без
+  додаткової секції.
+- Контракти, architecture, contextual-expansion plan, roadmap, README, HISTORY
+  і wiki log синхронізовано з рішенням.
+
+**Детерміновані перевірки:**
+- vector suite: 13/13, включно з Mars → dinosaurs без stale carry-over;
+- prompt view: 7/7, включно з explicit old-memory section;
+- additive package field deserialize-иться зі старого payload як empty і не
+  серіалізується, коли порожнє.
+- `cargo fmt --check`, `cargo test --workspace` і
+  `cargo clippy --workspace --all-targets -- -D warnings` — пройшли;
+- Python wheel перевірено ізольовано без зупинки live процесів: 15/15 adapter
+  tests;
+- wiki related links — 60 markdown files, clean; release manifests лишаються
+  узгодженими на `0.1.0` до live acceptance.
+
+**Наступний крок:**
+Перезібрати бібліотеку в Chibigochi й виконати live topic-switch acceptance.
+До цього не створювати `v0.4.0` tag і не міняти semantic weights.

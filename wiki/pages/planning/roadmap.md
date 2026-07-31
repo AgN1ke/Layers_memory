@@ -18,7 +18,7 @@
 
 Документ оновлюється у двох випадках: коли пункт стає зробленим (відмітка `[x]` + дата + посилання на коміт або файл), і коли з'являється нова велика мета, яку треба зафіксувати раніше реалізації. Дрібні правки і робочий процес живуть у `DEVLOG.md`, не тут.
 
-Версія документа: 2026-06-10.
+Версія документа: 2026-08-01.
 
 ---
 
@@ -43,9 +43,21 @@ Memory Engine має бути **довготривалою памʼяттю, щ�
 
 ---
 
-## Поточний стан (2026-07-02)
+## Поточний стан (2026-08-01)
 
-Після v0.3: ліцензію повернуто на non-commercial (merge у main 2026-07-02); Chibigochi має async product loop і реальну інтеграцію бібліотеки в Godot-проєкт власника; prompt view отримав derived time labels (`current_time`, вік archive items, денні маркери) — див. секцію «Час у памʼяті» нижче і HISTORY 2026-07-02. Наступні великі напрями: мультиспікерна геометрія (гілки 1–3 нижче) і продуктова Chibigochi-інтеграція.
+Після v0.3: ліцензію повернуто на non-commercial; Chibigochi має async
+product loop і реальну Godot-інтеграцію; prompt view має derived time labels.
+Opt-in local vector storage, `recall_deep`, contextual expansion Phase 1 і
+ordinary Recall Stage 2 уже реалізовані. Stage 2 ранжує archive-кандидатів за
+max cosine конкретних `MemoryUnit`, зберігає winning unit provenance і повертає
+unit-focused prompt projection замість змішаного денного summary.
+
+Поточна release-віха — `v0.4.0`: кодові й deterministic conformance gates
+зелені, але живий Chibigochi acceptance саме unit-focused коміту `d5d5f40` ще
+не зафіксований. До цього default scoring weights не змінюються і manifests не
+піднімаються. Після v0.4 наступні recall-напрями: natural-language time intent,
+unit-level recall feedback/deep-scoring calibration і лише потім, за живими
+даними, Core-anchored contextual expansion Phase 2.
 
 ## Стан на 2026-06-10
 
@@ -131,7 +143,7 @@ v0.3 host-conformance також закрито: direct/local, Telegram-local і
 
 - [x] Git workspace, `.gitattributes`, `.gitignore` під runtime memory і secrets.
 - [x] Orphan-гілка `github-code` для публікації без внутрішніх docs.
-- [x] Ліцензія Memory Engine Non-Commercial Public License v0.2 + `LICENSE.md` у корені.
+- [x] Ліцензія Memory Engine Non-Commercial Public License v0.3 + `LICENSE.md` у корені; Section 13 явно зберігає за Licensor право на інші умови і не поширює обмеження ліцензіатів на його власне законне використання.
 - [x] `cargo fmt --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `pytest crates/python_adapter/tests` як обов'язкові gates.
 - [x] Unit і integration тести: 17+ у `memory_engine`, 9+ у Python adapter.
 - [x] Local conversation harness без Telegram: сценарії `mixed_short`, `topic_switching`, `identity_noise` проганяють живий Gemini chat через той самий prompt/context/sleep шлях, пишуть markdown-звіти і ловлять mid-dialog greeting / stale archive contamination. Це preflight, не заміна live Telegram acceptance. — 2026-05-22, `hosts/telegram_gemini_bot/local_harness.py`.
@@ -255,7 +267,7 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [ ] Хост має явний режим privacy/storage: `embeddings_enabled = false` за замовчуванням або як мінімум видима галочка "з vector storage / без vector storage".
 - [x] Без embeddings Memory Engine лишається повністю працездатним через Stage 1 recall, compact memory і reflection по structured units; відсутній `query_embedding` не змінює Stage 1 output path.
 - [x] PendingTask тип `ComputeEmbedding` працює для validated active memory units, а не для великих змішаних archive JSON; Telegram host виконує backfill і `SleepOutcome.embedding_requests` локальним fastembed.
-- [ ] Storage поля `embedding_model_id` і `embedding: Vec<f64>` заповнюються тільки якщо користувач/власник увімкнув feature.
+- [-] Legacy archive-level поля `embedding_model_id` і `embedding` не заповнюємо: прийнята реалізація зберігає derived rows окремо під `memory/archive/vectors/<scope>/` і embed-ить `MemoryUnit.thesis`. Це прибирає змішаний archive text із vector truth і дозволяє purge/rebuild без міграції ArchiveEntry. — 2026-07-03, vector-storage ТЗ Phase A.
 - [x] Recall Stage 2 — embedding re-ranking над топ-K кандидатами зі Stage 1. Активується готовим opt-in vector scope + `query_embedding`; disabled/building/corrupt scope прозоро лишається на Stage 1. — 2026-07-31.
 - [ ] Recall Stage 3 — LLM rerank через `PendingTask::RecallRerank` із промптом `prompts/recall_rerank.md`. Активується через `Manifest.features.llm_recall_rerank_enabled`.
 - [x] Migration plan: коли embeddings вмикаються на існуючому архіві без embeddings, engine створює batch `ComputeEmbedding` tasks тільки для validated active units, не для forgotten/debug material; нові units повертають incremental embedding requests після sleep.
@@ -303,6 +315,11 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [x] Денні маркери (`[yesterday]`) у older trace `<short_memory>`; свіжий recent tail без міток. — 2026-07-02.
 - [x] `CoreContextRequest.utc_offset_minutes` + `clock_untrusted` (serde default, без міграцій); Telegram host передає локальний offset. — 2026-07-02, HISTORY-запис.
 - [x] Деградація: недовірений годинник / майбутні timestamps → мітки опущені + package note. — 2026-07-02, `memory_view_omits_labels_when_clock_is_untrusted`.
+- [ ] Natural-language time intent: core-owned structured planning boundary має
+  перетворювати «минулого тижня»/«вчора»/«у травні» на
+  `RecallFilters.time_range` відносно `created_at` і локального UTC offset.
+  Конкретний host може виконати потрібну LLM-задачу, але не має винаходити
+  власну recall/time policy.
 - [ ] Live-перевірка на Telegram host: «коли я тобі казав про X?» після кількох днів історії.
 - [ ] Хостова опортуністична корекція часу за `Date`-заголовком наявного HTTP-трафіку (без окремих time-запитів) — коли зʼявиться перший хост із недовіреним годинником.
 
@@ -351,6 +368,45 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [ ] Документований backup flow: snapshot цілої `memory/` директорії з checksum для manifest і кожного persistence layer.
 - [ ] Документований restore flow: перевірка integrity, journal replay для незавершених операцій, migration на актуальну схему якщо backup старший.
 - [ ] CLI команда `memory_inspector backup` і `memory_inspector restore`.
+
+---
+
+## v0.4 — Explainable semantic recall
+
+Мета: випустити semantic recall як одну пояснювану можливість ядра, а не набір
+експериментальних host-хаків, і вперше синхронізувати package versions, tag та
+acceptance за єдиною SemVer-політикою.
+
+- [x] Opt-in vector storage і локальний host-computed embedding boundary над
+  validated active `MemoryUnit`; non-vector Stage 1 лишається повноцінним.
+- [x] Незалежний `recall_deep` повертає кандидатів поза Stage 1 window, а
+  ordinary Stage 2 re-rank пересортовує близькі top-K кандидати явною формулою.
+- [x] Structured provenance показує Stage 1 components, vector status, cosine,
+  обидва ранги, final score і winning `matched_memory_unit_id` без текстів у
+  telemetry.
+- [x] Unit-focused projection: ordinary Stage 2 повертає конкретну тезу winning
+  MemoryUnit, а archive лишається ID/часовою/statistics boundary. — 2026-07-31,
+  `d5d5f40`.
+- [x] Живий Chibigochi acceptance `d5d5f40`: broad query «інші світи» повернув
+  конкретний планетарний unit без sibling leakage; Титан, непрямий парафраз,
+  Європа і negative control пройшли; Stage 1 fallback збережений. — 2026-08-01.
+- [ ] Розвести chat context і explicit semantic search: `archive_relevant` у
+  `core_context_package` лишається structural recall, а current-turn vector
+  details повертаються окремим ephemeral `associative_memory` і рендеряться як
+  давні спогади, активовані поточною темою. Перевірити topic switch
+  Марс → динозаври та outside-window association без stale carry-over.
+- [x] Automated release consistency gate звіряє root Cargo version, inheritance
+  усіх Rust crates і Python package; на `v*` tag додатково вимагає exact
+  three-number acceptance зі статусом accepted та HISTORY heading. —
+  2026-08-01, `tools/check_release_versions.py`, CI workflow.
+- [ ] Після живого acceptance створити `v0.4.0-acceptance.md`, синхронно змінити
+  Cargo/Python manifests на `0.4.0`, прогнати release gates і лише тоді створити
+  immutable annotated tag `v0.4.0`.
+
+Не входить у v0.4 closure: natural-language time intent, unit-level recall
+counters, зміна deep-recall weights, persisted active-topic state,
+Core-anchored contextual expansion Phase 2 і Recall Stage 3. Це наступні окремо
+калібровані зміни, а не умови чесного per-request associative layer.
 
 ---
 

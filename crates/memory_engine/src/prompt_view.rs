@@ -1,7 +1,9 @@
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, UtcOffset};
 
-use crate::core_store::{CoreContextEvent, CoreContextFact, CoreContextPackage, CoreFactStatus};
+use crate::core_store::{
+    AssociativeMemoryItem, CoreContextEvent, CoreContextFact, CoreContextPackage, CoreFactStatus,
+};
 use crate::recall::RecallItem;
 
 pub const ARCHIVE_MEMORY_PROMPT_LIMIT: usize = 5;
@@ -176,6 +178,20 @@ pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &s
     }
     lines.push("</long_memory>".to_string());
 
+    if !package.associative_memory.is_empty() {
+        lines.push(String::new());
+        lines.push("<associative_memory>".to_string());
+        lines.push(
+            "instruction: Older memories activated by the current topic; treat them as past context, not as events in the live conversation."
+                .to_string(),
+        );
+        lines.extend(render_associative_memories(
+            &package.associative_memory,
+            &time,
+        ));
+        lines.push("</associative_memory>".to_string());
+    }
+
     lines.push(String::new());
     lines.push("<short_memory>".to_string());
     if !older_trace.is_empty() {
@@ -277,6 +293,16 @@ fn render_archive_memories(archives: &[RecallItem], time: &TimeLabelContext) -> 
         .collect()
 }
 
+fn render_associative_memories(
+    items: &[AssociativeMemoryItem],
+    time: &TimeLabelContext,
+) -> Vec<String> {
+    items
+        .iter()
+        .flat_map(|item| render_associative_memory_prompt_lines(item, time))
+        .collect()
+}
+
 fn render_dialogue_lines(events: &[DialogueEvent], max_text_chars: usize) -> Vec<String> {
     events
         .iter()
@@ -370,6 +396,39 @@ pub fn render_archive_memory_prompt_lines(
     lines
 }
 
+pub fn render_associative_memory_prompt_lines(
+    item: &AssociativeMemoryItem,
+    time: &TimeLabelContext,
+) -> Vec<String> {
+    let memory = clean_string(&item.thesis);
+    if memory.is_empty() {
+        return Vec::new();
+    }
+
+    let age = time.age_label(&item.created_at);
+    let prefix = match age {
+        Some(age) => format!(
+            "- [older memory: {age} | sim {}] ",
+            format_score(item.semantic_similarity as f64)
+        ),
+        None => format!(
+            "- [older memory | sim {}] ",
+            format_score(item.semantic_similarity as f64)
+        ),
+    };
+
+    memory
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .enumerate()
+        .map(|(index, line)| {
+            let line_prefix = if index == 0 { prefix.as_str() } else { "  " };
+            format!("{line_prefix}{}", xml_escape(line))
+        })
+        .collect()
+}
+
 pub fn render_context_event_prompt_line(
     event: &CoreContextEvent,
     max_text_chars: usize,
@@ -446,7 +505,8 @@ fn xml_escape(value: &str) -> String {
 mod tests {
     use super::{render_memory_view, TimeLabelContext};
     use crate::core_store::{
-        CoreContextEvent, CoreContextFact, CoreContextPackage, CoreFactStatus,
+        AssociativeMemoryActivation, AssociativeMemoryItem, CoreContextEvent, CoreContextFact,
+        CoreContextPackage, CoreFactStatus,
     };
     use crate::recall::{RecallItem, RecallSourceLayer};
     use crate::types::TimeRange;
@@ -508,6 +568,7 @@ mod tests {
                 relevance_score: 0.876,
                 relevance_explanation: None,
             }],
+            associative_memory: vec![],
             domain_state: serde_json::json!({}),
             budget: None,
             recall_debug: None,
@@ -526,6 +587,31 @@ mod tests {
         assert!(view
             .contains("<current_user_message>\nDo you remember Irzha?\n</current_user_message>"));
         assert!(view.contains("current_time: 2026-05-30 10:00 Saturday (UTC)"));
+    }
+
+    #[test]
+    fn memory_view_marks_associative_items_as_older_current_topic_memories() {
+        let mut package = labeled_package("2026-07-09T10:00:00Z", false);
+        package.associative_memory = vec![AssociativeMemoryItem {
+            memory_unit_id: "mu_mars".to_string(),
+            archive_id: "archive_mars".to_string(),
+            scope: "chat_1".to_string(),
+            thesis: "We once discussed the atmosphere of Mars.".to_string(),
+            created_at: "2026-07-01T09:00:00Z".to_string(),
+            activation: AssociativeMemoryActivation::CurrentTopicVector,
+            semantic_similarity: 0.714,
+            deep_recall_score: 0.762,
+            why_recalled: Some("current topic vector matched".to_string()),
+        }];
+
+        let view = render_memory_view(&package, "Tell me about Mars.");
+
+        assert!(view.contains("<associative_memory>"));
+        assert!(view.contains("Older memories activated by the current topic"));
+        assert!(view.contains(
+            "- [older memory: earlier this month | sim 0.71] We once discussed the atmosphere of Mars."
+        ));
+        assert!(view.contains("</associative_memory>"));
     }
 
     fn labeled_package(created_at: &str, clock_untrusted: bool) -> CoreContextPackage {
@@ -588,6 +674,7 @@ mod tests {
                 relevance_score: 0.876,
                 relevance_explanation: None,
             }],
+            associative_memory: vec![],
             domain_state: serde_json::json!({}),
             budget: None,
             recall_debug: None,

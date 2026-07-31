@@ -7,15 +7,26 @@ Most AI projects rebuild long-term memory from scratch and hit the same wall: th
 Memory mirrors how people remember, across three layers:
 
 - **Session** - the live, working conversation.
-- **Archive** - long-term, consolidated experience. Opt-in vector storage is planned for scalable semantic recall.
+- **Archive** - long-term, consolidated experience. Optional local vectors over
+  atomic memory units add semantic re-ranking and deep recall without replacing
+  the file-backed archive.
 - **Core** - the slow, stable layer: who the user is and what is settled and trusted.
 
 Experience moves upward only when it earns its place: it is validated against its source, promoted through review rather than written blindly, and forgotten gently and reversibly when it stops mattering.
 
+Optional vectors do not create another persisted memory layer. They form a
+local, rebuildable sidecar index over atomic memory units. During a live turn,
+the Rust core may use that index to build a small ephemeral
+`associative_memory` section: older details activated by the current topic,
+clearly separated from the ongoing conversation, ordinary Archive recall, and
+stable Core facts. The section is rebuilt for every request, so changing the
+topic does not carry the previous association forward.
+
 ## Principles
 
 - **Yours and auditable** - memory lives in plain, human-readable files you can read, fix, and delete. No black box.
-- **Private by choice** - deep semantic (vector) storage is planned as opt-in, not as a default requirement.
+- **Private by choice** - semantic vectors are opt-in, computed by the host, and
+  can stay entirely local; the non-vector recall path remains fully supported.
 - **Provider-independent by design** - the Rust core performs no network I/O and holds no model, vendor, or API key; the host runs language tasks through whatever model it chooses.
 - **Reusable** - one memory layer that any host (a bot, a game, an assistant) adopts through a thin adapter, instead of rebuilding memory.
 
@@ -31,7 +42,29 @@ Rust memory core, PyO3 Python adapter, and runnable host examples.
 - [`wiki/pages/foundation/contracts.md`](wiki/pages/foundation/contracts.md) - data contracts v0.1: JSON/JSONL shapes for events, sessions, archive, core, recall, tasks, manifest, and journal.
 - [`wiki/pages/integration/local-development.md`](wiki/pages/integration/local-development.md) - local Windows/Rust setup, installed tools, paths, and verification commands.
 - [`wiki/pages/governance/licensing.md`](wiki/pages/governance/licensing.md) - Memory Engine non-commercial public license.
+- [`wiki/pages/governance/versioning.md`](wiki/pages/governance/versioning.md) - normative SemVer, schema-version, and release-tag policy.
 - [`LICENSE.md`](LICENSE.md) - root license file for GitHub publication.
+
+## Versioning
+
+Memory Engine uses Semantic Versioning for library and adapter releases. After
+`1.0.0`, an incompatible public API or behavior change increments `MAJOR`, a
+backward-compatible capability increments `MINOR`, and a compatible defect fix
+increments `PATCH`. During pre-stable `0.x`, both public features and intentional
+breaking changes increment `MINOR`; breaking releases must be marked explicitly
+and include migration notes. Compatible fixes increment `PATCH`.
+
+The root Cargo workspace version is the release source of truth. Rust crates,
+the Python package, Git tag `vX.Y.Z`, release acceptance, and HISTORY must agree
+before a release is tagged. Persisted/wire `schema_version` values such as
+`recall_result.v1` are versioned separately: compatible optional additions may
+stay on `.v1`, while incompatible format changes require a new schema and a
+tested migration.
+
+Historical `v0.2.0` and `v0.3.0` tags were project milestones while package
+manifests remained `0.1.0`; those tags stay immutable. After live acceptance of
+vector Stage 2 and unit-focused recall, the next normalized release target is
+`0.4.0`. See the full [versioning policy](wiki/pages/governance/versioning.md).
 
 ## Current Structure
 
@@ -62,6 +95,7 @@ cargo fetch
 cargo fmt --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+python tools\check_release_versions.py
 ```
 
 Run the local memory terminal:
