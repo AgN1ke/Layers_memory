@@ -140,8 +140,11 @@ hosts/telegram_gemini_bot/runtime/logs/bot.log
 Структурована діагностика recall пишеться окремо в
 `runtime/logs/recall_trace.jsonl`. На кожен context package host просить
 `explain_recall`, але не додає debug payload у LLM prompt. Trace містить hash
-запиту, archive ids, Stage 1 множники, початковий/фінальний ранг, vector status,
-cosine і фінальний score; текст запиту та тексти спогадів у trace не пишуться.
+запиту, archive ids, winning `matched_memory_unit_id`, Stage 1 множники,
+початковий/фінальний ранг, vector status, cosine і фінальний score; текст запиту
+та тексти спогадів у trace не пишуться. Для Stage 2 `RecallItem` уже містить
+unit-focused `gist`/`compact_memory`, тому хост не має сам розбирати змішаний
+денний archive, щоб знайти семантично matched тезу.
 
 Python-конструктор `MemoryEngine` приймає необовʼязкові
 `stage2_candidate_limit` (default `40`) і `stage2_vector_weight` (default

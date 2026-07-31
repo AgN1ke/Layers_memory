@@ -115,6 +115,24 @@ Added first-pass `Related pages` navigation blocks to active research pages:
 This pass connects the original vector draft, the implementation TZ, the current
 contextual expansion plan, and the provider-resource research.
 
+## [2026-07-31] semantic provenance | Unit-focused Stage 2 recall
+
+Updated the accepted recall documents after Chibigochi live verification showed
+that unit-level vector ranking still returned an archive-wide prompt projection.
+
+- `foundation/architecture.md` now distinguishes unit-level embedding/search
+  from the parent archive's structural and statistics boundary.
+- `foundation/contracts.md` adds optional `matched_memory_unit_id` to
+  `RecallItem` and candidate debug, and specifies winning-unit projection.
+- `planning/roadmap.md` records semantic provenance as the completed foundation
+  for the future Recall Inspector while leaving the CLI itself open.
+- `research/vector-storage-tz-2026-07-03.md` records the live follow-up and
+  mixed-archive regression requirement.
+- `index.md` now calls out the unit-level recall boundary in foundation page
+  descriptions.
+
+No scoring weights, vector model, or Stage 1 behavior changed in this wiki pass.
+
 ## [2026-07-05] link pass | Release and integration pages
 
 Added first-pass `Related pages` navigation blocks to release and integration

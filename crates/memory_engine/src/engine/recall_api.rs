@@ -119,8 +119,13 @@ impl<S: Storage> MemoryEngine<S> {
 
                 if matches.status == RecallVectorStageStatus::Applied {
                     for (entry, scored) in scored_entries.iter_mut().take(stage2_candidate_count) {
-                        let similarity = matches.similarities.get(&entry.archive_id).copied();
+                        let archive_match = matches.archive_matches.get(&entry.archive_id);
+                        let similarity = archive_match.map(|matched| matched.similarity);
                         let semantic_similarity = similarity.unwrap_or(0.0) as f64;
+                        scored.matched_memory_unit_id =
+                            archive_match.map(|matched| matched.memory_unit_id.clone());
+                        scored.matched_memory_unit_thesis =
+                            archive_match.map(|matched| matched.thesis.clone());
                         scored.semantic_similarity = similarity.map(f64::from);
                         scored.score = ((scored.stage1_score * stage1_weight)
                             + (semantic_similarity * vector_weight))
@@ -165,7 +170,7 @@ impl<S: Storage> MemoryEngine<S> {
                         reason: vector_stage_reason(matches.status).map(str::to_string),
                         candidate_limit: self.options.vectors.stage2_candidate_limit,
                         candidate_count: stage2_candidate_count,
-                        matched_archive_count: matches.similarities.len(),
+                        matched_archive_count: matches.archive_matches.len(),
                         vector_weight,
                         stage1_weight,
                     });
@@ -209,6 +214,7 @@ impl<S: Storage> MemoryEngine<S> {
                     final_rank: index + 1,
                     selected: index < limit,
                     stage1_score: scored.stage1_score,
+                    matched_memory_unit_id: scored.matched_memory_unit_id.clone(),
                     semantic_similarity: scored.semantic_similarity,
                     final_score: scored.score,
                     components: scored.components.clone(),

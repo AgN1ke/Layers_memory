@@ -867,6 +867,7 @@ Core Context Package не обов'язково зберігається на д
         "final_rank": 1,
         "selected": true,
         "stage1_score": 0.22,
+        "matched_memory_unit_id": "mu_01J00000000000000000000001",
         "semantic_similarity": 0.81,
         "final_score": 0.515,
         "components": {
@@ -1012,7 +1013,7 @@ CandidateBelief - кандидат на стабільний висновок у
 
 `session_id` у `RecallQuery` є isolation boundary для archive recall. Якщо поле задане, ядро повертає тільки archive entries, де `source_session_id` дорівнює цьому `session_id`. Це default для `core_context_package` і звичайного chat prompt. Якщо хосту потрібен явний глобальний archive search для debug/admin-команди, він має передати `session_id: null` або не передавати поле.
 
-Якщо `query_embedding` передано і vector scope для `session_id` має стан `ready`, ядро застосовує Stage 2 до перших `VectorConfig.stage2_candidate_limit` кандидатів Stage 1 (default `40`): `final = stage1_score * (1 - w_vec) + max_memory_unit_cosine * w_vec`, де `w_vec = VectorConfig.stage2_vector_weight` (default `0.5`). Max cosine береться тільки по активних vector-eligible `MemoryUnit` батьківського archive entry; якщо такого unit-вектора немає, semantic term дорівнює `0`, а debug лишає `semantic_similarity` порожнім. Final score обмежується діапазоном `0..1`. Без query-вектора, для disabled/building/corrupt scope або поза candidate window порядок лишається Stage 1. Незалежний `recall_deep` продовжує шукати по всьому готовому unit-індексу й страхує випадок, коли правильний archive не ввійшов у Stage 2 window.
+Якщо `query_embedding` передано і vector scope для `session_id` має стан `ready`, ядро застосовує Stage 2 до перших `VectorConfig.stage2_candidate_limit` кандидатів Stage 1 (default `40`): `final = stage1_score * (1 - w_vec) + max_memory_unit_cosine * w_vec`, де `w_vec = VectorConfig.stage2_vector_weight` (default `0.5`). Max cosine береться тільки по активних vector-eligible `MemoryUnit` батьківського archive entry; якщо такого unit-вектора немає, semantic term дорівнює `0`, а debug лишає `semantic_similarity` порожнім. На рівному cosine winning unit обирається детерміновано за найменшим `memory_unit_id`. Для matched archive Stage 2 зберігає winning unit як semantic provenance: `RecallItem.matched_memory_unit_id` і debug-кандидат містять його ID, а `RecallItem.gist`/`compact_memory` проєктують саме тезу цього unit замість усього змішаного денного `compact_memory`. Archive ID, archive-level Stage 1 score, час, теги й recall statistics лишаються батьківською структурною межею. Final score обмежується діапазоном `0..1`. Без query-вектора, для disabled/building/corrupt scope або поза candidate window порядок і projection лишаються Stage 1. Незалежний `recall_deep` продовжує шукати по всьому готовому unit-індексу й страхує випадок, коли правильний archive не ввійшов у Stage 2 window.
 
 `limit`:
 
@@ -1034,14 +1035,9 @@ CandidateBelief - кандидат на стабільний висновок у
     {
       "source_layer": "archive",
       "id": "archive_01J00000000000000000000001",
-      "gist": "Користувач повідомив, що переїхав у Берлін минулого місяця.",
-      "narrative": "Під час розмови користувач уточнив важливу зміну в особистому контексті.",
-      "facts": [
-        "Користувач переїхав у Берлін приблизно у квітні 2026 року."
-      ],
-      "quotes": [
-        "Я переїхав у Берлін минулого місяця"
-      ],
+      "matched_memory_unit_id": "mu_01J00000000000000000000001",
+      "gist": "Берлін -> користувач переїхав туди приблизно у квітні 2026 року.",
+      "compact_memory": "Берлін -> користувач переїхав туди приблизно у квітні 2026 року.",
       "source_session_id": "2026-05-17_005",
       "time_range": {
         "start": "2026-05-17T16:30:00.000Z",
@@ -1079,7 +1075,7 @@ CandidateBelief - кандидат на стабільний висновок у
 - `stage2_embeddings`, коли готовий unit-level vector scope пересортував Stage 1 candidate window;
 - `stage3_llm` у майбутньому.
 
-`relevance_score` є обовʼязковим у кожному `RecallItem`; адаптери не мають його викидати. `debug` присутній лише при `explain: true`. Його `candidates` містять структуровані компоненти Stage 1 та, якщо Stage 2 запускався, semantic similarity і обидва ранги. `vector_stage.status` розрізняє `not_requested`, `disabled`, `building`, `corrupt` та `applied` без вгадування за порожнім `notes`.
+`relevance_score` є обовʼязковим у кожному `RecallItem`; адаптери не мають його викидати. `matched_memory_unit_id` є optional semantic provenance: присутній для unit-focused Stage 2 або contextual deep-recall item і відсутній у старому Stage 1 output. Це additive backward-compatible поле `recall_result.v1`; старі payload-и без нього валідні. `debug` присутній лише при `explain: true`. Його `candidates` містять структуровані компоненти Stage 1 та, якщо Stage 2 запускався, winning `matched_memory_unit_id`, semantic similarity і обидва ранги. `vector_stage.status` розрізняє `not_requested`, `disabled`, `building`, `corrupt` та `applied` без вгадування за порожнім `notes`.
 
 ---
 

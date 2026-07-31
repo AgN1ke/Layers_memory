@@ -927,6 +927,15 @@ def run_direct_vectors(keep_runtime: bool) -> DriverResult:
         if len(embedded_ids) < 2:
             raise ConformanceError(f"direct-vectors expected at least two embedded units, got {embedded_ids!r}")
 
+        embedded_text_by_id = {
+            item["memory_unit_id"]: item["text"]
+            for request in requests
+            for item in request.get("prompt_inputs", {}).get("embed_batch", {}).get("items", [])
+            if isinstance(item, dict)
+            and isinstance(item.get("memory_unit_id"), str)
+            and isinstance(item.get("text"), str)
+        }
+
         state = loads(driver.engine.vector_state(SESSION_ID))
         if state.get("status") != "ready":
             raise ConformanceError(f"vector scope not ready after fake embeddings: {state!r}")
@@ -954,6 +963,38 @@ def run_direct_vectors(keep_runtime: bool) -> DriverResult:
             raise ConformanceError(f"deep recall did not return the vector target {target_id!r}: {result!r}")
         if hits[0].get("sim", 0.0) < 0.99:
             raise ConformanceError(f"deep recall similarity too low: {hits[0]!r}")
+
+        stage2 = loads(
+            driver.engine.recall(
+                dumps(
+                    {
+                        "schema_version": "recall_query.v1",
+                        "session_id": SESSION_ID,
+                        "created_at": "2026-06-10T11:00:00Z",
+                        "context": {"recent_text": "semantic unit focus"},
+                        "query_text": "semantic unit focus",
+                        "query_embedding": {
+                            "model_id": VECTOR_MODEL_ID,
+                            "query_vec": fake_vector(target_index),
+                        },
+                        "filters": {"source_layers": ["archive"]},
+                        "limit": 5,
+                        "include_core": False,
+                        "explain": True,
+                    }
+                )
+            )
+        )
+        if stage2.get("stage_used") != "stage2_embeddings":
+            raise ConformanceError(f"ordinary recall did not use Stage 2: {stage2!r}")
+        stage2_items = stage2.get("items", [])
+        if not stage2_items or stage2_items[0].get("matched_memory_unit_id") != target_id:
+            raise ConformanceError(f"ordinary recall lost winning memory-unit provenance: {stage2!r}")
+        if stage2_items[0].get("compact_memory") != embedded_text_by_id.get(target_id):
+            raise ConformanceError(f"ordinary recall did not project the winning memory unit: {stage2!r}")
+        candidates = stage2.get("debug", {}).get("candidates", [])
+        if not candidates or candidates[0].get("matched_memory_unit_id") != target_id:
+            raise ConformanceError(f"Stage 2 debug lost winning memory-unit provenance: {stage2!r}")
 
         disabled = loads(driver.engine.set_vector_scope(SESSION_ID, False, True))
         if disabled.get("status") != "disabled":

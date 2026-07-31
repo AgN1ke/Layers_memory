@@ -493,6 +493,7 @@ mod tests {
             archive_relevant: vec![RecallItem {
                 source_layer: RecallSourceLayer::Archive,
                 id: "archive_1".to_string(),
+                matched_memory_unit_id: None,
                 gist: "The cat Irzha was an important topic.".to_string(),
                 compact_memory: Some("Irzha -> warm personal memory.".to_string()),
                 narrative: None,
@@ -569,6 +570,7 @@ mod tests {
             archive_relevant: vec![RecallItem {
                 source_layer: RecallSourceLayer::Archive,
                 id: "archive_1".to_string(),
+                matched_memory_unit_id: None,
                 gist: "Motorcycle purchase discussion.".to_string(),
                 compact_memory: Some("Zheka -> bought a motorcycle.".to_string()),
                 narrative: None,

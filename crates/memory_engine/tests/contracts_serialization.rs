@@ -3,6 +3,7 @@ use memory_engine::archive::{
 };
 use memory_engine::event::{IngestEvent, StoredEvent};
 use memory_engine::file_storage::FileStorage;
+use memory_engine::recall::{RecallCandidateDebug, RecallItem};
 use memory_engine::sleep::SleepCompressionResult;
 use memory_engine::storage::Storage;
 use memory_engine::tasks::{PendingTask, TaskState, TaskType};
@@ -13,6 +14,58 @@ use memory_engine::types::{
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[test]
+fn recall_candidate_debug_adds_optional_memory_unit_provenance_compatibly() {
+    let raw = json!({
+        "archive_id": "archive_01",
+        "stage1_rank": 3,
+        "final_rank": 1,
+        "selected": true,
+        "stage1_score": 0.22,
+        "semantic_similarity": 0.81,
+        "final_score": 0.515,
+        "components": {
+            "weight": 0.9,
+            "stored_freshness": 1.0,
+            "freshness_decay": 0.7,
+            "age_days": 92.0,
+            "effective_freshness": 0.7,
+            "recall_boost": 1.0,
+            "theme_factor": 1.0,
+            "tag_factor": 1.0,
+            "text_factor": 0.7,
+            "query_token_count": 5,
+            "text_overlap_count": 0
+        }
+    });
+
+    let mut candidate: RecallCandidateDebug = serde_json::from_value(raw).unwrap();
+    assert!(candidate.matched_memory_unit_id.is_none());
+
+    candidate.matched_memory_unit_id = Some("mu_titan_01".to_string());
+    let serialized = serde_json::to_value(candidate).unwrap();
+    assert_eq!(serialized["matched_memory_unit_id"], "mu_titan_01");
+}
+
+#[test]
+fn recall_item_adds_optional_memory_unit_focus_compatibly() {
+    let raw = json!({
+        "source_layer": "archive",
+        "id": "archive_01",
+        "gist": "Mixed daily archive.",
+        "weight": 0.9,
+        "freshness": 0.8,
+        "relevance_score": 0.7
+    });
+
+    let mut item: RecallItem = serde_json::from_value(raw).unwrap();
+    assert!(item.matched_memory_unit_id.is_none());
+
+    item.matched_memory_unit_id = Some("mu_titan_01".to_string());
+    let serialized = serde_json::to_value(item).unwrap();
+    assert_eq!(serialized["matched_memory_unit_id"], "mu_titan_01");
+}
 
 #[test]
 fn ingest_event_round_trips_with_contract_names() {

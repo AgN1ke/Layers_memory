@@ -46,6 +46,51 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-31 — Stage 2 preserves MemoryUnit provenance and focus
+
+Context. The first Chibigochi verification of vector Stage 2 passed the main
+planet-versus-routine case, but one broad query appeared to raise an unrelated
+mixed daily archive. Code inspection corrected the initial diagnosis: vectors
+were already stored per `MemoryUnit`; the actual gap was that ordinary recall
+collapsed the winning unit to an archive cosine and then returned the whole
+archive compact projection.
+
+**What changed:**
+- Stage 2 now retains the exact active vector-eligible `MemoryUnit` that produced
+  each archive candidate's maximum cosine. Equal similarities use the smallest
+  `memory_unit_id` as a deterministic provenance tie-breaker.
+- `RecallItem` adds optional `matched_memory_unit_id`. For a matched Stage 2
+  candidate, `gist` and `compact_memory` contain the winning unit thesis instead
+  of the complete mixed archive compact. The parent archive remains the item ID
+  and the boundary for Stage 1 metadata, time, ranking, and recall statistics.
+- `RecallCandidateDebug` adds the same optional ID. Existing text-free host
+  traces therefore expose `query hash -> MemoryUnit -> archive -> final rank`
+  without logging query or memory text.
+- The fields are additive within `recall_result.v1`; old payloads without them
+  remain valid, and Stage 1 output omits them.
+- Regression and host-conformance coverage proves that a mixed Europa/Titan
+  archive returns only the winning Titan thesis through Rust and the Python
+  adapter; Telegram-local Stage 1 conformance remains unchanged.
+
+**What is retracted:**
+- The live-test interpretation that Stage 2 embedded a whole daily archive. The
+  implementation already embedded `MemoryUnit.thesis`; only the final ordinary
+  recall projection was archive-wide.
+
+**What is still true:**
+- The Stage 2 candidate window, `0.5/0.5` default formula, opt-in/local vector
+  boundary, and independent global `recall_deep` path are unchanged.
+- No scoring weights were changed from a single weak broad-query example.
+
+**What we are doing:**
+- Use winning-unit provenance to inspect the weak "other worlds" query before
+  deciding whether any model or scoring calibration is justified.
+
+**Thanks:**
+- The owner and Claude developer for providing the Chibigochi live ranking,
+  score components, and mixed-archive symptom instead of asking for a blind
+  weight adjustment.
+
 ## 2026-07-31 — Vector Stage 2 now re-ranks ordinary recall
 
 Context. A live recall package contained the relevant planet memories, but

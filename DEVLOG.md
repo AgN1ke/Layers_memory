@@ -6229,3 +6229,54 @@ archive memories були третім і четвертим. Попередня
 **Наступні кроки:**
 Використати `recall_trace.jsonl` на живих запитах перед будь-якою зміною
 default `w_vec=0.5`.
+
+## Запис 143 — 2026-07-31 — Unit-focused ordinary recall
+
+**Проблематика:**
+Chibigochi-перевірка коміту `c58b90b` підтвердила Stage 2 на реальних даних:
+Титан піднявся над побутовим archive, формула і structured status збіглись. На
+широкому запиті «інші світи» водночас піднявся змішаний робочий archive. Звіт
+спочатку пояснив це «вектором цілого дня».
+
+**Стратегічна звірка:**
+Код і vector-storage ТЗ показали інше: embedding request уже містить
+`MemoryUnit.thesis`, а Stage 2 рахує max cosine по active eligible units archive.
+Втрачався наступний крок provenance: max згортався до `archive_id -> similarity`,
+а `recall_item_from_archive` повертав увесь archive `compact_memory`. Це
+суперечило стратегічній вимозі компактного й пояснюваного recall, хоча storage
+та search математично вже були unit-level.
+
+**Що зроблено:**
+- Stage 2 internal match тепер несе winning `memory_unit_id`, thesis і cosine;
+  однакові cosine мають детермінований tie-break за ID.
+- `RecallCandidateDebug.matched_memory_unit_id` зберігає text-free ланцюг
+  `query -> unit -> archive -> rank` для майбутнього Recall Inspector.
+- `RecallItem.matched_memory_unit_id` є additive optional полем
+  `recall_result.v1`. Для Stage 2 `gist`/`compact_memory` проєктують лише winning
+  thesis; archive ID, Stage 1 metadata і buffered recall stats не змінюються.
+- Stage 1 без query embedding зберігає старий archive projection.
+- Rust regression тепер має mixed planet archive (Europa + Titan) і доводить,
+  що query-вектор повертає тільки Titan thesis та правильний unit ID.
+- Direct-vectors conformance через Python adapter перевіряє ті самі provenance
+  та projection поля на host JSON boundary.
+
+**Межі рішення:**
+Формула `stage1 * 0.5 + cosine * 0.5`, candidate window, модель embeddings,
+`recall_deep` scoring і natural-language time не змінювались. Слабкий broad
+query ще треба пояснити winning unit-ом; він не є достатньою підставою крутити
+ваги.
+
+**Перевірки:**
+- `cargo test --workspace` — пройшло; explicit 1000-session disk stress лишився
+  ignored як і раніше;
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло;
+- isolated fresh-wheel Python adapter tests — `15 passed`;
+- host conformance `direct-vectors` — пройшов і тепер перевіряє unit provenance
+  та unit-focused `compact_memory` через PyO3;
+- host conformance `telegram-local` — пройшов, Stage 1 compatibility збережена.
+
+**Наступні кроки:**
+Повторити у Chibigochi запит «інші світи» й за `matched_memory_unit_id`
+визначити, яка теза реально дала 0.559. Робочий Chibigochi process треба
+штатно перезапустити перед тестом: він тримав старий `.pyd`, тому перевірка
+нового wheel виконувалась в ізольованій venv без зупинки live session.

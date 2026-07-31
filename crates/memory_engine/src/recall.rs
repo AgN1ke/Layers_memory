@@ -73,6 +73,8 @@ pub struct RecallResult {
 pub struct RecallItem {
     pub source_layer: RecallSourceLayer,
     pub id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_memory_unit_id: Option<Id>,
     pub gist: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_memory: Option<String>,
@@ -122,6 +124,8 @@ pub struct RecallCandidateDebug {
     pub final_rank: usize,
     pub selected: bool,
     pub stage1_score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_memory_unit_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic_similarity: Option<f64>,
     pub final_score: f64,

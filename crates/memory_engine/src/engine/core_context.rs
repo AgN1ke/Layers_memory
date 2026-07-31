@@ -411,6 +411,7 @@ fn contextual_expansion_recall_item(hit: DeepRecallHit, scope: &str) -> RecallIt
     RecallItem {
         source_layer: RecallSourceLayer::Archive,
         id: hit.memory_unit_id.clone(),
+        matched_memory_unit_id: Some(hit.memory_unit_id.clone()),
         gist: hit.thesis.clone(),
         compact_memory: Some(hit.thesis.clone()),
         narrative: None,

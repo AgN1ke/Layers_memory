@@ -52,7 +52,11 @@ engine = memory_engine.MemoryEngine(
 ```
 
 The adapter only forwards these values into `EngineOptions`. It does not
-compute embeddings or rank memories itself.
+compute embeddings or rank memories itself. When Stage 2 applies, the returned
+JSON keeps the parent archive `id` but includes `matched_memory_unit_id` and a
+unit-focused `gist`/`compact_memory`; `debug.candidates` carries the same ID as
+text-free semantic provenance. Older Stage 1 payloads simply omit the optional
+field.
 
 Sleep is an explicit host decision in v0.1. A host calls `engine.sleep(session_id)`
 manually, from token-budget pressure, or from an idle schedule, then executes the

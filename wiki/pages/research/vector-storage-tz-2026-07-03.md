@@ -110,6 +110,7 @@ pub fn recall_deep(&self, query: DeepRecallQuery) -> Result<DeepRecallResult>;
 
 - `RecallQuery.query_embedding: Option<Vec<f32>>` + `CoreContextRequest.query_embedding` (serde default; протягнути в внутрішній recall).
 - Якщо вектор присутній && scope ready: над top-K (конфіг, default 40) кандидатів Stage 1 — `final = stage1_score * (1 - w_vec) + max_unit_cosine * w_vec` (`w_vec` конфіг, старт 0.5; max по активних units entry). `RecallResult.stage_used = Stage2`, `relevance_explanation` показує обидві складові.
+- Live follow-up 2026-07-31: max match не можна згортати лише до archive score. Core зберігає winning `memory_unit_id` і thesis; `RecallItem` для matched Stage 2 candidate проєктує цю тезу як `gist`/`compact_memory`, а `RecallDebug` повертає ID як text-free provenance. Це доводить unit-level retrieval до звичайного recall, не змінюючи archive-level Stage 1 і recall statistics.
 - Без вектора / вимкнено — Stage 1 байтово як зараз (це тест).
 - Host: локальний `query_embed` на кожен хід дешевий (CPU, ~мс), але Фаза C вмикається окремим рішенням після того, як B-калібрування покаже реальні sim-розподіли.
 
@@ -125,7 +126,7 @@ pub fn recall_deep(&self, query: DeepRecallQuery) -> Result<DeepRecallResult>;
 
 Фаза A: roundtrip f32; R1-обидва напрями; дедуп за хешем; tombstone на forget + re-embed на remember_back; compaction; purge видаляє каталог і НЕ чіпає units/archives; rebuild детермінований; disabled scope → нуль тасків (інваріант 2); мультиспікерна сесія → нуль тасків (інваріант 5); model/dim mismatch → відмова.
 Фаза B: min_sim-gate (кандидат нижче порога не проходить навіть із max recency); score-ранжування з інжектованим now; scarcity top_k; scope-ізоляція; reason-семантика disabled/building/below_threshold; reinforcement потрапляє в buffered stats.
-Фаза C: увімкнений Stage 2 змінює порядок там, де парафраз без текстового збігу (два entries з fake-векторами); без query_embedding — байтова ідентичність Stage 1; `stage_used` коректний.
+Фаза C: увімкнений Stage 2 змінює порядок там, де парафраз без текстового збігу (два entries з fake-векторами); mixed archive повертає thesis саме winning unit і його ID, а не весь денний compact; без query_embedding — байтова ідентичність Stage 1; `stage_used` коректний.
 Conformance: новий `--host direct-vectors` — детермінований сценарій через PyO3 з fake-векторами: enable → sleep → backfill → recall_deep знаходить парафраз, який Stage 1 текстово не матчить; off → found:false/reason=disabled. Лінійні хости без змін.
 
 ## 8. Калібрування (обов'язково до Фази C і до заявлених висновків)

@@ -22,10 +22,12 @@ crate/host README files stay outside the wiki.
 - [Strategy](pages/foundation/strategy.md) - strategic intent, product
   boundaries, human-control principles, and major direction updates.
 - [Architecture](pages/foundation/architecture.md) - architecture, terminology,
-  data flows, storage, task boundaries, adapters, and version scope.
+  data flows, storage, task boundaries, adapters, version scope, and the
+  unit-level semantic recall boundary.
 - [Contracts](pages/foundation/contracts.md) - JSON/JSONL schemas, storage
   contracts, task contracts, prompt-facing contracts, hybrid recall scoring,
-  structured recall diagnostics, and compatibility rules.
+  unit-focused semantic provenance, structured recall diagnostics, and
+  compatibility rules.
 
 ## Planning
 

@@ -17,6 +17,8 @@ pub(super) struct ScoredArchiveEntry {
     pub(super) effective_freshness: f64,
     pub(super) explanation: String,
     pub(super) components: RecallScoreComponents,
+    pub(super) matched_memory_unit_id: Option<String>,
+    pub(super) matched_memory_unit_thesis: Option<String>,
     pub(super) semantic_similarity: Option<f64>,
 }
 
@@ -97,6 +99,8 @@ pub(super) fn score_archive_entry(
             query_token_count: query_tokens.len(),
             text_overlap_count: text_overlap,
         },
+        matched_memory_unit_id: None,
+        matched_memory_unit_thesis: None,
         semantic_similarity: None,
     }
 }
@@ -201,7 +205,11 @@ pub(super) fn recall_item_from_archive(
     scored: ScoredArchiveEntry,
     explain: bool,
 ) -> RecallItem {
-    let compact_memory = normalize_optional_string(entry.compact_memory.as_deref());
+    let matched_memory_unit_id = scored.matched_memory_unit_id.clone();
+    let matched_memory_unit_thesis =
+        normalize_optional_string(scored.matched_memory_unit_thesis.as_deref());
+    let compact_memory = matched_memory_unit_thesis
+        .or_else(|| normalize_optional_string(entry.compact_memory.as_deref()));
     let prompt_gist = compact_memory.clone().unwrap_or_else(|| entry.gist.clone());
     let narrative = if compact_memory.is_some() {
         None
@@ -222,6 +230,7 @@ pub(super) fn recall_item_from_archive(
     RecallItem {
         source_layer: RecallSourceLayer::Archive,
         id: entry.archive_id,
+        matched_memory_unit_id,
         gist: prompt_gist,
         compact_memory,
         narrative,

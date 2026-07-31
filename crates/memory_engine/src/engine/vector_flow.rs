@@ -2,7 +2,13 @@ use super::*;
 
 pub(super) struct Stage2VectorMatches {
     pub(super) status: RecallVectorStageStatus,
-    pub(super) similarities: HashMap<String, f32>,
+    pub(super) archive_matches: HashMap<String, Stage2ArchiveMatch>,
+}
+
+pub(super) struct Stage2ArchiveMatch {
+    pub(super) memory_unit_id: String,
+    pub(super) thesis: String,
+    pub(super) similarity: f32,
 }
 
 impl<S: Storage> MemoryEngine<S> {
@@ -333,14 +339,14 @@ impl<S: Storage> MemoryEngine<S> {
             if !root_manifest.features.embeddings_enabled {
                 return Ok(Stage2VectorMatches {
                     status: RecallVectorStageStatus::Disabled,
-                    similarities: HashMap::new(),
+                    archive_matches: HashMap::new(),
                 });
             }
 
             let Some(index) = self.storage.read_vector_index(scope)? else {
                 return Ok(Stage2VectorMatches {
                     status: RecallVectorStageStatus::Disabled,
-                    similarities: HashMap::new(),
+                    archive_matches: HashMap::new(),
                 });
             };
             ensure_vector_manifest_matches(
@@ -351,13 +357,13 @@ impl<S: Storage> MemoryEngine<S> {
             if index.manifest.state == VectorScopeStatus::Corrupt {
                 return Ok(Stage2VectorMatches {
                     status: RecallVectorStageStatus::Corrupt,
-                    similarities: HashMap::new(),
+                    archive_matches: HashMap::new(),
                 });
             }
             if index.manifest.state != VectorScopeStatus::Ready {
                 return Ok(Stage2VectorMatches {
                     status: RecallVectorStageStatus::Building,
-                    similarities: HashMap::new(),
+                    archive_matches: HashMap::new(),
                 });
             }
 
@@ -367,7 +373,7 @@ impl<S: Storage> MemoryEngine<S> {
                 .iter()
                 .map(|item| item.memory_unit_id.as_str())
                 .collect::<HashSet<_>>();
-            let mut similarities = HashMap::<String, f32>::new();
+            let mut archive_matches = HashMap::<String, Stage2ArchiveMatch>::new();
 
             for (row, vector) in index.rows.iter().zip(index.vectors.iter()) {
                 if !archive_ids.contains(&row.archive_id)
@@ -386,15 +392,26 @@ impl<S: Storage> MemoryEngine<S> {
                 }
 
                 let similarity = dot_product(&query_vec, vector);
-                similarities
-                    .entry(row.archive_id.clone())
-                    .and_modify(|current| *current = current.max(similarity))
-                    .or_insert(similarity);
+                let should_replace = archive_matches.get(&row.archive_id).is_none_or(|current| {
+                    similarity > current.similarity
+                        || (similarity == current.similarity
+                            && row.memory_unit_id < current.memory_unit_id)
+                });
+                if should_replace {
+                    archive_matches.insert(
+                        row.archive_id.clone(),
+                        Stage2ArchiveMatch {
+                            memory_unit_id: row.memory_unit_id.clone(),
+                            thesis: unit.thesis,
+                            similarity,
+                        },
+                    );
+                }
             }
 
             Ok(Stage2VectorMatches {
                 status: RecallVectorStageStatus::Applied,
-                similarities,
+                archive_matches,
             })
         })
     }

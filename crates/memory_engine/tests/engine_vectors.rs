@@ -376,10 +376,13 @@ fn stage2_rerank_moves_semantic_planet_memory_above_high_weight_gym_memory() {
         scope,
         "planet",
         "A distant world.",
-        vec![(
-            "Titan has a dense atmosphere where a person could fly.",
-            0.55,
-        )],
+        vec![
+            ("Europa has an ocean beneath its ice.", 0.50),
+            (
+                "Titan has a dense atmosphere where a person could fly.",
+                0.55,
+            ),
+        ],
     );
     set_archive_weight(&engine, "archive_gym", 0.95);
     set_archive_weight(&engine, "archive_planet", 0.40);
@@ -389,6 +392,18 @@ fn stage2_rerank_moves_semantic_planet_memory_above_high_weight_gym_memory() {
         .expect("stage1 recall");
     assert_eq!(stage1.stage_used, RecallStage::Stage1);
     assert_eq!(stage1.items[0].id, "archive_gym");
+    let stage1_planet = stage1
+        .items
+        .iter()
+        .find(|item| item.id == "archive_planet")
+        .expect("stage1 planet item");
+    assert!(stage1_planet.matched_memory_unit_id.is_none());
+    assert_eq!(
+        stage1_planet.compact_memory.as_deref(),
+        Some(
+            "Europa has an ocean beneath its ice. Titan has a dense atmosphere where a person could fly."
+        )
+    );
 
     engine
         .set_vector_scope(scope, true, false)
@@ -415,7 +430,7 @@ fn stage2_rerank_moves_semantic_planet_memory_above_high_weight_gym_memory() {
         .expect("embedding backfill");
     assert_eq!(requests.len(), 1);
     submit_embeddings_by_unit(&engine, &requests[0], |memory_unit_id| {
-        usize::from(memory_unit_id.contains("planet"))
+        usize::from(memory_unit_id == "mu_planet_1")
     });
 
     let ready_without_embedding = engine
@@ -436,6 +451,18 @@ fn stage2_rerank_moves_semantic_planet_memory_above_high_weight_gym_memory() {
 
     assert_eq!(stage2.stage_used, RecallStage::Stage2Embeddings);
     assert_eq!(stage2.items[0].id, "archive_planet");
+    assert_eq!(
+        stage2.items[0].matched_memory_unit_id.as_deref(),
+        Some("mu_planet_1")
+    );
+    assert_eq!(
+        stage2.items[0].compact_memory.as_deref(),
+        Some("Titan has a dense atmosphere where a person could fly.")
+    );
+    assert_eq!(
+        stage2.items[0].gist,
+        "Titan has a dense atmosphere where a person could fly."
+    );
     assert!(stage2.items[0]
         .relevance_explanation
         .as_deref()
@@ -451,6 +478,10 @@ fn stage2_rerank_moves_semantic_planet_memory_above_high_weight_gym_memory() {
         .expect("planet debug");
     assert_eq!(planet_debug.stage1_rank, 2);
     assert_eq!(planet_debug.final_rank, 1);
+    assert_eq!(
+        planet_debug.matched_memory_unit_id.as_deref(),
+        Some("mu_planet_1")
+    );
     assert!(planet_debug
         .semantic_similarity
         .is_some_and(|sim| sim > 0.99));
