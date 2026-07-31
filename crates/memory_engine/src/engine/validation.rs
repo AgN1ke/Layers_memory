@@ -43,6 +43,19 @@ pub(super) fn validate_recall_query(query: &RecallQuery) -> Result<()> {
         });
     }
 
+    if let Some(embedding) = query.query_embedding.as_ref() {
+        if embedding.model_id.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "recall query query_embedding.model_id must not be empty".to_string(),
+            ));
+        }
+        if embedding.query_vec.is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "recall query query_embedding.query_vec must not be empty".to_string(),
+            ));
+        }
+    }
+
     Ok(())
 }
 

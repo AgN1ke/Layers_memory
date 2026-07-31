@@ -16,6 +16,8 @@
 
 Порядок роботи: фази A → B → C, кожна — окрема гілка з review, HISTORY-записом (зміни контрактів/поведінки), DEVLOG-записом і оновленням roadmap. Фаза C вмикається тільки після калібрування на живих даних фази B.
 
+**Implementation update 2026-07-31:** Фаза C реалізована після live-знахідки, де правильні планетарні спогади вже були у Stage 1 candidate set, але стояли нижче нерелевантного спортзалу. `RecallQuery.query_embedding` тепер запускає формулу з §5 над configurable top-K, `CoreContextRequest` протягує той самий embedding у внутрішній recall, а structured debug показує обидва ранги й усі складові score. Окремий regression case лишає `recall_deep` відповідальним за правильний спогад поза Stage 2 candidate window.
+
 ## 1. Інваріанти (кожен — тест або структурна гарантія)
 
 1. **Ядро не рахує embeddings і не робить мережевих викликів.** Вектори приходять від хоста через існуючий `PendingTask`-механізм (`TaskType::ComputeEmbedding` вже оголошений у `tasks.rs`) і через `query_vec` у recall-запитах.

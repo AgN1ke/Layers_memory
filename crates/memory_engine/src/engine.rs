@@ -36,7 +36,9 @@ use crate::prompt_view::{
     OLDER_TRACE_MAX_TEXT_CHARS, RECENT_MAX_TEXT_CHARS,
 };
 use crate::recall::{
-    RecallDebug, RecallFilters, RecallItem, RecallQuery, RecallResult, RecallSourceLayer,
+    RecallCandidateDebug, RecallDebug, RecallFilters, RecallItem, RecallQuery,
+    RecallQueryEmbedding, RecallResult, RecallScoreComponents, RecallSourceLayer,
+    RecallVectorStageDebug, RecallVectorStageStatus,
 };
 use crate::reflection::{
     ReflectionAnalyzeResult, ReflectionCandidateDraft, ReflectionCandidatesResult,

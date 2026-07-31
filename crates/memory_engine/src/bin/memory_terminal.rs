@@ -168,6 +168,7 @@ fn run_recall(
         session_id: Some(session_id.to_string()),
         context: json!({ "recent_text": query_text }),
         query_text: Some(query_text.to_string()),
+        query_embedding: None,
         filters: RecallFilters::default(),
         limit: 5,
         include_core: false,

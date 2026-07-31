@@ -194,15 +194,22 @@ impl<S: Storage> MemoryEngine<S> {
             session_id: Some(request.session_id.clone()),
             context: json!({ "recent_text": query_text.clone().unwrap_or_default() }),
             query_text,
+            query_embedding: request.query_embedding.as_ref().map(|embedding| {
+                RecallQueryEmbedding {
+                    model_id: embedding.model_id.clone(),
+                    query_vec: embedding.query_vec.clone(),
+                }
+            }),
             filters: RecallFilters {
                 source_layers: vec![RecallSourceLayer::Archive],
                 ..RecallFilters::default()
             },
             limit: recall_limit,
             include_core: false,
-            explain: false,
+            explain: request.explain_recall,
         })?;
         let mut archive_relevant = recall_result.items;
+        let recall_debug = recall_result.debug;
 
         let (core_facts, core_read_warnings) = if request.include_core {
             self.core_context_facts(request.core_scope.as_deref())?
@@ -291,6 +298,7 @@ impl<S: Storage> MemoryEngine<S> {
             archive_relevant: budgeted.archive_relevant,
             domain_state: request.domain_state,
             budget: Some(budgeted.report),
+            recall_debug,
             notes,
         })
     }

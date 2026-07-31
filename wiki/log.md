@@ -8,6 +8,46 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-07-31] contracts + roadmap | Recall Stage 2 implemented
+
+Updated the stable contracts and accepted vector-storage spec after implementing
+Recall Stage 2 in the Rust core. Documented `RecallQuery.query_embedding`, the
+top-40 hybrid formula, `CoreContextRequest.explain_recall`, structured candidate
+diagnostics, and the division of responsibility between Stage 2 re-ranking and
+global unit-level `recall_deep` fallback.
+
+Marked Phase C, incremental `ComputeEmbedding` backfill, and the no-vector
+Stage 1 fallback complete in the roadmap. Updated the wiki index descriptions;
+no new page was added.
+
+## [2026-07-06] research note | Generative Agents Memory Stream external review
+
+Added `research/generative-agents-memory-stream-2026-07-06.md` after reviewing
+the agentpatterns.ai summary of the Park et al. generative-agents memory-stream
+pattern at the owner's request.
+
+The note compares the external retrieval-scoring formula
+(`recency*0.5 + relevance*3.0 + importance*2.0`, recency from last access,
+threshold-triggered reflection) against our actual `recall_deep` code, not
+just our docs. Four findings recorded: importance is under-weighted in deep
+recall relative to cosine similarity; our own declared M4 reinforcement
+principle (`vector-recall.md`) is not wired into `recall_deep` scoring;
+reflection has no accumulated-signal trigger the way sleep does; Stage 1
+recall's multiplicative formula makes the vector path the only place
+old-and-important memories can currently surface, which raises the stakes of
+the first two findings. Also records what we deliberately do not take from the
+pattern (per-observation LLM scoring, top-30 context, retrieval-as-ceiling)
+and why our Core lifecycle is structurally stronger on the one axis the source
+itself calls a ceiling.
+
+Linked from `research/contextual-memory-expansion-2026-07-05.md` (the scoring
+fixes should land inside that page's Phase 2 live-calibration pass) and from
+`planning/roadmap.md`, which gained two new items: a `recall_deep` recency-gap
+item next to the existing Stage 1 recall-boost item, and a new reflection
+auto-trigger item. Also added to `index.md` under Research.
+
+No code changed. See DEVLOG for the working-session record.
+
 ## [2026-07-05] content update | Contextual memory expansion Phase 1
 
 Updated wiki pages for the implemented first phase of contextual memory

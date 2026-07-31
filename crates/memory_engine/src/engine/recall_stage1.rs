@@ -12,9 +12,12 @@ pub(super) fn archive_filters_from_recall(filters: &RecallFilters) -> ArchiveFil
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ScoredArchiveEntry {
+    pub(super) stage1_score: f64,
     pub(super) score: f64,
     pub(super) effective_freshness: f64,
     pub(super) explanation: String,
+    pub(super) components: RecallScoreComponents,
+    pub(super) semantic_similarity: Option<f64>,
 }
 
 pub(super) fn score_archive_entry(
@@ -66,6 +69,7 @@ pub(super) fn score_archive_entry(
         .clamp(0.0, 1.0);
 
     ScoredArchiveEntry {
+        stage1_score: score,
         score,
         effective_freshness,
         explanation: format!(
@@ -80,6 +84,20 @@ pub(super) fn score_archive_entry(
             tag_factor,
             text_factor
         ),
+        components: RecallScoreComponents {
+            weight: entry.weight,
+            stored_freshness: entry.freshness,
+            freshness_decay,
+            age_days: freshness_age_days,
+            effective_freshness,
+            recall_boost,
+            theme_factor,
+            tag_factor,
+            text_factor,
+            query_token_count: query_tokens.len(),
+            text_overlap_count: text_overlap,
+        },
+        semantic_similarity: None,
     }
 }
 

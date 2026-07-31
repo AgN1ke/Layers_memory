@@ -47,6 +47,7 @@ ARCHIVE_DIR = MEMORY_DIR / "archive"
 LOG_DIR = RUNTIME_DIR / "logs"
 LOG_PATH = LOG_DIR / "bot.log"
 TOKEN_USAGE_PATH = LOG_DIR / "token_usage.jsonl"
+RECALL_TRACE_PATH = LOG_DIR / "recall_trace.jsonl"
 STATE_DIR = RUNTIME_DIR / "state"
 OFFSET_PATH = STATE_DIR / "telegram_offset.json"
 SLEEP_SCHEDULER_STATE_PATH = STATE_DIR / "sleep_scheduler_state.json"
@@ -1986,6 +1987,7 @@ def context_package(
         },
         "core_scope": core_scope(session_id),
         "query_text": text,
+        "explain_recall": True,
         "recall_limit": 5,
         "session_recent_limit": RECENT_CONTEXT_LIMIT,
         "session_trace_event_limit": SESSION_TRACE_EVENT_LIMIT,
@@ -1996,6 +1998,7 @@ def context_package(
         request["query_embedding"] = query_embedding
     package = json.loads(engine.core_context_package(json.dumps(request, ensure_ascii=False)))
     log_context_budget(package, session_id)
+    log_recall_trace(package, session_id, text)
     return package
 
 
@@ -2415,6 +2418,39 @@ def log_context_budget(package: dict[str, Any], session_id: str) -> None:
         f"dropped_archive={budget.get('dropped_archive_relevant')} "
         f"dropped_core={budget.get('dropped_core_facts')} "
         f"exceeded={budget.get('budget_exceeded')}"
+    )
+
+
+def log_recall_trace(package: dict[str, Any], session_id: str, query_text: str) -> None:
+    debug = package.get("recall_debug")
+    if not isinstance(debug, dict):
+        return
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp": now_rfc3339(),
+        "kind": "recall_trace",
+        "session": session_id,
+        "query_hash": text_hash(query_text),
+        "stage_used": debug.get("stage_used"),
+        "candidate_count": debug.get("candidate_count"),
+        "filtered_count": debug.get("filtered_count"),
+        "vector_stage": debug.get("vector_stage"),
+        "candidates": debug.get("candidates", []),
+        "notes": debug.get("notes", []),
+    }
+    with RECALL_TRACE_PATH.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+    vector_stage = record.get("vector_stage")
+    vector_status = vector_stage.get("status") if isinstance(vector_stage, dict) else None
+    candidates = record["candidates"] if isinstance(record["candidates"], list) else []
+    top_id = candidates[0].get("archive_id") if candidates and isinstance(candidates[0], dict) else None
+    log_line(
+        "recall_trace "
+        f"session={session_id} stage={record.get('stage_used')} vector={vector_status or '-'} "
+        f"candidates={record.get('candidate_count')} top={top_id or '-'} "
+        f"query={record['query_hash']}"
     )
 
 

@@ -137,6 +137,17 @@ hosts/telegram_gemini_bot/runtime/logs/bot.log
 
 У log пишуться polling events, оброблені Telegram message id і traceback-и помилок. API keys туди не записуються.
 
+Структурована діагностика recall пишеться окремо в
+`runtime/logs/recall_trace.jsonl`. На кожен context package host просить
+`explain_recall`, але не додає debug payload у LLM prompt. Trace містить hash
+запиту, archive ids, Stage 1 множники, початковий/фінальний ранг, vector status,
+cosine і фінальний score; текст запиту та тексти спогадів у trace не пишуться.
+
+Python-конструктор `MemoryEngine` приймає необовʼязкові
+`stage2_candidate_limit` (default `40`) і `stage2_vector_weight` (default
+`0.5`). Це лише host-facing налаштування Rust-політики; embeddings і далі
+рахуються локально через `fastembed` та передаються в ядро готовими векторами.
+
 Telegram polling offset зберігається тут:
 
 ```text

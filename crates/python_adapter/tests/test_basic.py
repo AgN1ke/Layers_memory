@@ -18,6 +18,30 @@ def engine(tmp_path: Path) -> memory_engine.MemoryEngine:
     return memory_engine.MemoryEngine(str(tmp_path), host_id="pytest_host")
 
 
+def test_constructor_accepts_stage2_tuning(tmp_path: Path):
+    configured = memory_engine.MemoryEngine(
+        str(tmp_path / "configured"),
+        host_id="pytest_stage2",
+        stage2_candidate_limit=7,
+        stage2_vector_weight=0.25,
+    )
+    state = json.loads(configured.vector_state("scope"))
+    assert state["status"] == "disabled"
+
+
+def test_constructor_rejects_invalid_stage2_tuning(tmp_path: Path):
+    with pytest.raises(ValueError, match="stage2_candidate_limit"):
+        memory_engine.MemoryEngine(
+            str(tmp_path / "bad_limit"),
+            stage2_candidate_limit=0,
+        )
+    with pytest.raises(ValueError, match="stage2_vector_weight"):
+        memory_engine.MemoryEngine(
+            str(tmp_path / "bad_weight"),
+            stage2_vector_weight=1.5,
+        )
+
+
 def _ingest(engine: memory_engine.MemoryEngine, session_id: str, text: str, **overrides) -> dict:
     event = {
         "schema_version": "event.v1",
@@ -261,6 +285,10 @@ def test_full_cycle_ingest_sleep_resume_recall(engine: memory_engine.MemoryEngin
         == "Берлін -> користувач повідомив стабільний контекст проживання."
     )
     assert recall["items"][0]["gist"] == recall["items"][0]["compact_memory"]
+    assert isinstance(recall["items"][0]["relevance_score"], float)
+    assert recall["debug"]["stage_used"] == "stage1"
+    assert recall["debug"]["vector_stage"]["status"] == "not_requested"
+    assert recall["debug"]["candidates"][0]["components"]["weight"] == 0.95
     assert "narrative" not in recall["items"][0]
 
 

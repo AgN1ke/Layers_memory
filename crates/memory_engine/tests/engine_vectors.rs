@@ -4,17 +4,20 @@ use memory_engine::archive::{
 use memory_engine::core_store::{CoreContextQueryEmbedding, CoreContextRequest};
 use memory_engine::event::IngestEvent;
 use memory_engine::llm::LlmResponse;
+use memory_engine::recall::{
+    RecallFilters, RecallQuery, RecallQueryEmbedding, RecallVectorStageStatus,
+};
 use memory_engine::storage::Storage;
 use memory_engine::tasks::TaskType;
 use memory_engine::types::{
-    CORE_CONTEXT_REQUEST_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, FORGET_REVIEW_RESULT_SCHEMA_VERSION,
-    MEMORY_UNIT_SCHEMA_VERSION,
+    RecallStage, CORE_CONTEXT_REQUEST_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
+    FORGET_REVIEW_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
 };
 use memory_engine::vector::{
     DeepRecallQuery, EmbedBatchResult, EmbedBatchVector, VectorScopeStatus, DEFAULT_VECTOR_DIM,
     DEFAULT_VECTOR_MODEL_ID, EMBED_BATCH_RESULT_SCHEMA_VERSION,
 };
-use memory_engine::{FileStorage, MemoryEngine};
+use memory_engine::{EngineOptions, FileStorage, MemoryEngine};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -355,10 +358,173 @@ fn deep_recall_score_uses_recency_weight_and_top_k() {
 }
 
 #[test]
+fn stage2_rerank_moves_semantic_planet_memory_above_high_weight_gym_memory() {
+    let root = unique_temp_dir("vectors_stage2_planet_rerank");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+    let scope = "planet_scope";
+
+    create_archive_with_units_named(
+        &engine,
+        scope,
+        "gym",
+        "Gym routine.",
+        vec![("The user goes to the gym three times a week.", 0.95)],
+    );
+    create_archive_with_units_named(
+        &engine,
+        scope,
+        "planet",
+        "A distant world.",
+        vec![(
+            "Titan has a dense atmosphere where a person could fly.",
+            0.55,
+        )],
+    );
+    set_archive_weight(&engine, "archive_gym", 0.95);
+    set_archive_weight(&engine, "archive_planet", 0.40);
+
+    let stage1 = engine
+        .recall(recall_query(scope, None, 2, true))
+        .expect("stage1 recall");
+    assert_eq!(stage1.stage_used, RecallStage::Stage1);
+    assert_eq!(stage1.items[0].id, "archive_gym");
+
+    engine
+        .set_vector_scope(scope, true, false)
+        .expect("enable vectors");
+    let building = engine
+        .recall(recall_query(
+            scope,
+            Some(unit_vector(DEFAULT_VECTOR_DIM, 1)),
+            2,
+            true,
+        ))
+        .expect("building vector scope recall");
+    assert_eq!(building.stage_used, RecallStage::Stage1);
+    assert_eq!(
+        building
+            .debug
+            .as_ref()
+            .and_then(|debug| debug.vector_stage.as_ref())
+            .map(|debug| debug.status),
+        Some(RecallVectorStageStatus::Building)
+    );
+    let requests = engine
+        .pending_embedding_backfill(scope)
+        .expect("embedding backfill");
+    assert_eq!(requests.len(), 1);
+    submit_embeddings_by_unit(&engine, &requests[0], |memory_unit_id| {
+        usize::from(memory_unit_id.contains("planet"))
+    });
+
+    let ready_without_embedding = engine
+        .recall(recall_query(scope, None, 2, false))
+        .expect("ready scope without query embedding");
+    assert_eq!(ready_without_embedding.stage_used, RecallStage::Stage1);
+    assert_eq!(ready_without_embedding.items[0].id, "archive_gym");
+    assert!(ready_without_embedding.debug.is_none());
+
+    let stage2 = engine
+        .recall(recall_query(
+            scope,
+            Some(unit_vector(DEFAULT_VECTOR_DIM, 1)),
+            2,
+            true,
+        ))
+        .expect("stage2 recall");
+
+    assert_eq!(stage2.stage_used, RecallStage::Stage2Embeddings);
+    assert_eq!(stage2.items[0].id, "archive_planet");
+    assert!(stage2.items[0]
+        .relevance_explanation
+        .as_deref()
+        .is_some_and(|text| text.contains("stage2 = stage1")));
+    let debug = stage2.debug.expect("recall debug");
+    let vector_debug = debug.vector_stage.expect("vector stage debug");
+    assert_eq!(vector_debug.status, RecallVectorStageStatus::Applied);
+    assert_eq!(vector_debug.matched_archive_count, 2);
+    let planet_debug = debug
+        .candidates
+        .iter()
+        .find(|candidate| candidate.archive_id == "archive_planet")
+        .expect("planet debug");
+    assert_eq!(planet_debug.stage1_rank, 2);
+    assert_eq!(planet_debug.final_rank, 1);
+    assert!(planet_debug
+        .semantic_similarity
+        .is_some_and(|sim| sim > 0.99));
+    assert_eq!(planet_debug.components.weight, 0.40);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn deep_recall_finds_planet_memory_outside_stage2_candidate_window() {
+    let root = unique_temp_dir("vectors_deep_outside_stage2_window");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let mut options = EngineOptions::default();
+    options.vectors.stage2_candidate_limit = 1;
+    let engine = MemoryEngine::with_options(storage, options);
+    let scope = "planet_scope";
+
+    create_archive_with_units_named(
+        &engine,
+        scope,
+        "gym",
+        "Gym routine.",
+        vec![("The user goes to the gym three times a week.", 0.95)],
+    );
+    create_archive_with_units_named(
+        &engine,
+        scope,
+        "planet",
+        "A distant world.",
+        vec![("Europa has an ocean beneath its ice.", 0.55)],
+    );
+    set_archive_weight(&engine, "archive_gym", 0.95);
+    set_archive_weight(&engine, "archive_planet", 0.40);
+    engine
+        .set_vector_scope(scope, true, false)
+        .expect("enable vectors");
+    let requests = engine
+        .pending_embedding_backfill(scope)
+        .expect("embedding backfill");
+    submit_embeddings_by_unit(&engine, &requests[0], |memory_unit_id| {
+        usize::from(memory_unit_id.contains("planet"))
+    });
+
+    let stage2 = engine
+        .recall(recall_query(
+            scope,
+            Some(unit_vector(DEFAULT_VECTOR_DIM, 1)),
+            1,
+            true,
+        ))
+        .expect("stage2 recall");
+    assert_eq!(stage2.items[0].id, "archive_gym");
+
+    let deep = engine
+        .recall_deep(deep_query(
+            scope,
+            unit_vector(DEFAULT_VECTOR_DIM, 1),
+            1,
+            0.75,
+        ))
+        .expect("deep recall");
+    assert!(deep.found);
+    assert_eq!(deep.hits[0].archive_id, "archive_planet");
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn core_context_package_expands_with_vector_detail_when_query_embedding_is_present() {
     let root = unique_temp_dir("vectors_context_expansion");
     let storage = FileStorage::with_host_id(&root, "vector_test");
-    let engine = MemoryEngine::new(storage);
+    let mut options = EngineOptions::default();
+    options.vectors.stage2_candidate_limit = 1;
+    let engine = MemoryEngine::with_options(storage, options);
 
     create_archive_with_units_named(
         &engine,
@@ -406,6 +572,7 @@ fn core_context_package_expands_with_vector_detail_when_query_embedding_is_prese
                 model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
                 query_vec: unit_vector(DEFAULT_VECTOR_DIM, 1),
             }),
+            explain_recall: true,
             ..context_request("vector_scope", None)
         })
         .expect("context with embedding");
@@ -423,6 +590,14 @@ fn core_context_package_expands_with_vector_detail_when_query_embedding_is_prese
         .notes
         .iter()
         .any(|note| note.contains("contextual memory expansion added 1")));
+    assert_eq!(
+        with_embedding
+            .recall_debug
+            .as_ref()
+            .and_then(|debug| debug.vector_stage.as_ref())
+            .map(|debug| debug.status),
+        Some(RecallVectorStageStatus::Applied)
+    );
 
     fs::remove_dir_all(root).ok();
 }
@@ -457,6 +632,7 @@ fn core_context_package_skips_contextual_detail_already_visible_in_long_memory()
                 model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
                 query_vec: unit_vector(DEFAULT_VECTOR_DIM, 1),
             }),
+            explain_recall: false,
             ..context_request("vector_scope", None)
         })
         .expect("context with visible long memory");
@@ -697,6 +873,75 @@ fn submit_embeddings(
         .expect("submit embedding");
 }
 
+fn submit_embeddings_by_unit(
+    engine: &MemoryEngine<FileStorage>,
+    request: &memory_engine::llm::LlmRequest,
+    hot_index_for: impl Fn(&str) -> usize,
+) {
+    let items = request.prompt_inputs["embed_batch"]["items"]
+        .as_array()
+        .expect("embed items");
+    let results = items
+        .iter()
+        .map(|item| {
+            let memory_unit_id = item["memory_unit_id"]
+                .as_str()
+                .expect("memory unit id")
+                .to_string();
+            EmbedBatchVector {
+                vector: unit_vector(DEFAULT_VECTOR_DIM, hot_index_for(&memory_unit_id)),
+                memory_unit_id,
+            }
+        })
+        .collect();
+    engine
+        .resume_compute_embedding(
+            &request.task_id,
+            EmbedBatchResult {
+                schema_version: EMBED_BATCH_RESULT_SCHEMA_VERSION.to_string(),
+                model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+                dim: DEFAULT_VECTOR_DIM,
+                results,
+            },
+        )
+        .expect("submit embedding");
+}
+
+fn set_archive_weight(engine: &MemoryEngine<FileStorage>, archive_id: &str, weight: f64) {
+    let storage = engine.storage();
+    let mut archive = storage
+        .read_archive_entry_by_id(archive_id)
+        .expect("read archive");
+    archive.weight = weight;
+    storage
+        .update_archive_entry(archive_id, &archive)
+        .expect("update archive");
+}
+
+fn recall_query(
+    scope: &str,
+    query_vec: Option<Vec<f32>>,
+    limit: usize,
+    explain: bool,
+) -> RecallQuery {
+    RecallQuery {
+        schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+        query_id: None,
+        created_at: Some("2020-07-01T00:00:00Z".to_string()),
+        session_id: Some(scope.to_string()),
+        context: json!({}),
+        query_text: Some("Tell me about that planet with the atmosphere.".to_string()),
+        query_embedding: query_vec.map(|query_vec| RecallQueryEmbedding {
+            model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+            query_vec,
+        }),
+        filters: RecallFilters::default(),
+        limit,
+        include_core: false,
+        explain,
+    }
+}
+
 fn deep_query(scope: &str, query_vec: Vec<f32>, top_k: usize, min_sim: f32) -> DeepRecallQuery {
     DeepRecallQuery {
         scope: scope.to_string(),
@@ -719,6 +964,7 @@ fn context_request(scope: &str, query_vec: Option<Vec<f32>>) -> CoreContextReque
             model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
             query_vec,
         }),
+        explain_recall: false,
         recall_limit: 0,
         session_recent_limit: 0,
         session_trace_event_limit: 0,

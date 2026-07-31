@@ -40,6 +40,20 @@ recall_result = json.loads(engine.recall(json.dumps(query_dict)))
 pending = json.loads(engine.pending_tasks())
 ```
 
+Stage 2 recall tuning is optional and remains Rust-core policy:
+
+```python
+engine = memory_engine.MemoryEngine(
+    "memory",
+    host_id="telegram_bot",
+    stage2_candidate_limit=40,
+    stage2_vector_weight=0.5,
+)
+```
+
+The adapter only forwards these values into `EngineOptions`. It does not
+compute embeddings or rank memories itself.
+
 Sleep is an explicit host decision in v0.1. A host calls `engine.sleep(session_id)`
 manually, from token-budget pressure, or from an idle schedule, then executes the
 returned tasks through its own LLM provider.

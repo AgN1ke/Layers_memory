@@ -3,6 +3,7 @@
 ## Related pages
 
 - [Vector storage implementation TZ](vector-storage-tz-2026-07-03.md) - vector layer this plan builds on.
+- [Generative Agents Memory Stream review](generative-agents-memory-stream-2026-07-06.md) - external pattern comparison; scoring-weight and reflection-trigger findings to fold into Phase 2 calibration.
 - [LLM integration resources](../integration/llm-integration-resources.md) - developer-facing resource contract for models, keys, and embeddings.
 - [Provider landscape](provider-landscape.md) - provider research behind model choices.
 - [Contracts](../foundation/contracts.md) - context package and request shapes affected by expansion.
@@ -199,3 +200,12 @@ existing memory-unit vector index.
 Next implement Step 3 after Phase 1 is observed on real chat data. The first
 signal to watch is whether direct memory-unit expansion gives enough useful
 detail around active topics before adding Core fact anchors.
+
+When Step 3 reaches its live-calibration pass, fold in the two scoring fixes
+from
+[Generative Agents Memory Stream review](generative-agents-memory-stream-2026-07-06.md):
+raise `deep_recall_unit_weight` (currently under-scaled relative to cosine
+similarity) and add a recency-from-last-recall term to `recall_deep` once
+unit-level recall counters exist. Both touch the same `recall_deep` scoring
+path Step 3 already needs to calibrate, so do them together rather than as a
+separate pass.

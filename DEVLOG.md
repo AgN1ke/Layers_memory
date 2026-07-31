@@ -6157,3 +6157,75 @@ remain the next phase after this behavior is observed on real chat data.
 Use a short Telegram check on a ready vector scope to watch whether the package
 gains useful detail around active topics without flooding the prompt. If that
 holds, move to contextual expansion Phase 2 with Core-fact vector anchors.
+
+## Запис 141 — 2026-07-06 — Зовнішній review: Generative Agents Memory Stream (Claude)
+
+**Проблематика:**
+Власник поставив питання, чи допоможуть принципи з generative-agents memory-stream (agentpatterns.ai) покращити проєкт. Потрібен був не переказ статті, а перевірка проти нашого фактичного коду: де ми вже це робимо, де є розбіжність, і чи міняти напрям.
+
+**Задум:**
+Прочитати паттерн, звірити з `recall_deep` (`engine/vector_flow.rs`) і дефолтами `VectorOptions`/`RecallStage1Config` (`engine/options.rs`), а не з памʼяттю чи документами; зафіксувати тільки те, що підтверджено прямим читанням коду.
+
+**Що зроблено:**
+- Прочитано зовнішній паттерн: observation stream з LLM-важливістю на кожен запис, композитний retrieval-score `recency*0.5 + relevance*3.0 + importance*2.0` (recency від останнього звернення, не від створення), reflection за порогом накопиченої важливості (не за розкладом).
+- Звірено з кодом і знайдено 4 речі:
+  1. `deep_recall_unit_weight` (0.10) сильно недооцінює важливість відносно косинусної схожості (`sim` ефективно ~1.0) — у зовнішньому паттерні importance це 36% суми, у нас ~8%.
+  2. Наш власний M4-принцип ("часто згадувані спогади ранжуються вище", `vector-recall.md`) задекларований, але не підключений у `recall_deep`: recency рахується тільки від `created_at`, `recall_count`/`last_recalled_at` не читаються. Stage 1 recall це вже має (`recall_count_log_bonus`), deep recall — ні.
+  3. У reflection немає авто-тригера за накопиченим сигналом, на відміну від sleep (token/context budget pressure, nightly idle) — `/reflect` досі тільки ручний.
+  4. Структурний ризик: Stage 1 recall мультиплікативна, тому старий-і-важливий спогад не може випливти звичайним шляхом (freshness ≈0.12 при half-life 180 днів) — це робить векторний шлях єдиним місцем, де стара важливість може спливти, і тому підвищує ціну знахідок 1–2.
+- Зафіксовано і що НЕ брати: LLM-оцінку важливості на кожен запис (сам паттерн називає це головною статтею витрат — ми оцінюємо пакетно під час sleep), top-30 у контекст (наша скупість — свідомий продуктовий вибір), і головне — "стелю" паттерну: він сам визнає, що retrieval не консолідує досвід у правила; наш шар Ядро з lifecycle `candidate → review → CoreFact` це якраз і закриває.
+- Створено `wiki/pages/research/generative-agents-memory-stream-2026-07-06.md` з повним розбором і reproducibility-прив'язкою до коду.
+- Додано в `wiki/index.md`, прилінковано з `contextual-memory-expansion-2026-07-05.md` (Findings 1–2 мають закриватись разом із її Phase 2 live-калібруванням) і з `roadmap.md` (новий пункт про recency-розрив у `recall_deep` поруч із існуючим Stage 1 пунктом; новий пункт reflection auto-trigger).
+- `wiki/log.md` отримав відповідний запис.
+
+**Перевірки:**
+- `python tools/check_wiki_links.py --wiki-related-pages` — 59 файлів, посилання чисті.
+
+**Проблеми чи виклики:**
+Жодних. Це чисто дослідницька/документаційна сесія без змін коду — усі знахідки підуть у роботу разом із вже запланованим Phase 2 контекстного розгортання, окремої гілки не відкрито.
+
+**Наступні кроки:**
+Findings 1–2 (ваги `recall_deep`, recency-термін) — у той самий live-калібрувальний прохід, що й Contextual expansion Phase 2/Step 3. Finding 3 (reflection auto-trigger) — незалежний roadmap-пункт, можна брати окремо.
+
+## Запис 142 — 2026-07-31 — Recall Stage 2 і структурована діагностика
+
+**Проблематика:**
+На живому пакеті запит про планету повернув спортзал першим, хоча два правильні
+archive memories були третім і четвертим. Попередня теорія про повний miss Stage
+1 виявилась хибною для цього конкретного інциденту. Одночасно backend log не
+показував ані score-компоненти, ані однозначний vector status.
+
+**Що зроблено:**
+- Додано optional `RecallQuery.query_embedding` і реалізовано затверджену у
+  vector-storage ТЗ Phase C: top-40 Stage 1 candidates пересортовуються формулою
+  `stage1 * 0.5 + max active MemoryUnit cosine * 0.5`.
+- `CoreContextRequest.query_embedding` тепер живить обидва core-owned шляхи:
+  Stage 2 re-rank для близьких archive candidates і незалежний contextual
+  `recall_deep` для units поза candidate window.
+- Існуючий `RecallDebug` розширено без використання `notes` як протоколу:
+  initial/final rank, selected, Stage 1 score і всі множники, cosine, final
+  score, vector status/reason та ваги формули.
+- Додано `CoreContextRequest.explain_recall`; Telegram host вмикає його і пише
+  text-free `recall_trace.jsonl` із query hash та structured core diagnostics.
+- Python adapter отримав optional `stage2_candidate_limit` і
+  `stage2_vector_weight`, щоб баланс можна було калібрувати без зміни політики у
+  backend-коді.
+- Додано regression tests «planet inside Stage 2 window beats gym» і «planet
+  outside window is found by global recall_deep».
+
+**Межі рішення:**
+Ваги `recall_deep`, unit-level last-recall recency, natural-language time intent
+і reflection auto-trigger не змінювались: це окремі записані задачі, для яких
+цей live пакет не дає достатньої калібровки.
+
+**Перевірки:**
+- `cargo test --workspace` — пройшло;
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройшло;
+- Python adapter після нового `maturin develop`: `15 passed`;
+- conformance `direct-vectors` і `telegram-local` — пройшли;
+- `python tools/check_wiki_links.py --wiki-related-pages` — 59 файлів,
+  посилання чисті.
+
+**Наступні кроки:**
+Використати `recall_trace.jsonl` на живих запитах перед будь-якою зміною
+default `w_vec=0.5`.

@@ -142,6 +142,8 @@ pub struct CoreContextRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_embedding: Option<CoreContextQueryEmbedding>,
     #[serde(default)]
+    pub explain_recall: bool,
+    #[serde(default)]
     pub recall_limit: usize,
     #[serde(default)]
     pub session_recent_limit: usize,
@@ -204,6 +206,8 @@ pub struct CoreContextPackage {
     pub domain_state: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<CoreContextBudgetReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recall_debug: Option<crate::recall::RecallDebug>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }

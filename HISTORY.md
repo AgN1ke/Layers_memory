@@ -46,6 +46,51 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-07-31 — Vector Stage 2 now re-ranks ordinary recall
+
+Context. A live recall package contained the relevant planet memories, but
+Stage 1 ranked an unrelated high-weight gym memory above them. The package also
+did not expose enough structured evidence to distinguish a disabled/building
+vector path from a scoring problem.
+
+**What changed:**
+- `recall_query.v1` accepts optional `query_embedding` (`model_id` +
+  `query_vec`). A ready opt-in vector scope re-ranks the first configurable
+  Stage 1 candidates with
+  `stage1_score * (1 - w_vec) + max_memory_unit_cosine * w_vec`.
+- Defaults are a 40-candidate window and `w_vec=0.5`. Rust callers configure
+  them through `EngineOptions`; the Python adapter exposes both as optional
+  constructor arguments.
+- `core_context_request.v1` accepts `explain_recall` (default `false`) and now
+  forwards its existing query embedding into ordinary recall as well as the
+  independent contextual/deep expansion path.
+- Opt-in `RecallDebug` now exposes Stage 1 score components, initial/final
+  ranks, semantic similarity, final score, and vector status. The Telegram
+  development host writes this payload without memory/query text to
+  `runtime/logs/recall_trace.jsonl`.
+- Regression tests cover both cases: semantic reordering when the correct
+  archive is inside the Stage 2 window, and global `recall_deep` recovery when
+  it is outside.
+
+**What is retracted:**
+- The contract text that described `stage2_embeddings` only as a future stage.
+
+**What is still true:**
+- Embeddings remain opt-in, local, host-computed derived data over validated
+  `MemoryUnit` records. The Rust core does not load a model or call a provider.
+- Without `query_embedding`, or while the vector scope is unavailable, ordinary
+  recall stays on Stage 1.
+- `recall_deep` remains an independent semantic candidate-generation path; it
+  was not replaced by top-K re-ranking.
+
+**What we are doing:**
+- Use the new trace on live recall traffic before changing the default 0.5
+  balance or deep-recall scoring weights.
+
+**Thanks:**
+- The owner and Claude developer for replacing the initial theory with the raw
+  four-candidate live package that isolated the ordering failure.
+
 ## 2026-07-05 - Context packages can expand active-topic detail from vectors
 
 Context. Vector storage already supported explicit distant recall. The owner

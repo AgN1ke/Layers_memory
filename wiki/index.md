@@ -24,12 +24,13 @@ crate/host README files stay outside the wiki.
 - [Architecture](pages/foundation/architecture.md) - architecture, terminology,
   data flows, storage, task boundaries, adapters, and version scope.
 - [Contracts](pages/foundation/contracts.md) - JSON/JSONL schemas, storage
-  contracts, task contracts, prompt-facing contracts, and compatibility rules.
+  contracts, task contracts, prompt-facing contracts, hybrid recall scoring,
+  structured recall diagnostics, and compatibility rules.
 
 ## Planning
 
-- [Roadmap](pages/planning/roadmap.md) - current implementation state, accepted
-  plan, open work, deferred items, and phase ordering.
+- [Roadmap](pages/planning/roadmap.md) - current implementation state, completed
+  vector Stage 2, open work, deferred items, and phase ordering.
 - [Audit 2026-06-10](pages/planning/audit-2026-06-10.md) - post-v0.2 audit,
   cleanup queue, risks, and resolved findings.
 
@@ -60,6 +61,9 @@ crate/host README files stay outside the wiki.
 
 - [Agentic Architectures](pages/research/agentic-architectures.md) - agent
   framework landscape and what Memory Engine adopts or rejects.
+- [Generative Agents Memory Stream](pages/research/generative-agents-memory-stream-2026-07-06.md)
+  - external retrieval-scoring pattern review; findings feeding into vector
+    deep-recall calibration and a new reflection auto-trigger item.
 - [Contextual Memory Expansion](pages/research/contextual-memory-expansion-2026-07-05.md)
   - plan for topic-triggered expansion of detailed memory under budget.
 - [Memory Time Perception](pages/research/memory-time-perception-2026-07-02.md)

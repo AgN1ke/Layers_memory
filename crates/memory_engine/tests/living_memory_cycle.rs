@@ -70,6 +70,7 @@ fn living_memory_cycle_closes_v02_end_to_end() {
             core_scope: Some(SESSION.to_string()),
             query_text: Some("space".to_string()),
             query_embedding: None,
+            explain_recall: false,
             recall_limit: 5,
             session_recent_limit: 5,
             session_trace_event_limit: 10,
@@ -98,6 +99,7 @@ fn living_memory_cycle_closes_v02_end_to_end() {
             session_id: Some(SESSION.to_string()),
             context: json!({}),
             query_text: Some("space calming interest".to_string()),
+            query_embedding: None,
             filters: RecallFilters {
                 source_layers: vec![RecallSourceLayer::Archive],
                 ..RecallFilters::default()
@@ -259,6 +261,7 @@ fn living_memory_cycle_closes_v02_end_to_end() {
             core_scope: Some(SESSION.to_string()),
             query_text: Some("where does the user live?".to_string()),
             query_embedding: None,
+            explain_recall: false,
             recall_limit: 0,
             session_recent_limit: 0,
             session_trace_event_limit: 0,

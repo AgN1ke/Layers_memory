@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) struct Stage2VectorMatches {
+    pub(super) status: RecallVectorStageStatus,
+    pub(super) similarities: HashMap<String, f32>,
+}
+
 impl<S: Storage> MemoryEngine<S> {
     pub fn vector_state(&self, scope: &str) -> Result<VectorScopeState> {
         self.ensure_manifest()?;
@@ -313,6 +318,83 @@ impl<S: Storage> MemoryEngine<S> {
                 found: true,
                 reason: None,
                 hits: scored,
+            })
+        })
+    }
+
+    pub(super) fn stage2_archive_similarities(
+        &self,
+        scope: &str,
+        embedding: &RecallQueryEmbedding,
+        archive_ids: &HashSet<String>,
+    ) -> Result<Stage2VectorMatches> {
+        self.with_resource_lock(vectors_lock_key(scope), || {
+            let root_manifest = self.storage.read_manifest()?;
+            if !root_manifest.features.embeddings_enabled {
+                return Ok(Stage2VectorMatches {
+                    status: RecallVectorStageStatus::Disabled,
+                    similarities: HashMap::new(),
+                });
+            }
+
+            let Some(index) = self.storage.read_vector_index(scope)? else {
+                return Ok(Stage2VectorMatches {
+                    status: RecallVectorStageStatus::Disabled,
+                    similarities: HashMap::new(),
+                });
+            };
+            ensure_vector_manifest_matches(
+                &index.manifest,
+                &embedding.model_id,
+                embedding.query_vec.len(),
+            )?;
+            if index.manifest.state == VectorScopeStatus::Corrupt {
+                return Ok(Stage2VectorMatches {
+                    status: RecallVectorStageStatus::Corrupt,
+                    similarities: HashMap::new(),
+                });
+            }
+            if index.manifest.state != VectorScopeStatus::Ready {
+                return Ok(Stage2VectorMatches {
+                    status: RecallVectorStageStatus::Building,
+                    similarities: HashMap::new(),
+                });
+            }
+
+            let query_vec = normalize_vector(embedding.query_vec.clone(), index.manifest.dim)?;
+            let tombstoned = index
+                .tombstones
+                .iter()
+                .map(|item| item.memory_unit_id.as_str())
+                .collect::<HashSet<_>>();
+            let mut similarities = HashMap::<String, f32>::new();
+
+            for (row, vector) in index.rows.iter().zip(index.vectors.iter()) {
+                if !archive_ids.contains(&row.archive_id)
+                    || tombstoned.contains(row.memory_unit_id.as_str())
+                {
+                    continue;
+                }
+                let Ok(unit) = self.storage.read_memory_unit_by_id(&row.memory_unit_id) else {
+                    continue;
+                };
+                if unit.source_session_id != scope
+                    || unit.archive_id != row.archive_id
+                    || !memory_unit_is_vector_eligible(&unit)
+                {
+                    continue;
+                }
+
+                let similarity = dot_product(&query_vec, vector);
+                similarities
+                    .entry(row.archive_id.clone())
+                    .and_modify(|current| *current = current.max(similarity))
+                    .or_insert(similarity);
+            }
+
+            Ok(Stage2VectorMatches {
+                status: RecallVectorStageStatus::Applied,
+                similarities,
             })
         })
     }

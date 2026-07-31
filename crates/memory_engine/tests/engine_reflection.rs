@@ -352,6 +352,7 @@ fn confirming_contradicting_candidate_marks_existing_core_fact_contested() {
             core_scope: Some("live_session".to_string()),
             query_text: Some("where does the user live?".to_string()),
             query_embedding: None,
+            explain_recall: false,
             recall_limit: 0,
             session_recent_limit: 0,
             session_trace_event_limit: 0,

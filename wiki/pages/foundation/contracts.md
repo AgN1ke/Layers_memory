@@ -742,6 +742,7 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
     "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     "query_vec": [0.01, -0.02, 0.03]
   },
+  "explain_recall": true,
   "recall_limit": 5,
   "session_recent_limit": 40,
   "session_trace_event_limit": 120,
@@ -760,6 +761,8 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
 `domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
 
 `query_embedding` необовʼязковий. Якщо інтегруюча програма передає вектор поточного запиту, ядро може додати до `archive_relevant` кілька детальних спогадів із готового vector scope. Ці деталі проходять дедуплікацію проти вже видимої памʼяті й рахуються в тому самому `token_budget`. Якщо поле відсутнє, пакет контексту збирається звичайним шляхом.
+
+`explain_recall` (default `false`) вмикає структурований `recall_debug` у відповіді. Це debug/telemetry payload, а не prompt content: він показує Stage 1 множники, початковий і фінальний ранги, vector status та Stage 2 складові, але не повинен передаватися LLM у звичайному chat prompt.
 
 `utc_offset_minutes` (default `0`) — локальний зсув хоста для календарних часових міток у prompt view («вчора» — локальне поняття, сховище лишається в UTC). `clock_untrusted` (default `false`) — хост може позначити свій годинник ненадійним; тоді prompt view опускає часові мітки замість рендерити хибні. Відносні мітки ніколи не зберігаються у файлах — вони обчислюються при рендері з абсолютних timestamp-ів і `created_at` пакета, тому не «гниють» після простою.
 
@@ -844,6 +847,44 @@ Core Context Package не обов'язково зберігається на д
     "dropped_core_facts": 0,
     "budget_exceeded": false
   },
+  "recall_debug": {
+    "stage_used": "stage2_embeddings",
+    "candidate_count": 12,
+    "filtered_count": 12,
+    "vector_stage": {
+      "status": "applied",
+      "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "candidate_limit": 40,
+      "candidate_count": 12,
+      "matched_archive_count": 12,
+      "vector_weight": 0.5,
+      "stage1_weight": 0.5
+    },
+    "candidates": [
+      {
+        "archive_id": "archive_01J00000000000000000000001",
+        "stage1_rank": 3,
+        "final_rank": 1,
+        "selected": true,
+        "stage1_score": 0.22,
+        "semantic_similarity": 0.81,
+        "final_score": 0.515,
+        "components": {
+          "weight": 0.9,
+          "stored_freshness": 1.0,
+          "freshness_decay": 0.7,
+          "age_days": 92.0,
+          "effective_freshness": 0.7,
+          "recall_boost": 1.0,
+          "theme_factor": 1.0,
+          "tag_factor": 1.0,
+          "text_factor": 0.7,
+          "query_token_count": 5,
+          "text_overlap_count": 0
+        }
+      }
+    ]
+  },
   "domain_state": {
     "active_topic": "travel_planning"
   },
@@ -926,6 +967,10 @@ CandidateBelief - кандидат на стабільний висновок у
     "recent_text": "Користувач питає, що ми пам'ятаємо про його переїзд."
   },
   "query_text": "Що користувач казав про місце проживання?",
+  "query_embedding": {
+    "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "query_vec": [0.01, -0.02, 0.03]
+  },
   "filters": {
     "time_range": null,
     "tags": ["personal_fact", "location"],
@@ -955,6 +1000,7 @@ CandidateBelief - кандидат на стабільний висновок у
 - `created_at`;
 - `session_id`;
 - `query_text`.
+- `query_embedding` (`model_id` + `query_vec`).
 
 `source_layers`:
 
@@ -965,6 +1011,8 @@ CandidateBelief - кандидат на стабільний висновок у
 На v0.1 основний recall працює по `archive` і `core`. Пошук у live-session може бути доданий як проста перевірка поточної сесії.
 
 `session_id` у `RecallQuery` є isolation boundary для archive recall. Якщо поле задане, ядро повертає тільки archive entries, де `source_session_id` дорівнює цьому `session_id`. Це default для `core_context_package` і звичайного chat prompt. Якщо хосту потрібен явний глобальний archive search для debug/admin-команди, він має передати `session_id: null` або не передавати поле.
+
+Якщо `query_embedding` передано і vector scope для `session_id` має стан `ready`, ядро застосовує Stage 2 до перших `VectorConfig.stage2_candidate_limit` кандидатів Stage 1 (default `40`): `final = stage1_score * (1 - w_vec) + max_memory_unit_cosine * w_vec`, де `w_vec = VectorConfig.stage2_vector_weight` (default `0.5`). Max cosine береться тільки по активних vector-eligible `MemoryUnit` батьківського archive entry; якщо такого unit-вектора немає, semantic term дорівнює `0`, а debug лишає `semantic_similarity` порожнім. Final score обмежується діапазоном `0..1`. Без query-вектора, для disabled/building/corrupt scope або поза candidate window порядок лишається Stage 1. Незалежний `recall_deep` продовжує шукати по всьому готовому unit-індексу й страхує випадок, коли правильний archive не ввійшов у Stage 2 window.
 
 `limit`:
 
@@ -981,7 +1029,7 @@ CandidateBelief - кандидат на стабільний висновок у
   "schema_version": "recall_result.v1",
   "query_id": "recall_query_01J00000000000000000000001",
   "created_at": "2026-05-17T17:30:00.050Z",
-  "stage_used": "stage1",
+  "stage_used": "stage2_embeddings",
   "items": [
     {
       "source_layer": "archive",
@@ -1008,19 +1056,30 @@ CandidateBelief - кандидат на стабільний висновок у
     }
   ],
   "debug": {
+    "stage_used": "stage2_embeddings",
     "candidate_count": 12,
-    "filtered_count": 3
+    "filtered_count": 3,
+    "vector_stage": {
+      "status": "applied",
+      "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "candidate_limit": 40,
+      "candidate_count": 3,
+      "matched_archive_count": 3,
+      "vector_weight": 0.5,
+      "stage1_weight": 0.5
+    },
+    "candidates": []
   }
 }
 ```
 
 `stage_used`:
 
-- `stage1` на v0.1;
-- `stage2_embeddings` у майбутньому;
+- `stage1`, коли query embedding відсутній або vector scope не готовий;
+- `stage2_embeddings`, коли готовий unit-level vector scope пересортував Stage 1 candidate window;
 - `stage3_llm` у майбутньому.
 
-`debug` може бути відсутнім у production-режимі.
+`relevance_score` є обовʼязковим у кожному `RecallItem`; адаптери не мають його викидати. `debug` присутній лише при `explain: true`. Його `candidates` містять структуровані компоненти Stage 1 та, якщо Stage 2 запускався, semantic similarity і обидва ранги. `vector_stage.status` розрізняє `not_requested`, `disabled`, `building`, `corrupt` та `applied` без вгадування за порожнім `notes`.
 
 ---
 

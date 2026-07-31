@@ -43,13 +43,36 @@ pub struct PyMemoryEngine {
 #[pymethods]
 impl PyMemoryEngine {
     #[new]
-    #[pyo3(signature = (memory_dir, host_id="unknown"))]
-    fn new(memory_dir: &str, host_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (
+        memory_dir,
+        host_id="unknown",
+        stage2_candidate_limit=40,
+        stage2_vector_weight=0.5
+    ))]
+    fn new(
+        memory_dir: &str,
+        host_id: &str,
+        stage2_candidate_limit: usize,
+        stage2_vector_weight: f32,
+    ) -> PyResult<Self> {
+        if stage2_candidate_limit == 0 {
+            return Err(PyValueError::new_err(
+                "stage2_candidate_limit must be greater than zero",
+            ));
+        }
+        if !stage2_vector_weight.is_finite() || !(0.0..=1.0).contains(&stage2_vector_weight) {
+            return Err(PyValueError::new_err(
+                "stage2_vector_weight must be finite and between 0.0 and 1.0",
+            ));
+        }
         let path = PathBuf::from(memory_dir);
         let storage = FileStorage::with_host_id(&path, host_id);
         storage.ensure_layout().map_err(map_err)?;
+        let mut options = EngineOptions::default();
+        options.vectors.stage2_candidate_limit = stage2_candidate_limit;
+        options.vectors.stage2_vector_weight = stage2_vector_weight;
         Ok(Self {
-            inner: CoreEngine::with_options(storage, EngineOptions::default()),
+            inner: CoreEngine::with_options(storage, options),
         })
     }
 

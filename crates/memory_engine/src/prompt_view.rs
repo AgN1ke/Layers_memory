@@ -509,6 +509,7 @@ mod tests {
             }],
             domain_state: serde_json::json!({}),
             budget: None,
+            recall_debug: None,
             notes: vec![],
         };
 
@@ -587,6 +588,7 @@ mod tests {
             }],
             domain_state: serde_json::json!({}),
             budget: None,
+            recall_debug: None,
             notes: vec![],
         }
     }

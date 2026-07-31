@@ -95,6 +95,129 @@ impl<S: Storage> MemoryEngine<S> {
             query.limit
         };
 
+        let stage1_ranks = scored_entries
+            .iter()
+            .enumerate()
+            .map(|(index, (entry, _))| (entry.archive_id.clone(), index + 1))
+            .collect::<HashMap<_, _>>();
+        let stage2_candidate_count = scored_entries
+            .len()
+            .min(self.options.vectors.stage2_candidate_limit.max(1));
+        let vector_weight = self.options.vectors.stage2_vector_weight.clamp(0.0, 1.0) as f64;
+        let stage1_weight = 1.0 - vector_weight;
+        let mut stage_used = RecallStage::Stage1;
+        let mut vector_stage_debug = None;
+
+        if let Some(embedding) = query.query_embedding.as_ref() {
+            if let Some(scope) = query.session_id.as_deref() {
+                let archive_ids = scored_entries
+                    .iter()
+                    .take(stage2_candidate_count)
+                    .map(|(entry, _)| entry.archive_id.clone())
+                    .collect::<HashSet<_>>();
+                let matches = self.stage2_archive_similarities(scope, embedding, &archive_ids)?;
+
+                if matches.status == RecallVectorStageStatus::Applied {
+                    for (entry, scored) in scored_entries.iter_mut().take(stage2_candidate_count) {
+                        let similarity = matches.similarities.get(&entry.archive_id).copied();
+                        let semantic_similarity = similarity.unwrap_or(0.0) as f64;
+                        scored.semantic_similarity = similarity.map(f64::from);
+                        scored.score = ((scored.stage1_score * stage1_weight)
+                            + (semantic_similarity * vector_weight))
+                            .clamp(0.0, 1.0);
+                        scored.explanation.push_str(&format!(
+                            "; stage2 = stage1 {:.3} * {:.2} + semantic {:.3} * {:.2} = {:.3}",
+                            scored.stage1_score,
+                            stage1_weight,
+                            semantic_similarity,
+                            vector_weight,
+                            scored.score
+                        ));
+                    }
+                    scored_entries[..stage2_candidate_count].sort_by(
+                        |(left_entry, left_score), (right_entry, right_score)| {
+                            right_score
+                                .score
+                                .total_cmp(&left_score.score)
+                                .then_with(|| {
+                                    right_score
+                                        .semantic_similarity
+                                        .unwrap_or(f64::NEG_INFINITY)
+                                        .total_cmp(
+                                            &left_score
+                                                .semantic_similarity
+                                                .unwrap_or(f64::NEG_INFINITY),
+                                        )
+                                })
+                                .then_with(|| right_entry.weight.total_cmp(&left_entry.weight))
+                                .then_with(|| left_entry.archive_id.cmp(&right_entry.archive_id))
+                        },
+                    );
+                    if stage2_candidate_count > 0 {
+                        stage_used = RecallStage::Stage2Embeddings;
+                    }
+                }
+
+                if query.explain {
+                    vector_stage_debug = Some(RecallVectorStageDebug {
+                        status: matches.status,
+                        model_id: Some(embedding.model_id.clone()),
+                        reason: vector_stage_reason(matches.status).map(str::to_string),
+                        candidate_limit: self.options.vectors.stage2_candidate_limit,
+                        candidate_count: stage2_candidate_count,
+                        matched_archive_count: matches.similarities.len(),
+                        vector_weight,
+                        stage1_weight,
+                    });
+                }
+            } else if query.explain {
+                vector_stage_debug = Some(RecallVectorStageDebug {
+                    status: RecallVectorStageStatus::Disabled,
+                    model_id: Some(embedding.model_id.clone()),
+                    reason: Some(
+                        "session_id is required for scope-isolated vector re-ranking".to_string(),
+                    ),
+                    candidate_limit: self.options.vectors.stage2_candidate_limit,
+                    candidate_count: stage2_candidate_count,
+                    matched_archive_count: 0,
+                    vector_weight,
+                    stage1_weight,
+                });
+            }
+        } else if query.explain {
+            vector_stage_debug = Some(RecallVectorStageDebug {
+                status: RecallVectorStageStatus::NotRequested,
+                model_id: None,
+                reason: Some("query_embedding was not provided".to_string()),
+                candidate_limit: self.options.vectors.stage2_candidate_limit,
+                candidate_count: stage2_candidate_count,
+                matched_archive_count: 0,
+                vector_weight,
+                stage1_weight,
+            });
+        }
+
+        let debug_candidate_limit = stage2_candidate_count.max(limit).min(scored_entries.len());
+        let candidate_debug = if query.explain {
+            scored_entries
+                .iter()
+                .take(debug_candidate_limit)
+                .enumerate()
+                .map(|(index, (entry, scored))| RecallCandidateDebug {
+                    archive_id: entry.archive_id.clone(),
+                    stage1_rank: stage1_ranks[&entry.archive_id],
+                    final_rank: index + 1,
+                    selected: index < limit,
+                    stage1_score: scored.stage1_score,
+                    semantic_similarity: scored.semantic_similarity,
+                    final_score: scored.score,
+                    components: scored.components.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let selected_entries = scored_entries.into_iter().take(limit).collect::<Vec<_>>();
         let mut items = Vec::with_capacity(selected_entries.len());
         let selected_archive_ids = selected_entries
@@ -113,15 +236,28 @@ impl<S: Storage> MemoryEngine<S> {
             schema_version: RECALL_RESULT_SCHEMA_VERSION.to_string(),
             query_id: query.query_id,
             created_at,
-            stage_used: RecallStage::Stage1,
+            stage_used,
             items,
             notes: notes.clone(),
             debug: query.explain.then_some(RecallDebug {
+                stage_used,
                 candidate_count,
                 filtered_count,
                 notes,
+                candidates: candidate_debug,
+                vector_stage: vector_stage_debug,
             }),
         })
+    }
+}
+
+fn vector_stage_reason(status: RecallVectorStageStatus) -> Option<&'static str> {
+    match status {
+        RecallVectorStageStatus::NotRequested => Some("query_embedding was not provided"),
+        RecallVectorStageStatus::Disabled => Some("vector scope is disabled"),
+        RecallVectorStageStatus::Building => Some("vector scope is still building"),
+        RecallVectorStageStatus::Corrupt => Some("vector scope is corrupt"),
+        RecallVectorStageStatus::Applied => None,
     }
 }
 
