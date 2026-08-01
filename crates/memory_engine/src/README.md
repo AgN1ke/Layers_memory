@@ -31,6 +31,10 @@
 - `manifest.rs` - `memory/manifest.json`.
 - `journal.rs` - journal operation для crash safety.
 - `storage.rs` - `Storage` trait як межа між ядром системи і фізичним сховищем.
+- `server_runtime.rs` - S1 server-side identity boundary, explicit vault
+  authorization, account-link conflict planning, ordered idempotent turn
+  ledger and single-process `LocalVaultHandle` reference. Це не PostgreSQL і
+  не public game API.
 - `config.rs` - конфігурація ядра системи: шлях до `memory_dir` і ліміти. Провайдери, моделі, API-ключі і `prompts_dir` сюди не входять - це справа хоста і адаптера.
 - `error.rs` - спільний тип помилок.
 

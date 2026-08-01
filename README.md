@@ -57,8 +57,11 @@ For a centralized Google Play deployment, the current file backend is a local
 and reference implementation, not the production topology. The accepted
 server track keeps the same Rust cognitive core behind an authenticated Memory
 Runtime, binds one logical vault per game account, and adds transactional
-PostgreSQL/pgvector storage plus durable workers. No such server backend is
-claimed as implemented yet; the phased plan and launch gates are documented in
+PostgreSQL/pgvector storage plus durable workers. The first S1 reference slice
+now defines fail-closed vault identity and restart-safe ordered/idempotent turn
+contracts over a local vault-bound handle. It is not the production server
+backend: Storage v2, PostgreSQL, authenticated game API and durable workers are
+still planned. The phased plan and launch gates are documented in
 the [Server-scale Memory Runtime](wiki/pages/planning/server-scale-memory-runtime.md).
 
 ## Principles

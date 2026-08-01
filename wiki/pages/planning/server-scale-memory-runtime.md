@@ -15,7 +15,7 @@
 
 ## Status and purpose
 
-Status: **accepted strategic plan; implementation has not started**.
+Status: **accepted strategic plan; S1 reference contracts are in progress**.
 
 This document is the implementation authority for taking Memory Engine from a
 single-process/local storage library to the centralized service required by a
@@ -174,6 +174,39 @@ provisional.
 identity, PostgreSQL/pgvector, no dual-write and one-region-first. Product
 capacity assumptions are written and versioned.
 
+#### Planning envelope v1 (2026-08-01)
+
+The first implementation is sized against a deliberately conservative launch
+envelope rather than the old local “1,000 sessions” stress result:
+
+| Dimension | Planning baseline | S7 acceptance load |
+|---|---:|---:|
+| Stored accounts after the first launch year | 100,000 | data set at or above 100,000 |
+| Peak simultaneously active players | 1,000 | 2,000 |
+| Sustained complete turns per second | 40 | 80 |
+| Five-minute burst turns per second | 150 | 300 |
+| Launch geography | one EEA region | same region, multi-zone |
+| Memory-service latency, excluding provider generation | p95 <= 250 ms, p99 <= 750 ms | measured on the full workload |
+| Turn admission/idempotency latency | p95 <= 50 ms | measured under duplicate/concurrent load |
+| Recovery point / recovery time | RPO <= 5 minutes / RTO <= 60 minutes | restore drill, not a paper claim |
+
+Vault domain memory is retained until owner deletion or an explicit product
+retention decision; the engine does not silently age-delete human memory to
+meet a storage target. Idempotency operation results have a provisional
+30-day retention, text-free operational telemetry 14 days, and backup deletion
+propagation at most 35 days. These three retention values are engineering
+defaults pending the product privacy policy and must not be presented publicly
+before owner/legal review.
+
+This baseline is sufficient to design identity keys, transaction boundaries,
+connection budgets and S7 workload geometry. It is not a sales forecast or a
+capacity claim. Before infrastructure purchase or public launch, measured
+closed-test behavior replaces stored-account, concurrency and turn-rate
+assumptions; the owner must explicitly approve retention, region and RPO/RTO.
+The capacity-neutral S1 contract slice may proceed against this baseline;
+database sizing, paid infrastructure and launch acceptance may not treat S0 as
+closed until those owner decisions are recorded.
+
 ### S1 — Vault identity and request contracts
 
 **Outcome:** no core operation can run in server mode without an authenticated,
@@ -190,6 +223,26 @@ memory automatically.
 cross-vault references and out-of-order same-session completion all fail or
 resolve deterministically in tests. Local `FileStorage` APIs remain compatible
 through an explicit local vault binding.
+
+**Implemented reference slice (2026-08-01):** the Rust core now has validated
+opaque `AccountId`, `VaultId` and `ClientRequestId` types, authenticated
+principal + active membership derivation of an internal `VaultContext`, and a
+manual-review result when a verified Play Games identity is already attached
+to another account. No API accepts a missing identity or falls back to
+`local_user`.
+
+`VaultTurnLedger` assigns a server-monotonic sequence inside each session,
+deduplicates `client_request_id` inside the bound vault, stores the terminal
+result reference/digest and refuses to commit sequence N+1 before N. Its
+operation ID includes the vault even when two players reuse the same request
+ID. `LocalVaultHandle` persists this ledger atomically beside an explicitly
+vault-rooted `FileStorage` for restart and negative tests. It is a
+single-process reference, not the production transactional backend promised by
+S2/S3.
+
+S1 is not closed yet: the public game API and mobile retry loop are S4 work;
+verified Google credential exchange and a durable account/identity registry do
+not exist yet; and production multi-replica atomicity waits for Storage v2.
 
 ### S2 — Transaction-capable Storage v2
 

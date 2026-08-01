@@ -61,7 +61,10 @@ in-process locks are the local/reference deployment, not proof of centralized
 multi-user scale. Google Play hosting requires an authenticated Memory Runtime,
 one server-derived vault per account, transactional PostgreSQL/pgvector,
 durable workers, portable export/restore and whole-turn load/isolation gates.
-This architecture is accepted; its implementation phases are still open.
+This architecture is accepted. S1 reference contracts now cover fail-closed
+vault identity, idempotent ordered turns and a local restart/isolation harness.
+Transactional Storage v2, PostgreSQL, the authenticated game API and
+production-scale acceptance remain open.
 
 ## How To Read The Wiki
 

@@ -43,9 +43,9 @@ crate/host README files stay outside the wiki.
   hierarchical evidence graph, temporal contradiction, and opt-in native
   clarification.
 - [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md) -
-  accepted production track for authenticated per-player vaults,
-  transactional PostgreSQL storage, durable workers, migration and launch
-  acceptance.
+  accepted production track, provisional launch envelope, implemented S1
+  identity/ordered-turn reference, and planned transactional PostgreSQL,
+  durable worker, migration and launch acceptance phases.
 - [Audit 2026-06-10](pages/planning/audit-2026-06-10.md) - post-v0.2 audit,
   cleanup queue, risks, and resolved findings.
 

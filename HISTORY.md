@@ -46,6 +46,50 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Server identity and turn ordering now have fail-closed reference contracts
+
+Context. The accepted Google Play architecture could not safely begin with SQL
+tables while account identity, retry semantics and same-session ordering were
+still prose. A shared/default identity here would repeat the previously found
+`local_user` disclosure class before PostgreSQL could protect anything.
+
+**What changed:**
+- Added versioned Rust contracts for authenticated principals, active
+  account-to-vault membership, internal `VaultContext`, turn requests,
+  operations and the vault turn ledger.
+- Missing, forged, cross-account or inactive identity is rejected. Verified
+  external identity conflict becomes manual review; memory is never merged
+  automatically.
+- A request ID is idempotent inside its bound vault, operation identity includes
+  the vault, and terminal results cannot commit out of session sequence.
+- Added a restart-safe `LocalVaultHandle` reference with one file-backed memory
+  root and ledger per explicit vault. It never creates or selects `local_user`.
+- Recorded a provisional S0 engineering envelope and its 2x S7 test geometry.
+
+**What is retracted:**
+- The statement that server-track implementation had not started at all. S1
+  reference contracts now exist; the production server backend still does not.
+
+**What is still true:**
+- `FileStorage` is safe for one writer process per runtime directory, not for
+  shared multi-replica production use.
+- There is no PostgreSQL backend, Storage v2 transaction, public authenticated
+  game API, durable worker fleet or production capacity proof yet.
+- Existing local/Python/Godot APIs and cognitive Session/Archive/Core behavior
+  are unchanged.
+
+**What we are doing:**
+- Finish S1 host/mobile/auth integration in S4 after the storage boundary is
+  transactional. The next core server phase is S2 Storage v2 inventory and
+  work-unit design.
+- Replace the planning envelope with measured closed-test product behavior and
+  explicit owner-approved retention/region/RPO/RTO before infrastructure or
+  launch claims.
+
+**Reproducibility anchor:**
+`crates/memory_engine/tests/server_runtime_s1.rs` covers identity failure,
+cross-vault isolation, replay, ordering, restart and shared-ID negative cases.
+
 ## 2026-08-01 — Empty graph admin responses keep their public collection shape
 
 Context. The first Chibigochi graph-storage acceptance ran against a complete

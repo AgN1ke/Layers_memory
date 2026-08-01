@@ -1,5 +1,48 @@
 # DEVLOG
 
+## Запис 157 — 2026-08-01 — Server S1 почався з identity, а не з PostgreSQL
+
+**Чому це наступний незалежний крок:**
+Claude приймає graph-storage commit `e0ad0fa`, тому Phase 3 hierarchical
+reflection не можна чесно будувати на ще відкритому migration gate. Водночас
+Google Play server track є окремим release blocker і не залежить від semantic
+relations. За планом його перший кодовий ризик — не SQL schema, а помилка класу
+`local_user`: client-selected identity, спільний fallback або duplicate turn.
+
+**Що реалізовано:**
+- opaque validated `AccountId`, `VaultId`, `ClientRequestId`;
+- `VaultContext`, який утворюється лише з matching authenticated principal та
+  active account-to-vault membership; missing/forged/suspended identity fail
+  closed;
+- verified Play Games link planner ніколи не merge-ить два accounts
+  автоматично, а повертає `manual_review_required`;
+- `VaultTurnLedger` дедуплікує request усередині vault, детерміновано включає
+  vault у operation ID, призначає monotonic sequence, зберігає terminal result
+  reference/digest і блокує out-of-order commit;
+- `LocalVaultHandle` дає atomic restart-safe reference ledger і окремий
+  `vaults/<vault_id>/memory` без shared/default path. Він навмисно лишається
+  single-process reference, а не маскується під production storage.
+
+**Перевірки й інформаційний шлях:**
+Сім S1 tests проходять missing/forged identity, manual link conflict,
+duplicate/conflicting replay, expected-sequence conflict, cross-vault context,
+out-of-order completion, restart і однакові session/request IDs у двох
+ізольованих vault. Окремо обидва vault ingest-ять різний текст у той самий
+session ID і читають тільки свій event.
+
+S0 отримав planning envelope v1: 100k stored accounts, 1k peak active, 40
+sustained/150 burst turns per second, one EEA region, internal memory p95 250
+ms, RPO 5 minutes і RTO 60 minutes; S7 тестує 2x peak. Це інженерний baseline,
+не capacity claim. Retention/region/RPO/RTO ще потребують owner approval, а
+load numbers — заміни closed-test вимірами перед infrastructure decision.
+
+**Чесна межа:**
+S1 не закрито повністю. Немає Google credential exchange, durable identity
+registry, public game API, mobile retry persistence або multi-replica atomicity.
+Python/Godot adapters не отримали server API, бо це передчасно до S4. Наступний
+бібліотечний крок після повного gate — S2 inventory і transaction-capable
+Storage v2; cognitive Phase 3 лишається за graph fixture PASS.
+
 ## Запис 156 — 2026-08-01 — Вироджене live-приймання знайшло реальний JSON contract gap
 
 **Що приніс звіт:**

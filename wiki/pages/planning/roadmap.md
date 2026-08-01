@@ -83,9 +83,12 @@ Google Play додає незалежний release blocker: current `FileStorag
 backend-ом для тисяч клієнтів. Прийнято окремий server track S0-S7: той самий
 Rust cognitive core працює в автентифікованому Memory Runtime, а один
 server-derived vault per account зберігається транзакційно у
-PostgreSQL/pgvector. Архітектурне S0 зафіксовано; implementation S1-S7 не
-починалось. Локальні/Chibigochi acceptance попередніх версій залишаються
-правдивими, але не є доказом multi-user production scale.
+PostgreSQL/pgvector. Архітектурне S0 зафіксовано, provisional capacity envelope
+має числа й відкриті owner decisions, а S1 reference contracts уже реалізують
+fail-closed vault identity та ordered/idempotent turn ledger. Storage v2,
+PostgreSQL, game API, workers і S7 не починались. Локальні/Chibigochi
+acceptance попередніх версій залишаються правдивими, але не є доказом
+multi-user production scale.
 
 ## Стан на 2026-06-10
 
@@ -428,24 +431,34 @@ core як централізований сервіс для тисяч грав
   [research](../research/server-memory-runtime-2026-08-01.md).
 - [x] Прийняти PostgreSQL + pgvector без окремої vector/graph database на
   старті; exact per-vault vector search перед ANN. — 2026-08-01.
-- [ ] Замінити provisional envelope реальним product forecast: stored players,
-  simultaneously active players, sustained/burst turns per second, retention,
-  region, RPO/RTO і latency objectives.
+- [~] Зафіксовано planning envelope v1: 100k stored accounts, 1k peak active,
+  40 sustained / 150 burst turns/s, one-EEA-region launch, service latency та
+  RPO/RTO gates. Це engineering baseline, не capacity claim; retention,
+  region/RPO/RTO ще потребують owner approval, а числа — заміни measured
+  closed-test forecast перед infrastructure/launch decision. — 2026-08-01,
+  [plan](server-scale-memory-runtime.md#planning-envelope-v1-2026-08-01).
 
 ### S1 — Vault identity та idempotent turn contract
 
-- [ ] Ввести internal `AccountId`/`VaultId` і server-owned
-  account-to-vault membership; Godot не передає authoritative vault.
-- [ ] Визначити guest identity, verified Play Games linking і ручний conflict
-  review без автоматичного merge `local_user`.
-- [ ] Додати `client_request_id`, monotonic session turn sequence та durable
-  operation result для duplicate/concurrent requests.
+- [x] Введено validated internal `AccountId`/`VaultId`, authenticated principal,
+  active account-to-vault membership та internal `VaultContext`; відсутній або
+  forged identity fail closed, shared fallback відсутній. Godot wire contract
+  для цього контексту ще не існує. — 2026-08-01, `server_runtime.rs`.
+- [~] Guest/Play Games identity model і manual-review conflict decision
+  забороняють автоматичний merge акаунтів. Реальний Google credential exchange
+  і durable identity registry належать S4.
+- [x] Додано `client_request_id`, vault-scoped deterministic operation ID,
+  monotonic session turn sequence, terminal result reference/digest і
+  restart-safe local reference ledger для duplicate/concurrent requests. —
+  2026-08-01.
 - [ ] Mobile retry тримає той самий request ID до terminal acknowledgement;
   timeout/reconnect не створює другий memory event.
-- [ ] Закрити negative tests: missing/forged identity, cross-vault reference,
-  replay, wrong-order completion і відсутність shared fallback.
-- [ ] Усі lock/cache/dedup keys, що торкаються player state, включають vault;
-  globally unique-looking record ID не замінює isolation key.
+- [x] Negative tests закривають missing/forged identity, cross-vault context,
+  conflicting replay, wrong-order completion, expected-sequence conflict,
+  restart і відсутність shared fallback. — 2026-08-01,
+  `server_runtime_s1.rs`.
+- [~] Реалізовані S1 dedup key, operation ID і local path включають vault;
+  повний аудит майбутніх cache/DB/worker keys повторюється у S2-S5.
 
 ### S2 — Transaction-capable Storage v2
 

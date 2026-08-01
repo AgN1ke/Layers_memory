@@ -20,6 +20,7 @@ pub mod manifest;
 pub mod prompt_view;
 pub mod recall;
 pub mod reflection;
+pub mod server_runtime;
 pub mod session;
 pub mod sleep;
 pub mod storage;
@@ -38,6 +39,12 @@ pub use llm::{
     SleepOutcome, SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
 };
 pub use prompt_view::render_memory_view;
+pub use server_runtime::{
+    AccountId, AccountLinkDecision, AccountVaultMembership, AuthenticatedPrincipal,
+    ClientRequestId, ExternalIdentityProvider, LocalVaultHandle, MembershipStatus, PrincipalKind,
+    TurnAdmission, TurnAdmissionKind, TurnOperation, TurnOperationStatus, TurnRequest,
+    TurnTerminalOutcome, TurnTerminalResult, VaultContext, VaultId, VaultTurnLedger,
+};
 pub use vector::{
     DeepRecallHit, DeepRecallQuery, DeepRecallResult, EmbedBatchInputs, EmbedBatchItem,
     EmbedBatchResult, EmbedBatchVector, VectorScopeState, VectorScopeStatus,

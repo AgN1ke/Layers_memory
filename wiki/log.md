@@ -8,6 +8,20 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] implementation | Server S1 identity and ordered-turn reference
+
+Updated the accepted Google Play production track with its first implemented
+reference slice. The wiki now distinguishes an internal authorized
+`VaultContext` from any client-supplied identifier, documents vault-scoped
+idempotency and monotonic same-session commit, and records the local
+single-process handle used to prove restart and cross-vault isolation before
+Storage v2/PostgreSQL.
+
+Added a provisional S0 planning envelope and explicit owner-decision boundary.
+The numbers drive engineering and the future 2x S7 workload but are not a
+capacity or launch claim; retention, region and recovery objectives remain
+subject to owner approval and measured closed-test replacement.
+
 ## [2026-08-01] acceptance | Empty graph contract fix and non-degenerate rerun
 
 Recorded the first Chibigochi Phase 2 run as deterministic/product PASS with a

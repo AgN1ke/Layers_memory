@@ -816,3 +816,10 @@ graph database або approximate index потребують виміряног�
 [Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md), а
 зовнішні підстави — у
 [server-runtime research](../research/server-memory-runtime-2026-08-01.md).
+
+**Implementation update 2026-08-01.** Перший S1 slice реалізує не “ще одну
+памʼять”, а захисну рамку навколо тієї самої: opaque account/vault identity,
+explicit active membership, відсутність shared fallback, vault-scoped
+idempotency і послідовний commit live turns. Локальний file-backed handle є
+лише перевірочним носієм цих contracts. Він не змінює когнітивну політику й не
+дозволяє заявляти production scale до Storage v2, PostgreSQL і S7 acceptance.

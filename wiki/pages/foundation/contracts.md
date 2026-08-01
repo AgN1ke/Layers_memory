@@ -1988,11 +1988,82 @@ memory/
 - `manifest.json` - правда для версій сховища;
 - Markdown-файли - людський вигляд, не машинна правда.
 
-### 15.1 Planned server-storage envelope
+### 15.1 Server identity and ordered-turn envelope
 
-Цей підрозділ фіксує майбутню межу, а не оголошує schema реалізованою.
 Централізований runtime не може просто додати `user_id` до кількох запитів.
-Кожен server-owned record отримує однаковий envelope:
+`VaultId` є opaque server-owned identity boundary. Він виводиться з
+автентифікованого internal account membership і не приймається від Godot як
+довірене значення. Session/core/reflection scopes існують усередині vault і не
+замінюють його. Відсутній identity у server mode є помилкою, не `local_user`.
+
+S1 reference contracts реалізовані в Rust. `authenticated_principal.v1` несе
+вже перевірений internal account, тип principal і authentication ID;
+`account_vault_membership.v1` окремо несе active/suspended/revoked membership
+та revision. Тільки їхня точна active-пара утворює internal
+`vault_context.v1`:
+
+```json
+{
+  "schema_version": "vault_context.v1",
+  "account_id": "account_01J...",
+  "vault_id": "vault_01J...",
+  "membership_id": "membership_01J...",
+  "membership_revision": 1,
+  "authentication_id": "auth_01J...",
+  "principal_kind": "guest",
+  "authorized_at": "2026-08-01T12:00:00Z"
+}
+```
+
+Це request-scoped internal capability, а не public request schema або
+довгоживучий security token. Десеріалізація JSON сама по собі не є
+авторизацією: game backend створює контекст тільки після перевірки актуальних
+credential і membership. Verified Play Games identity, яка вже належить іншому
+account, повертає `manual_review_required`; автоматичного merge памʼяті немає.
+
+S1 також реалізує `turn_request.v1`, `turn_operation.v1` і
+`vault_turn_ledger.v1`. Перший request отримує server-assigned sequence; точний
+повтор повертає наявну operation незалежно від її стану. Повтор того самого
+`client_request_id` з іншим session або digest є idempotency conflict. Optional
+`expected_turn_sequence` перевіряється тільки під час першого admission.
+
+```json
+{
+  "schema_version": "turn_operation.v1",
+  "operation_id": "turn_<sha256(vault_id, client_request_id)>",
+  "vault_id": "vault_01J...",
+  "account_id": "account_01J...",
+  "membership_id": "membership_01J...",
+  "membership_revision": 1,
+  "client_request_id": "request_01J...",
+  "session_id": "session_01J...",
+  "request_digest": "sha256:<64 hex>",
+  "turn_sequence": 1,
+  "status": "accepted | ready_to_commit | committed",
+  "terminal_result": {
+    "outcome": "succeeded",
+    "result_reference": "response:01J...",
+    "result_digest": "sha256:<64 hex>"
+  },
+  "created_at": "2026-08-01T12:00:00Z",
+  "updated_at": "2026-08-01T12:00:02Z"
+}
+```
+
+Failed terminal result має `outcome=failed` і `error_code` замість success
+reference/digest. `ready_to_commit` може чекати попередню sequence, але не може
+стати `committed` раніше за неї. Terminal duplicate з тим самим результатом є
+ідемпотентним; інший результат для тієї самої operation відхиляється.
+
+`LocalVaultHandle` є лише file-backed reference: він створює
+`vaults/<vault_id>/memory` і окремий atomic turn ledger, не має default vault і
+дозволяє перевірити restart/isolation до PostgreSQL. Він успадковує правило
+одного writer process від `FileStorage` і не є production multi-replica
+гарантією.
+
+### 15.2 Planned transactional server-storage envelope
+
+Кожен майбутній server-owned record отримує однаковий envelope:
 
 ```text
 vault_id
@@ -2003,30 +2074,11 @@ created_at
 updated_at
 ```
 
-`VaultId` є opaque server-owned identity boundary. Він виводиться з
-автентифікованого internal account membership і не приймається від Godot як
-довірене значення. Session/core/reflection scopes існують усередині vault і не
-замінюють його. Відсутній identity у server mode є помилкою, не `local_user`.
-
 Storage v2 має дати ядру transaction/work-unit contract для групи point reads,
 version checks і writes. Операція комітиться повністю або не комітиться;
 retryable conflict повторює всю функцію від transaction begin. Durable
 workflow лишається двофазним: task intent commit -> зовнішній LLM/embed call ->
 submit/revalidate commit. Provider work під transaction заборонене.
-
-Live turn contract додатково містить:
-
-```text
-client_request_id
-session_id
-expected_or_assigned_turn_sequence
-operation_status
-result_reference
-```
-
-`client_request_id` є idempotency key у межах vault. Повтор не створює другу
-подію/відповідь. Turn sequence не дозволяє двом паралельним відповідям тієї
-самої session закомітитись у неправильному порядку.
 
 PostgreSQL row-level security, composite `(vault_id, id)` references і
 non-owner runtime role є defense in depth поверх bound storage handle. Вони не

@@ -906,7 +906,7 @@ role_hint: balanced
 
 Ця гарантія **внутрішньопроцесна**. Два окремі процеси над одним `memory/` не синхронізовані через filesystem locks; operational rule для v0.2 — один writer-процес на один runtime memory directory. Якщо другий host/debug tool має працювати над тим самим сховищем одночасно, потрібен окремий міжпроцесний lock або server-mode wrapper.
 
-### 13.1 Accepted server-mode boundary (planned)
+### 13.1 Accepted server-mode boundary (S1 reference in progress)
 
 Централізований Chibigochi не відкриває одну `memory/` директорію кільком
 реплікам. Godot викликає public API гри; game backend автентифікує principal,
@@ -931,6 +931,18 @@ operation одну transaction/work-unit boundary. Короткі mutations од
 на першій версії серіалізуються; різні vault працюють паралельно. Same-session
 turns додатково мають idempotency key і monotonic sequence, бо DB transaction
 не впорядкує дві довгі LLM-відповіді сама.
+
+S1 уже матеріалізує цю межу як Rust contracts, не як network service.
+`VaultContext` виникає лише з matching authenticated principal та active
+account-to-vault membership. `VaultTurnLedger` дедуплікує request усередині
+bound vault, включає vault у deterministic operation identity, зберігає
+terminal result reference і не комітить наступну відповідь раніше попередньої.
+`LocalVaultHandle` дає restart/isolation reference через окремий
+`vaults/<vault_id>/memory`, без `local_user` fallback. Він не робить
+`FileStorage` multi-process safe і не підміняє planned Storage v2/PostgreSQL.
+`VaultContext` є request-scoped: runtime повторно звіряє актуальну membership
+перед кожною операцією, а не кешує колись авторизований context як безстроковий
+security token.
 
 LLM/embedding виклик ніколи не виконується під database transaction або lock.
 Ядро комітить durable `PendingTask`, worker виконує зовнішню роботу, а submit
