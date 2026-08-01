@@ -15,7 +15,8 @@
 
 ## Status and purpose
 
-Status: **accepted strategic plan; S1 reference contracts are in progress**.
+Status: **accepted strategic plan; S1 reference contracts implemented; S2
+transactional foundation in progress**.
 
 This document is the implementation authority for taking Memory Engine from a
 single-process/local storage library to the centralized service required by a
@@ -261,6 +262,17 @@ than breaking all hosts at once.
 hypothesis migration and task transitions pass fault-injection tests on an
 in-memory transactional reference. No transaction crosses an LLM/embed call.
 The compatibility/release impact is recorded under the pre-1.0 SemVer policy.
+
+**Implementation update, 2026-08-01:** the full call-chain classification and
+migration order are recorded in the
+[Storage v2 Work-Unit Inventory](storage-v2-work-unit-inventory.md). An additive
+Rust work-unit contract, vault record envelope, optimistic revisions,
+idempotent receipts, bounded deterministic retry and in-memory transactional
+reference now exist. `ingest_transactional` is the first migrated domain
+transition: event and Session metadata publish atomically, including under
+fault and concurrent-write tests. Existing Storage/FileStorage hosts remain on
+the compatible v1 path. S2 is not complete until the remaining flows in the
+exit gate use the same boundary.
 
 ### S3 — PostgreSQLVaultStorage and pgvector
 

@@ -88,7 +88,9 @@ server-derived vault per account зберігається транзакційн
 PostgreSQL/pgvector. Архітектурне S0 зафіксовано, provisional capacity envelope
 має числа й відкриті owner decisions, а S1 reference contracts уже реалізують
 fail-closed vault identity та ordered/idempotent turn ledger. Storage v2,
-PostgreSQL, game API, workers і S7 не починались. Локальні/Chibigochi
+  PostgreSQL, game API, workers і S7 не починались. S2 вже має additive
+  transaction/work-unit reference та перший atomic ingest flow, але решта
+  correctness flows ще не перенесена. Локальні/Chibigochi
 acceptance попередніх версій залишаються правдивими, але не є доказом
 multi-user production scale.
 
@@ -464,14 +466,21 @@ core як централізований сервіс для тисяч грав
 
 ### S2 — Transaction-capable Storage v2
 
-- [ ] Проаудитити всі Storage flows і відділити read-only, atomic mutation та
-  durable workflow; не ховати multi-record races за набором SQL methods.
-- [ ] Додати transaction/work-unit boundary, point reads, record revisions і
-  retry contract, з compatibility adapter для чинного FileStorage.
+- [x] Проаудитити всі Storage flows і відділити read-only, atomic mutation та
+  durable workflow; не ховати multi-record races за набором SQL methods. —
+  2026-08-01, [work-unit inventory](storage-v2-work-unit-inventory.md).
+- [~] Додано additive transaction/work-unit boundary, point reads, optimistic
+  record revisions, idempotent receipt, bounded conflict retry та in-memory
+  reference. Перший domain flow (`ingest_transactional`) атомарно комітить
+  event + Session metadata; чинний Storage/FileStorage API не зламано.
+  Compatibility adapter і решта flow ще відкриті. — 2026-08-01.
 - [ ] Зробити correctness-critical state durable; replica-local telemetry не
   може неявно змінювати recall/reflection behavior.
-- [ ] Fault-injection acceptance для ingest, sleep, reflection/review,
-  forgetting, graph migration і tasks; provider calls поза transactions.
+- [~] Ingest пройшов deterministic fault/concurrency suite: failure before
+  publish, replay, conflicting replay, same-session contention, multi-record
+  rollback і cross-vault denial. Sleep, reflection/review, forgetting, graph
+  migration і tasks ще мають пройти той самий gate; provider calls лишаються
+  поза transactions.
 
 ### S3 — PostgreSQLVaultStorage + pgvector
 

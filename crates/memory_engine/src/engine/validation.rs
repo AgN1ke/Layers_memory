@@ -1,38 +1,7 @@
 use super::*;
 
 pub(super) fn validate_ingest_event(event: &IngestEvent) -> Result<()> {
-    if event.schema_version != EVENT_SCHEMA_VERSION {
-        return Err(MemoryEngineError::IncompatibleSchema {
-            expected: EVENT_SCHEMA_VERSION.to_string(),
-            actual: event.schema_version.clone(),
-        });
-    }
-
-    if event.event_type.trim().is_empty() {
-        return Err(MemoryEngineError::Validation(
-            "event type must not be empty".to_string(),
-        ));
-    }
-
-    if event.source.trim().is_empty() {
-        return Err(MemoryEngineError::Validation(
-            "event source must not be empty".to_string(),
-        ));
-    }
-
-    if event.timestamp.trim().is_empty() {
-        return Err(MemoryEngineError::Validation(
-            "event timestamp must not be empty".to_string(),
-        ));
-    }
-
-    if event.session_id.trim().is_empty() {
-        return Err(MemoryEngineError::Validation(
-            "event session_id must not be empty".to_string(),
-        ));
-    }
-
-    Ok(())
+    event.validate()
 }
 
 pub(super) fn validate_recall_query(query: &RecallQuery) -> Result<()> {

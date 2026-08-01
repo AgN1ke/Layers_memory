@@ -24,6 +24,7 @@ pub mod server_runtime;
 pub mod session;
 pub mod sleep;
 pub mod storage;
+pub mod storage_v2;
 pub mod tasks;
 pub mod types;
 pub mod vector;
@@ -31,6 +32,7 @@ pub mod vector;
 pub use engine::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult, MemoryEngine,
     RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result,
+    TransactionalIngestRequest, TransactionalIngestResult,
 };
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;
@@ -44,6 +46,11 @@ pub use server_runtime::{
     ClientRequestId, ExternalIdentityProvider, LocalVaultHandle, MembershipStatus, PrincipalKind,
     TurnAdmission, TurnAdmissionKind, TurnOperation, TurnOperationStatus, TurnRequest,
     TurnTerminalOutcome, TurnTerminalResult, VaultContext, VaultId, VaultTurnLedger,
+};
+pub use storage_v2::{
+    execute_work_unit_with_retry, BeginWorkUnit, ExpectedRevision, InMemoryTransactionalStorage,
+    RecordKey, StorageV2Error, StorageV2Result, StorageWorkUnit, TransactionalStorage, VaultRecord,
+    WorkUnitCommit, WorkUnitIntent, WorkUnitReceipt,
 };
 pub use vector::{
     DeepRecallHit, DeepRecallQuery, DeepRecallResult, EmbedBatchInputs, EmbedBatchItem,

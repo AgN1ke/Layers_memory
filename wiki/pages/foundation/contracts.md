@@ -2061,7 +2061,7 @@ reference/digest. `ready_to_commit` може чекати попередню seq
 одного writer process від `FileStorage` і не є production multi-replica
 гарантією.
 
-### 15.2 Planned transactional server-storage envelope
+### 15.2 Transactional server-storage envelope (S2 foundation)
 
 Кожен майбутній server-owned record отримує однаковий envelope:
 
@@ -2074,11 +2074,36 @@ created_at
 updated_at
 ```
 
-Storage v2 має дати ядру transaction/work-unit contract для групи point reads,
-version checks і writes. Операція комітиться повністю або не комітиться;
-retryable conflict повторює всю функцію від transaction begin. Durable
-workflow лишається двофазним: task intent commit -> зовнішній LLM/embed call ->
-submit/revalidate commit. Provider work під transaction заборонене.
+Реалізований additive Storage v2 contract уточнює envelope:
+
+```text
+VaultRecord = {
+  schema_version: "vault_record.v1",
+  vault_id,
+  key: { collection, record_id },
+  payload_schema_version,
+  revision >= 1,
+  created_at,
+  updated_at,
+  payload
+}
+```
+
+`WorkUnitIntent` (`storage_work_unit_intent.v1`) фіксує `operation_id`,
+`operation_kind`, `request_digest` і `started_at`. Кожен put/delete вимагає
+`ExpectedRevision::Absent` або `Exact(n)`, а commit повторно звіряє всі point
+reads. Успіх створює `WorkUnitReceipt`
+(`storage_work_unit_receipt.v1`) з bound vault/account/membership provenance,
+result reference/digest, mutation count, commit sequence і часом. Повтор того
+самого operation/input повертає receipt; повтор ID з іншим kind/digest
+відхиляється.
+
+Операція комітиться повністю або не комітиться; retryable `Conflict` повторює
+всю детерміновану функцію від transaction begin. Durable workflow лишається
+двофазним: task intent commit -> зовнішній LLM/embed call ->
+submit/revalidate commit. Provider work під transaction заборонене. Повний
+flow inventory і migration order зафіксовані у
+[Storage v2 Work-Unit Inventory](../planning/storage-v2-work-unit-inventory.md).
 
 PostgreSQL row-level security, composite `(vault_id, id)` references і
 non-owner runtime role є defense in depth поверх bound storage handle. Вони не

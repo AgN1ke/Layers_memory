@@ -8,6 +8,21 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] implementation | Storage v2 foundation and atomic ingest
+
+Added the Storage v2 work-unit inventory as the migration authority between
+the current method-oriented local trait and the future PostgreSQL backend. It
+classifies every engine call chain, names transaction versus durable-workflow
+boundaries, records the recall-stat correctness issue, and orders the remaining
+S2 waves.
+
+Foundation contracts, architecture, server plan and roadmap now reflect the
+implemented additive work-unit envelope, optimistic revisions, idempotent
+receipts, in-memory atomic reference and first transactional ingest flow. They
+also state the boundary honestly: existing hosts remain on Storage v1, the
+external adapter acceptance and remaining flows are open, and no production
+durability or scale claim is made.
+
 ## [2026-08-01] acceptance | Non-degenerate graph fixture closes Phase 2
 
 Recorded the completed Chibigochi host-path fixture that replaced the first

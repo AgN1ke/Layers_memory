@@ -46,6 +46,49 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Storage v2 begins with an atomic, vault-bound ingest transition
+
+Context. The local `Storage::append_event` call hid three sequential physical
+writes: event JSONL, Session metadata and Markdown projection. Copying that API
+shape into PostgreSQL would allow replicas or crashes to expose a new event
+without its matching Session state.
+
+**What changed:**
+- Added versioned Storage v2 records, work-unit intents and commit receipts,
+  bound to the server-derived `VaultContext` rather than a caller-selected
+  vault key.
+- Added point reads, mandatory optimistic expected revisions, atomic work-unit
+  publication, typed retryable conflicts and same-input operation replay.
+- Added an in-memory transactional conformance backend with a failure-before-
+  publish hook.
+- Added `MemoryEngine::ingest_transactional`: event and Session metadata now
+  form one authoritative commit on the new path and reuse existing event
+  validation/scoring policy.
+
+**What is retracted:**
+- The server track is no longer accurately described as “Storage v2 not
+  started”. Only its foundation and ingest transition exist; this is not a
+  production storage or scale claim.
+
+**What is still true:**
+- Existing `Storage`, `FileStorage` and `MemoryEngine::ingest` behavior remains
+  compatible for local/Python/Godot hosts.
+- The in-memory backend is not durable or multi-process and PostgreSQL has not
+  started.
+- S2 remains open until sleep, reflection/review, forgetting, hypothesis
+  migration and task transitions pass the same atomicity/retry gate.
+
+**What we are doing:**
+- Follow the recorded work-unit inventory: correctness state and small
+  mutations next, then sleep/fidelity/forgetting, then reflection/graph/vector
+  workflows. Provider calls remain outside transactions.
+
+**Compatibility:**
+The new public contracts use their own non-exhaustive `StorageV2Error`; the
+existing public `MemoryEngineError` enum was deliberately left unchanged. This
+is additive work for a future pre-1.0 minor release. Package versions remain
+unchanged until adapter and release gates pass.
+
 ## 2026-08-01 — Hypothesis graph Phase 2 passes a non-degenerate host-path fixture
 
 Context. The first Chibigochi storage-copy migration contained no legacy

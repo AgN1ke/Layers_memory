@@ -906,7 +906,7 @@ role_hint: balanced
 
 Ця гарантія **внутрішньопроцесна**. Два окремі процеси над одним `memory/` не синхронізовані через filesystem locks; operational rule для v0.2 — один writer-процес на один runtime memory directory. Якщо другий host/debug tool має працювати над тим самим сховищем одночасно, потрібен окремий міжпроцесний lock або server-mode wrapper.
 
-### 13.1 Accepted server-mode boundary (S1 reference in progress)
+### 13.1 Accepted server-mode boundary (S2 foundation in progress)
 
 Централізований Chibigochi не відкриває одну `memory/` директорію кільком
 реплікам. Godot викликає public API гри; game backend автентифікує principal,
@@ -926,11 +926,21 @@ tenant context задається transaction-local для кожної work uni
 policy відмовляє.
 
 Поточний `Storage` trait не обіцяє транзакцію навколо кількох викликів, тому
-простого SQL implementation недостатньо. Planned Storage v2 дає domain
-operation одну transaction/work-unit boundary. Короткі mutations одного vault
-на першій версії серіалізуються; різні vault працюють паралельно. Same-session
-turns додатково мають idempotency key і monotonic sequence, бо DB transaction
-не впорядкує дві довгі LLM-відповіді сама.
+простого SQL implementation недостатньо. Additive Storage v2 foundation уже
+дає domain operation одну vault-bound transaction/work-unit boundary: point
+reads, optimistic revisions, atomic publish, idempotent receipt і whole-unit
+retry. Ключ record навмисно не містить caller-selected vault: work unit отримує
+його тільки з authorized `VaultContext`. Короткі mutations одного vault на
+першій production-версії серіалізуються; різні vault працюють паралельно.
+Same-session turns додатково мають idempotency key і monotonic sequence, бо DB
+transaction не впорядкує дві довгі LLM-відповіді сама.
+
+Перший перенесений flow — transactional ingest. Event і Session metadata є
+одним authoritative commit; локальний Markdown view не входить у server truth
+і має будуватися як projection. In-memory backend є fault/concurrency
+reference, не production persistence. Чинні `Storage`, `FileStorage` та
+`MemoryEngine::ingest` залишаються сумісними, поки решта flow переноситься за
+[work-unit inventory](../planning/storage-v2-work-unit-inventory.md).
 
 S1 уже матеріалізує цю межу як Rust contracts, не як network service.
 `VaultContext` виникає лише з matching authenticated principal та active

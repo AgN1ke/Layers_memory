@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::types::{Id, ImportanceHint, Link, ProcessingMode, Speaker, Timestamp};
+use crate::types::{
+    Id, ImportanceHint, Link, ProcessingMode, Speaker, Timestamp, EVENT_SCHEMA_VERSION,
+};
+use crate::{MemoryEngineError, Result};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IngestEvent {
@@ -26,6 +29,39 @@ pub struct IngestEvent {
     pub importance_hint: ImportanceHint,
     #[serde(default)]
     pub processing_mode: ProcessingMode,
+}
+
+impl IngestEvent {
+    /// Validates the domain event independently of a physical storage backend.
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != EVENT_SCHEMA_VERSION {
+            return Err(MemoryEngineError::IncompatibleSchema {
+                expected: EVENT_SCHEMA_VERSION.to_string(),
+                actual: self.schema_version.clone(),
+            });
+        }
+        if self.event_type.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "event type must not be empty".to_string(),
+            ));
+        }
+        if self.source.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "event source must not be empty".to_string(),
+            ));
+        }
+        if self.timestamp.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "event timestamp must not be empty".to_string(),
+            ));
+        }
+        if self.session_id.trim().is_empty() {
+            return Err(MemoryEngineError::Validation(
+                "event session_id must not be empty".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

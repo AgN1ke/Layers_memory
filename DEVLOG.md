@@ -1,5 +1,39 @@
 # DEVLOG
 
+## Запис 159 — 2026-08-01 — Storage v2 почався з цілісного ingest
+
+**Чому не почали з PostgreSQL schema:**
+Аудит усіх `Storage` call chains показав, що проблема не у файлових назвах і не
+в конкретній базі. Поточні domain transitions складаються з кількох незалежних
+methods. Найменший продуктовий доказ — ingest: один `append_event` фактично
+пише event JSONL, Session metadata і Markdown по черзі. SQL adapter із тією ж
+формою лише переніс би race у production.
+
+**Що реалізовано:**
+- additive `storage_v2` із vault-bound point keys, versioned record envelope,
+  optimistic expected revisions, атомарним commit, idempotent operation receipt
+  і bounded whole-unit retry;
+- in-memory transactional reference, що публікує повну нову vault state одним
+  кроком і має failpoint безпосередньо перед publish;
+- `MemoryEngine::ingest_transactional`, який використовує той самий validation
+  і scoring, детермінований event ID та одним work unit пише event і Session
+  metadata;
+- Storage v1/FileStorage/чинні host APIs не переключені й не зламані.
+
+**Що доведено локально:**
+Вісім S2 tests закривають no-partial-write під injected failure, retry після
+failure, identical replay без другого event_count, conflicting replay,
+tamper після frozen digest, versioned serialization, concurrent same-session
+ingests, optimistic multi-record rollback, однакові keys у різних vault і
+fail-closed wrong membership.
+
+**Що не оголошується готовим:**
+Це не PostgreSQL, не multi-process capacity proof і не закрита S2. Наступна
+хвиля переносить correctness counters/Core/task/checkpoints; далі —
+sleep/fidelity/forgetting; останніми — reflection/review/graph/vector workflows.
+Повний порядок і transaction boundaries записані у
+`wiki/pages/planning/storage-v2-work-unit-inventory.md`.
+
 ## Запис 158 — 2026-08-01 — Невироджений fixture закрив graph Phase 2
 
 **Що змінилося від попереднього приймання:**

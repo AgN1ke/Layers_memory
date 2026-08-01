@@ -100,6 +100,7 @@ mod reflection_flow;
 mod session_ops;
 mod sleep_driver;
 mod sleep_flow;
+mod transactional_ingest;
 mod validation;
 mod vector_flow;
 
@@ -114,6 +115,7 @@ use recall_api::*;
 use recall_stage1::*;
 use sleep_driver::*;
 use sleep_flow::session_is_multi_speaker;
+pub use transactional_ingest::{TransactionalIngestRequest, TransactionalIngestResult};
 use validation::*;
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SLEEP_RUN_SCHEMA_VERSION: &str = "sleep_run.v1";
