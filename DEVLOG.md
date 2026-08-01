@@ -1,5 +1,30 @@
 # DEVLOG
 
+## Запис 162 — 2026-08-01 — S2.B почався з транзакційного Core
+
+Core upsert/patch перенесено на Storage v2 як окремий additive server path.
+Політика не продубльована: FileStorage і transactional path викликають одну
+детерміновану функцію merge/patch. Upsert замінює одну category за exact
+revision; patch отримує category явно і не сканує весь Core. Новий fact ID
+стабільний для vault/operation, а frozen request digest захищає від зміни input
+після початку операції.
+
+Під час реалізації виявлено важливу replay-межу: upsert result залежить від
+побаченого стану (`created`, confidence і provenance). Тому receipt із одним
+digest недостатній — domain result записується другим record у тій самій
+транзакції. Replay після пізнішого reinforcement повертає первісний result, а
+не переписану історію.
+
+Сім нових tests доводять concurrent same-category preservation, exact replay,
+digest tamper rejection, reinforcement/scope isolation, point patch, усі
+pre-publish edges, lost acknowledgement і cross-vault isolation. Повний
+workspace та clippy пройшли. Старі Python/Godot adapters не переключені.
+
+Окремо закрито рішення щодо recall stats: це correctness state, не telemetry,
+бо Stage 1 і forgetting уже читають `recall_count`/`last_recalled_at`. Наступна
+S2.B зміна — durable atomic feedback плюс committed-view server recall; після
+неї — task/manifest/checkpoint transitions і Session archive coverage.
+
 ## Запис 161 — 2026-08-01 — Зовнішній PASS закрив S2.A logical reference gate
 
 Зовнішня перевірка follow-up коміту `af932a4` прочитала assertions, а не лише

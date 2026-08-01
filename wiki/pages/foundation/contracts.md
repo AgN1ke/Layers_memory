@@ -2105,6 +2105,28 @@ submit/revalidate commit. Provider work під transaction заборонене.
 flow inventory і migration order зафіксовані у
 [Storage v2 Work-Unit Inventory](../planning/storage-v2-work-unit-inventory.md).
 
+Перші versioned domain requests поверх envelope:
+
+- `transactional_ingest_request.v1` / `transactional_ingest_result.v1` — event
+  і Session metadata;
+- `transactional_core_upsert_request.v1` /
+  `transactional_core_upsert_result.v1` — одна Core category та durable result;
+- `transactional_core_patch_request.v1` /
+  `transactional_core_patch_result.v1` — point patch, де category є явною
+  частиною frozen input.
+
+Core operation result зберігається атомарно окремим versioned record і
+перевіряється через receipt digest. Це дає exact replay навіть якщо category
+після першого commit уже змінили інші operations. Transactional Core не є
+другим каналом істини: він застосовує ту саму upsert/patch policy, що й
+сумісний FileStorage path. Новий Core fact ID детермінований усередині vault;
+scope лишається exact isolation boundary.
+
+`recall_count` і `last_recalled_at` у server form є correctness state, а не
+lossy telemetry: вони впливають на Stage 1 rank і forgetting protection.
+Server recall не може враховувати незлиті replica-local deltas. До реалізації
+atomic feedback і committed-view read цей flow не має production-ready claim.
+
 PostgreSQL row-level security, composite `(vault_id, id)` references і
 non-owner runtime role є defense in depth поверх bound storage handle. Вони не
 скасовують server-side account-to-vault authorization. RLS context для pooled

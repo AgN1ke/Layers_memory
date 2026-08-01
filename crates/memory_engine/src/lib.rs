@@ -32,7 +32,8 @@ pub mod vector;
 pub use engine::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult, MemoryEngine,
     RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result,
-    TransactionalIngestRequest, TransactionalIngestResult,
+    TransactionalCorePatchRequest, TransactionalCorePatchResult, TransactionalCoreUpsertRequest,
+    TransactionalCoreUpsertResult, TransactionalIngestRequest, TransactionalIngestResult,
 };
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;

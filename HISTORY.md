@@ -46,6 +46,39 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Transactional Core preserves one policy and exact replay
+
+Context. Core category files are protected only by in-process locks. In a
+multi-replica server, two upserts could both read one category revision and one
+could erase the other. A naive idempotent retry could also return a different
+`created`/fact result after later operations changed that category.
+
+**What changed:**
+- Added versioned transactional Core upsert/patch requests and results on the
+  Storage v2 boundary.
+- Local and server paths now share one deterministic Core mutation policy;
+  this is not a second memory engine or a second Core authority.
+- One category and a durable operation-result record commit atomically under
+  an exact revision. New fact IDs are stable per vault/operation, and patch is
+  an explicit category point mutation.
+- Added logical fault, replay, concurrency, scope and vault-isolation tests.
+
+**Correctness classification:**
+- Archive `recall_count` and `last_recalled_at` are not lossy telemetry while
+  ranking and forgetting consume them. The current replica-local buffering is
+  retained only for compatible single-writer FileStorage. Server readiness now
+  explicitly requires durable atomic feedback and committed-view recall.
+
+**What is still true:**
+- Core authority and review gates are unchanged. Transactionality changes how
+  an approved mutation is stored, not who may approve it.
+- Existing Storage v1, FileStorage, Python and Godot APIs remain unchanged.
+- This is an in-memory logical reference, not PostgreSQL or host readiness.
+
+**What we are doing:**
+- Complete S2.B with recall correctness state, then task/manifest/checkpoint
+  transitions and Session archive coverage before larger durable workflows.
+
 ## 2026-08-01 — Storage v2 begins with an atomic, vault-bound ingest transition
 
 Context. The local `Storage::append_event` call hid three sequential physical

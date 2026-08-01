@@ -942,6 +942,20 @@ reference, не production persistence. Чинні `Storage`, `FileStorage` та
 `MemoryEngine::ingest` залишаються сумісними, поки решта flow переноситься за
 [work-unit inventory](../planning/storage-v2-work-unit-inventory.md).
 
+Другий перенесений flow — Core upsert/patch. Він не створює окремої server-Core
+логіки: детермінована політика зміни факту спільна з локальним шляхом. Server
+work unit атомарно замінює category за exact revision і зберігає результат
+операції, щоб replay повертав історично правильну відповідь. Patch адресується
+через explicit normalized category; глобального category scan у server hot
+path немає.
+
+Буферизовані локальні recall counters лишаються допустимою FileStorage
+оптимізацією одного writer process. У multi-replica server вони є
+correctness-critical: Stage 1 і forgetting читають їх як cognitive signal.
+Тому server form має атомарно накопичувати feedback у durable storage і читати
+один committed view; окрема lossy telemetry може існувати лише паралельно і не
+впливати на памʼять.
+
 S1 уже матеріалізує цю межу як Rust contracts, не як network service.
 `VaultContext` виникає лише з matching authenticated principal та active
 account-to-vault membership. `VaultTurnLedger` дедуплікує request усередині

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Status: **S2 inventory complete; transactional foundation and ingest slice implemented; S2 exit gate open**.
+Status: **S2 inventory complete; S2.A accepted; first S2.B Core slice implemented; S2 exit gate open**.
 
 This page is the migration ledger between the method-by-method local `Storage`
 trait and the vault-bound transactional storage required by the server runtime.
@@ -96,6 +96,17 @@ and creates/updates Session metadata. Concurrent distinct operations against
 one Session retry on revision conflict; a duplicate operation cannot increment
 `event_count` twice.
 
+The next migrated transition is transactional Core upsert/patch. It does not
+fork Core policy: local Storage v1 and Storage v2 call one shared deterministic
+fact-mutation policy. The server path replaces one category under an exact
+record revision and commits a durable operation-result record beside it.
+Keeping the result in the same transaction matters because `created` and the
+returned fact depend on the state observed by the first attempt; a replay after
+later reinforcement must return that original result, not recompute history.
+New Core IDs are deterministic from vault and operation identity. Patch carries
+the normalized category explicitly, so a server backend performs one point
+mutation instead of scanning every category.
+
 This is a reference and conformance surface, not the production backend.
 `FileStorage` and `MemoryEngine::ingest` remain unchanged for existing local,
 Python and Godot hosts. No host has been switched automatically, and PostgreSQL
@@ -117,11 +128,22 @@ still verify the same public serialization and retry behavior.
 
 ### S2.B — Correctness state and small mutations
 
-Next, move Core upsert/patch, manifest/task state transitions and Session
-archive coverage. In the same subphase, remove the ambiguity around recall
-statistics: either persist the counters transactionally because they influence
-ranking, or stop using replica-local deltas as cognitive input and retain them
-only as explicitly lossy telemetry.
+**Core sub-slice implemented; external acceptance pending.** Transactional
+upsert/patch now has frozen request digests, durable results, exact revision
+checks, deterministic IDs, scope/vault isolation and the same logical
+fault/replay contract as ingest. Seven tests cover same-category contention,
+replay after later state change, reinforcement, scope isolation, point patch,
+all pre-publish edges, lost acknowledgement and cross-vault separation.
+Storage v1 and both existing host adapters remain unchanged.
+
+The recall-statistics ambiguity is resolved as a design decision: Archive
+`recall_count` and `last_recalled_at` are **correctness state**, because Stage 1
+reads them to alter ranking and forgetting uses their archive-level proxy.
+They are not allowed to remain replica-local on the server path and cannot be
+downgraded to telemetry while those policies consume them. The next S2.B slice
+must add durable atomic recall feedback and a committed-view server recall
+path. Until both exist, server recall is not declared replica-consistent.
+After that, move manifest/task transitions and Session archive coverage.
 
 ### S2.C — Sleep, fidelity and forgetting
 

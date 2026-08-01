@@ -238,7 +238,7 @@ fn ingest_request_digest(host_id: &str, received_at: &str, event: &IngestEvent) 
     })
 }
 
-fn serializable_digest<T: Serialize>(value: &T) -> Result<String> {
+pub(super) fn serializable_digest<T: Serialize>(value: &T) -> Result<String> {
     let bytes = serde_json::to_vec(value)?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }

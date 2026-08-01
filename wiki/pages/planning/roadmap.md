@@ -472,10 +472,19 @@ core як централізований сервіс для тисяч грав
 - [~] Додано additive transaction/work-unit boundary, point reads, optimistic
   record revisions, idempotent receipt, bounded conflict retry та in-memory
   reference. Перший domain flow (`ingest_transactional`) атомарно комітить
-  event + Session metadata; чинний Storage/FileStorage API не зламано.
-  Compatibility adapter і решта flow ще відкриті. — 2026-08-01.
-- [ ] Зробити correctness-critical state durable; replica-local telemetry не
-  може неявно змінювати recall/reflection behavior.
+  event + Session metadata. S2.B Core upsert/patch також використовує exact
+  category revision, durable operation result і shared Core policy; чинний
+  Storage/FileStorage API не зламано. Compatibility adapter і решта flow ще
+  відкриті. — 2026-08-01.
+- [~] Correctness-critical recall state класифіковано: `recall_count` і
+  `last_recalled_at` не telemetry, доки впливають на Stage 1/forgetting.
+  Durable atomic feedback та committed-view server recall ще треба
+  реалізувати; replica-local path не буде оголошений server-ready.
+- [x] S2.B Core logical implementation: versioned transactional upsert/patch,
+  deterministic new fact IDs, durable replay result, exact revision retry,
+  point patch із explicit category, scope/vault isolation та fault suite. Це
+  library reference; зовнішнє приймання й host adapter ще відкриті. —
+  2026-08-01, `server_core_storage_v2.rs`.
 - [x] S2.A ingest logical-reference gate пройшов deterministic
   fault/concurrency suite: before apply,
   після кожної з двох mutations, receipt-before-publish,

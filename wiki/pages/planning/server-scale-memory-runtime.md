@@ -275,6 +275,13 @@ reference-protocol failpoints, not physical database crash claims. Existing
 Storage/FileStorage hosts remain on the compatible v1 path. S2 is not complete
 until the remaining flows in the exit gate use the same boundary.
 
+The first S2.B slice adds transactional Core upsert/patch without duplicating
+the cognitive policy. One category and its durable operation result publish
+together under an exact revision; patch is category-addressed and therefore a
+point operation. Recall feedback is classified as durable correctness state,
+not telemetry, because it changes ranking and forgetting protection. Its
+transactional mutation and committed-view read path remain the next S2.B gate.
+
 ### S3 — PostgreSQLVaultStorage and pgvector
 
 **Outcome:** two processes can safely operate on different vaults and contend

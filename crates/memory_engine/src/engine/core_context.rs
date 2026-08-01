@@ -17,62 +17,16 @@ impl<S: Storage> MemoryEngine<S> {
         category_name: String,
     ) -> Result<CoreFactUpsertResult> {
         let now = now_rfc3339()?;
-        let scope = normalize_optional_string(input.scope.as_deref());
-        let fact_text = normalize_whitespace(&input.text);
-        let mut category = self.storage.read_core_store_category(&category_name)?;
-
-        if category.schema_version.trim().is_empty() {
-            category.schema_version = CORE_STORE_SCHEMA_VERSION.to_string();
-        }
-        category.category = category_name.clone();
-        category.updated_at = now.clone();
-
-        let needle = normalize_match_text(&fact_text);
-        let mut created = false;
-        let fact = if let Some(existing) = category
-            .facts
-            .iter_mut()
-            .find(|fact| normalize_match_text(&fact.text) == needle && fact.scope == scope)
-        {
-            existing.scope = scope.clone();
-            existing.text = fact_text;
-            existing.status = CoreFactStatus::Active;
-            existing.confidence = existing.confidence.max(input.confidence).clamp(0.0, 1.0);
-            existing.updated_at = now.clone();
-            merge_unique(&mut existing.tags, &input.tags);
-            merge_unique(&mut existing.source_archive_ids, &input.source_archive_ids);
-            if existing.source_candidate_id.is_none() {
-                existing.source_candidate_id = input.source_candidate_id.clone();
-            }
-            existing.clone()
-        } else {
-            created = true;
-            let fact = CoreFact {
-                schema_version: CORE_FACT_SCHEMA_VERSION.to_string(),
-                core_fact_id: new_id("core_fact")?,
-                scope,
-                text: fact_text,
-                status: CoreFactStatus::Active,
-                confidence: input.confidence.clamp(0.0, 1.0),
-                created_at: now.clone(),
-                updated_at: now,
-                source_archive_ids: input.source_archive_ids,
-                source_candidate_id: input.source_candidate_id,
-                tags: unique_strings(input.tags),
-                links: Vec::new(),
-                review: None,
-            };
-            category.facts.push(fact.clone());
-            fact
-        };
-
+        let category = self.storage.read_core_store_category(&category_name)?;
+        let (category, result) = core_policy::apply_core_fact_upsert(
+            category,
+            &input,
+            category_name,
+            || new_id("core_fact"),
+            now,
+        )?;
         self.storage.write_core_store_category(&category)?;
-        Ok(CoreFactUpsertResult {
-            schema_version: CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION.to_string(),
-            category: category_name,
-            created,
-            fact,
-        })
+        Ok(result)
     }
 
     pub fn patch_core_fact(&self, input: CoreFactPatchInput) -> Result<CoreFactPatchResult> {
@@ -81,8 +35,6 @@ impl<S: Storage> MemoryEngine<S> {
 
         let now = now_rfc3339()?;
         let scope = normalize_optional_string(input.scope.as_deref());
-        let patch_text = input.text.as_deref().map(normalize_whitespace);
-        let patch_tags = input.tags.map(unique_strings);
 
         let category_name = self
             .storage
@@ -104,42 +56,15 @@ impl<S: Storage> MemoryEngine<S> {
             })?;
 
         self.with_resource_lock(core_lock_key(&category_name), || {
-            let mut category = self.storage.read_core_store_category(&category_name)?;
-            let Some(fact) = category
-                .facts
-                .iter_mut()
-                .find(|fact| fact.core_fact_id == input.core_fact_id && fact.scope == scope)
-            else {
-                return Err(MemoryEngineError::Validation(format!(
-                    "core fact not found for requested scope: {}",
-                    input.core_fact_id
-                )));
-            };
-
-            if let Some(text) = patch_text.as_ref() {
-                fact.text = text.clone();
-            }
-            if let Some(status) = input.status {
-                fact.status = status;
-            }
-            if let Some(confidence) = input.confidence {
-                fact.confidence = confidence.clamp(0.0, 1.0);
-            }
-            if let Some(tags) = patch_tags.as_ref() {
-                fact.tags = tags.clone();
-            }
-            fact.updated_at = now.clone();
-
-            let patched_fact = fact.clone();
-            category.updated_at = now;
-            let category_name = category.category.clone();
+            let category = self.storage.read_core_store_category(&category_name)?;
+            let (category, result) = core_policy::apply_core_fact_patch(
+                category,
+                &input,
+                category_name.clone(),
+                now.clone(),
+            )?;
             self.storage.write_core_store_category(&category)?;
-
-            Ok(CoreFactPatchResult {
-                schema_version: CORE_FACT_PATCH_RESULT_SCHEMA_VERSION.to_string(),
-                category: category_name,
-                fact: patched_fact,
-            })
+            Ok(result)
         })
     }
 
