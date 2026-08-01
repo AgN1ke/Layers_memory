@@ -116,7 +116,10 @@ embedding для окремого ephemeral `associative_memory`. Цей шар 
 давніх деталей, релевантних актуальній темі, але не змішує deep-recall score з
 Stage 1/2 score і не змінює Archive ranking. Він перебудовується на кожен запит,
 не записується в Session/Archive/Core і не переносить стару тему в наступний
-turn.
+turn. Асоціативний gate має право повернути порожній результат: найближчий
+вектор не є спогадом, якщо його raw cosine не досягає окремого
+model-calibrated порога. Для bundled multilingual MiniLM default після live
+калібрування — `0.47`; explicit `recall_deep` зберігає власний нижчий поріг.
 
 На практиці Stage 2 не входить у найближчу v0.2. Векторне сховище вмикається тільки після стабілізації Core/reflection/forgetting і тільки як opt-in feature. Частина користувачів не захоче зберігати семантичні вектори про себе; хост має мати явний перемикач "без embeddings" / "з embeddings". При вимкнених embeddings Stage 1 лишається повністю працездатним.
 

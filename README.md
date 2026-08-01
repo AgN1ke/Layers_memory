@@ -20,7 +20,9 @@ the Rust core may use that index to build a small ephemeral
 `associative_memory` section: older details activated by the current topic,
 clearly separated from the ongoing conversation, ordinary Archive recall, and
 stable Core facts. The section is rebuilt for every request, so changing the
-topic does not carry the previous association forward.
+topic does not carry the previous association forward. Its conservative,
+model-calibrated similarity gate may return no association at all: the core
+does not force the nearest old memory into an unrelated conversation.
 
 ## Principles
 

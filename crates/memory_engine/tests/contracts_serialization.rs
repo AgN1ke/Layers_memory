@@ -32,6 +32,28 @@ fn core_context_package_adds_associative_memory_compatibly() {
 }
 
 #[test]
+fn associative_memory_activation_threshold_is_additive() {
+    let raw = json!({
+        "schema_version": "core_context_package.v1",
+        "created_at": "2026-08-01T10:00:00Z",
+        "associative_memory": [{
+            "memory_unit_id": "mu_01",
+            "archive_id": "archive_01",
+            "scope": "scope_01",
+            "thesis": "An older memory.",
+            "created_at": "2026-07-01T10:00:00Z",
+            "activation": "current_topic_vector",
+            "semantic_similarity": 0.51,
+            "deep_recall_score": 0.63
+        }],
+        "domain_state": {}
+    });
+
+    let package: CoreContextPackage = serde_json::from_value(raw).unwrap();
+    assert_eq!(package.associative_memory[0].activation_threshold, 0.0);
+}
+
+#[test]
 fn recall_candidate_debug_adds_optional_memory_unit_provenance_compatibly() {
     let raw = json!({
         "archive_id": "archive_01",

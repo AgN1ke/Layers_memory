@@ -46,6 +46,47 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Associative recall learns to abstain at the live model boundary
+
+Context. The live Chibigochi acceptance of `3c5aa74` proved that the separate
+associative layer, topic switching, deduplication, Stage 1 fallback, and prompt
+labeling work. Its guaranteed-negative dinosaur query also exposed a calibration
+failure: with no dinosaur memory in the 30-row owner scope, the nearest planet
+unit still passed the old `0.45` contextual threshold at cosine `0.455`.
+
+**What changed:**
+- The bundled multilingual MiniLM associative-memory default is `0.47`, between
+  the strongest observed false positive (`0.455`) and weakest observed useful
+  control (`0.497`). This changes only automatic current-topic association;
+  explicit deep recall keeps its separate `0.30` default.
+- The two defaults are named public constants instead of unexplained literals.
+- Every accepted `AssociativeMemoryItem` exposes `activation_threshold`, and
+  package notes state the threshold for both applied and below-threshold paths.
+- The Python constructor accepts optional
+  `associative_memory_min_similarity`; the thin adapter only forwards it into
+  core policy. Telegram demo telemetry now records the threshold and the actual
+  package notes without memory text.
+
+**What is retracted:**
+- The live report's statement that associative expansion had no relevance
+  threshold. The gate existed; `0.45` was simply too low for this observed
+  model/data boundary.
+
+**What is still true:**
+- Associative memory remains ephemeral, unit-focused, local-vector-backed, and
+  separate from the three persisted layers and ordinary Archive ranking.
+- One boundary sample does not establish universal embedding quality. Changing
+  the model requires a new positive/negative calibration rather than copying
+  `0.47` blindly.
+
+**What we are doing:**
+- Re-run the live positive controls and guaranteed-negative topic switch before
+  closing the v0.4 acceptance or changing package versions.
+
+**Reproducibility anchor:** library base `3c5aa74`; Chibigochi base `f0d986d`;
+live owner scope `dev-1785028194.31988-42102`; 30 vector rows; model
+`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, dimension 384.
+
 ## 2026-08-01 — Current-topic vector memories become an explicit associative layer
 
 Context. Live Chibigochi verification of `d5d5f40` showed that ordinary Stage 2

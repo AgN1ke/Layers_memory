@@ -11,6 +11,8 @@ pub const DEEP_RECALL_RESULT_SCHEMA_VERSION: &str = "deep_recall.v1";
 pub const DEFAULT_VECTOR_MODEL_ID: &str =
     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2";
 pub const DEFAULT_VECTOR_DIM: usize = 384;
+pub const DEFAULT_DEEP_RECALL_MIN_SIMILARITY: f32 = 0.30;
+pub const DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY: f32 = 0.47;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

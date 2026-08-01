@@ -390,11 +390,16 @@ acceptance за єдиною SemVer-політикою.
 - [x] Живий Chibigochi acceptance `d5d5f40`: broad query «інші світи» повернув
   конкретний планетарний unit без sibling leakage; Титан, непрямий парафраз,
   Європа і negative control пройшли; Stage 1 fallback збережений. — 2026-08-01.
-- [ ] Розвести chat context і explicit semantic search: `archive_relevant` у
+- [~] Розвести chat context і explicit semantic search: `archive_relevant` у
   `core_context_package` лишається structural recall, а current-turn vector
   details повертаються окремим ephemeral `associative_memory` і рендеряться як
   давні спогади, активовані поточною темою. Перевірити topic switch
-  Марс → динозаври та outside-window association без stale carry-over.
+  Марс → динозаври та outside-window association без stale carry-over. —
+  `3c5aa74` і живий Chibigochi прогін підтвердили розділення, дедуплікацію,
+  rebuild на кожен turn, Stage 1/non-vector fallback і product smoke. Єдиний
+  провал — unrelated «динозаври» активували планетарний unit з `sim=0.455` при
+  старому порозі `0.45`; default відкалібровано до `0.47`, фінальний live re-run
+  ще потрібен перед `[x]`.
 - [x] Automated release consistency gate звіряє root Cargo version, inheritance
   усіх Rust crates і Python package; на `v*` tag додатково вимагає exact
   three-number acceptance зі статусом accepted та HISTORY heading. —

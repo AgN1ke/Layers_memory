@@ -600,6 +600,7 @@ mod tests {
             created_at: "2026-07-01T09:00:00Z".to_string(),
             activation: AssociativeMemoryActivation::CurrentTopicVector,
             semantic_similarity: 0.714,
+            activation_threshold: 0.47,
             deep_recall_score: 0.762,
             why_recalled: Some("current topic vector matched".to_string()),
         }];

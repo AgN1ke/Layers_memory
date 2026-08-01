@@ -16,8 +16,9 @@ use memory_engine::types::{
     FORGET_REVIEW_RESULT_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
 };
 use memory_engine::vector::{
-    DeepRecallQuery, EmbedBatchResult, EmbedBatchVector, VectorScopeStatus, DEFAULT_VECTOR_DIM,
-    DEFAULT_VECTOR_MODEL_ID, EMBED_BATCH_RESULT_SCHEMA_VERSION,
+    DeepRecallQuery, EmbedBatchResult, EmbedBatchVector, VectorScopeStatus,
+    DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY, DEFAULT_VECTOR_DIM, DEFAULT_VECTOR_MODEL_ID,
+    EMBED_BATCH_RESULT_SCHEMA_VERSION,
 };
 use memory_engine::{EngineOptions, FileStorage, MemoryEngine};
 use serde_json::json;
@@ -765,6 +766,92 @@ fn associative_memory_rebuilds_for_each_current_topic_without_stale_carry_over()
     fs::remove_dir_all(root).ok();
 }
 
+#[test]
+fn associative_memory_abstains_between_live_negative_and_positive_boundary() {
+    let root = unique_temp_dir("vectors_associative_abstention");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+    let scope = "vector_scope";
+
+    create_archive_with_units_named(
+        &engine,
+        scope,
+        "current",
+        "The current structural topic.",
+        vec![("The current structural topic.", 0.99)],
+    );
+    create_archive_with_units_named(
+        &engine,
+        scope,
+        "weak",
+        "An unrelated older memory.",
+        vec![("An unrelated older memory.", 0.40)],
+    );
+    create_archive_with_units_named(
+        &engine,
+        scope,
+        "positive",
+        "A weak but relevant older memory.",
+        vec![("A weak but relevant older memory.", 0.40)],
+    );
+    set_archive_weight(&engine, "archive_current", 0.99);
+    set_archive_weight(&engine, "archive_weak", 0.40);
+    set_archive_weight(&engine, "archive_positive", 0.40);
+
+    engine
+        .set_vector_scope(scope, true, false)
+        .expect("enable vectors");
+    let requests = engine
+        .pending_embedding_backfill(scope)
+        .expect("embedding backfill");
+    submit_embedding_vectors_by_unit(&engine, &requests[0], |memory_unit_id| {
+        if memory_unit_id.contains("weak") {
+            vector_with_cosine(DEFAULT_VECTOR_DIM, 0, 1, 0.455)
+        } else if memory_unit_id.contains("positive") {
+            vector_with_cosine(DEFAULT_VECTOR_DIM, 2, 3, 0.497)
+        } else {
+            unit_vector(DEFAULT_VECTOR_DIM, 4)
+        }
+    });
+
+    let package_for = |hot_index| {
+        engine
+            .core_context_package(CoreContextRequest {
+                recall_limit: 1,
+                query_text: Some("The current structural topic.".to_string()),
+                query_embedding: Some(CoreContextQueryEmbedding {
+                    model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+                    query_vec: unit_vector(DEFAULT_VECTOR_DIM, hot_index),
+                }),
+                ..context_request(scope, None)
+            })
+            .expect("context package")
+    };
+
+    let weak_negative = package_for(0);
+    assert!(weak_negative.associative_memory.is_empty());
+    assert!(weak_negative
+        .notes
+        .iter()
+        .any(|note| { note.contains("below_threshold") && note.contains("min_similarity=0.470") }));
+
+    let weak_positive = package_for(2);
+    assert_eq!(weak_positive.associative_memory.len(), 1);
+    let recalled = &weak_positive.associative_memory[0];
+    assert_eq!(recalled.memory_unit_id, "mu_positive_0");
+    assert!((recalled.semantic_similarity - 0.497).abs() < 0.001);
+    assert_eq!(
+        recalled.activation_threshold,
+        DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY
+    );
+    assert!(recalled
+        .why_recalled
+        .as_deref()
+        .is_some_and(|reason| reason.contains("0.497 >= min_similarity=0.470")));
+
+    fs::remove_dir_all(root).ok();
+}
+
 fn create_archive_with_units(
     engine: &MemoryEngine<FileStorage>,
     session_id: &str,
@@ -1020,6 +1107,52 @@ fn submit_embeddings_by_unit(
             },
         )
         .expect("submit embedding");
+}
+
+fn submit_embedding_vectors_by_unit(
+    engine: &MemoryEngine<FileStorage>,
+    request: &memory_engine::llm::LlmRequest,
+    vector_for: impl Fn(&str) -> Vec<f32>,
+) {
+    let items = request.prompt_inputs["embed_batch"]["items"]
+        .as_array()
+        .expect("embed items");
+    let results = items
+        .iter()
+        .map(|item| {
+            let memory_unit_id = item["memory_unit_id"]
+                .as_str()
+                .expect("memory unit id")
+                .to_string();
+            EmbedBatchVector {
+                vector: vector_for(&memory_unit_id),
+                memory_unit_id,
+            }
+        })
+        .collect();
+    engine
+        .resume_compute_embedding(
+            &request.task_id,
+            EmbedBatchResult {
+                schema_version: EMBED_BATCH_RESULT_SCHEMA_VERSION.to_string(),
+                model_id: DEFAULT_VECTOR_MODEL_ID.to_string(),
+                dim: DEFAULT_VECTOR_DIM,
+                results,
+            },
+        )
+        .expect("submit embedding");
+}
+
+fn vector_with_cosine(
+    dim: usize,
+    query_index: usize,
+    residual_index: usize,
+    cosine: f32,
+) -> Vec<f32> {
+    let mut vector = vec![0.0; dim];
+    vector[query_index] = cosine;
+    vector[residual_index] = (1.0 - cosine.powi(2)).sqrt();
+    vector
 }
 
 fn set_archive_weight(engine: &MemoryEngine<FileStorage>, archive_id: &str, weight: f64) {

@@ -846,6 +846,7 @@ Core Context Package не обов'язково зберігається на д
       "created_at": "2026-02-10T12:00:00.000Z",
       "activation": "current_topic_vector",
       "semantic_similarity": 0.71,
+      "activation_threshold": 0.47,
       "deep_recall_score": 0.76,
       "why_recalled": "current topic vector matched an older memory unit"
     }
@@ -929,8 +930,12 @@ items окремо, тому не називає associative detail перемо
 
 `associative_memory` не є четвертим persisted memory layer. Це per-request
 prompt projection із rebuildable vector index. Кожний item зберігає atomic
-`memory_unit_id`, parent `archive_id`, час, similarity, deep-recall score і
-пояснення активації. Canonical prompt view рендерить його окремим
+`memory_unit_id`, parent `archive_id`, час, similarity, застосований
+`activation_threshold`, deep-recall score і пояснення активації. Для bundled
+`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` default
+`VectorConfig.contextual_expansion_min_sim` дорівнює `0.47`: якщо жоден unit не
+досягає порога, секція порожня, а `notes` містить `below_threshold` і сам поріг.
+Canonical prompt view рендерить прийняті hits окремим
 `<associative_memory>` блоком із явною позначкою, що це давні спогади,
 активовані поточною темою.
 

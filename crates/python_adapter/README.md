@@ -48,6 +48,7 @@ engine = memory_engine.MemoryEngine(
     host_id="telegram_bot",
     stage2_candidate_limit=40,
     stage2_vector_weight=0.5,
+    associative_memory_min_similarity=0.47,
 )
 ```
 
@@ -57,6 +58,11 @@ JSON keeps the parent archive `id` but includes `matched_memory_unit_id` and a
 unit-focused `gist`/`compact_memory`; `debug.candidates` carries the same ID as
 text-free semantic provenance. Older Stage 1 payloads simply omit the optional
 field.
+
+`associative_memory_min_similarity` controls the separate, per-request
+current-topic memory gate. Its default `0.47` is calibrated for the bundled
+multilingual MiniLM model; weak matches below it are omitted instead of being
+forced into the prompt.
 
 Sleep is an explicit host decision in v0.1. A host calls `engine.sleep(session_id)`
 manually, from token-budget pressure, or from an idle schedule, then executes the

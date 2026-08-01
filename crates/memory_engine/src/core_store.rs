@@ -199,6 +199,8 @@ pub struct AssociativeMemoryItem {
     pub created_at: Timestamp,
     pub activation: AssociativeMemoryActivation,
     pub semantic_similarity: f32,
+    #[serde(default)]
+    pub activation_threshold: f32,
     pub deep_recall_score: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why_recalled: Option<String>,

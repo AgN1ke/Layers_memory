@@ -199,11 +199,11 @@ impl Default for VectorConfig {
             dim: DEFAULT_VECTOR_DIM,
             embed_batch_size: 64,
             deep_recall_default_top_k: 5,
-            deep_recall_min_sim: 0.30,
+            deep_recall_min_sim: DEFAULT_DEEP_RECALL_MIN_SIMILARITY,
             deep_recall_recency_weight: 0.10,
             deep_recall_unit_weight: 0.10,
             contextual_expansion_top_k: 3,
-            contextual_expansion_min_sim: 0.45,
+            contextual_expansion_min_sim: DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY,
             stage2_candidate_limit: 40,
             stage2_vector_weight: 0.50,
         }

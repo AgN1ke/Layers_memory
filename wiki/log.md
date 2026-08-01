@@ -8,6 +8,16 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] recall calibration | Associative memory may abstain
+
+Recorded the live boundary discovered after the associative-layer acceptance:
+an unrelated dinosaur query produced a nearest planet unit at cosine `0.455`,
+while the weakest observed useful training association was `0.497`. The bundled
+MiniLM default is now `0.47`, accepted items expose the applied threshold, and
+the contracts state explicitly that an empty associative section is preferable
+to forcing the nearest unrelated memory. The roadmap remains in progress until
+the live negative and positive controls are repeated on the rebuilt adapter.
+
 ## [2026-08-01] context architecture | Ephemeral associative memory
 
 Corrected the Phase 1 contextual-expansion package role after live Chibigochi

@@ -18,12 +18,13 @@ def engine(tmp_path: Path) -> memory_engine.MemoryEngine:
     return memory_engine.MemoryEngine(str(tmp_path), host_id="pytest_host")
 
 
-def test_constructor_accepts_stage2_tuning(tmp_path: Path):
+def test_constructor_accepts_vector_tuning(tmp_path: Path):
     configured = memory_engine.MemoryEngine(
         str(tmp_path / "configured"),
         host_id="pytest_stage2",
         stage2_candidate_limit=7,
         stage2_vector_weight=0.25,
+        associative_memory_min_similarity=0.52,
     )
     state = json.loads(configured.vector_state("scope"))
     assert state["status"] == "disabled"
@@ -39,6 +40,11 @@ def test_constructor_rejects_invalid_stage2_tuning(tmp_path: Path):
         memory_engine.MemoryEngine(
             str(tmp_path / "bad_weight"),
             stage2_vector_weight=1.5,
+        )
+    with pytest.raises(ValueError, match="associative_memory_min_similarity"):
+        memory_engine.MemoryEngine(
+            str(tmp_path / "bad_associative_threshold"),
+            associative_memory_min_similarity=0.0,
         )
 
 

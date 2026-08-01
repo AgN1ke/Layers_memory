@@ -2437,6 +2437,7 @@ def log_recall_trace(package: dict[str, Any], session_id: str, query_text: str) 
                 "archive_id": item.get("archive_id"),
                 "activation": item.get("activation"),
                 "semantic_similarity": item.get("semantic_similarity"),
+                "activation_threshold": item.get("activation_threshold"),
                 "deep_recall_score": item.get("deep_recall_score"),
             }
             for item in raw_associative
@@ -2455,7 +2456,7 @@ def log_recall_trace(package: dict[str, Any], session_id: str, query_text: str) 
         "vector_stage": debug.get("vector_stage"),
         "candidates": debug.get("candidates", []),
         "associative_memory": associative,
-        "notes": debug.get("notes", []),
+        "notes": package.get("notes", []),
     }
     with RECALL_TRACE_PATH.open("a", encoding="utf-8") as file:
         file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")

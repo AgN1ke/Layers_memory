@@ -1,5 +1,48 @@
 # DEVLOG
 
+## Запис 148 — 2026-08-01 — Порожня асоціація краща за найближчий чужий спогад
+
+**Проблематика:**
+Живе приймання `3c5aa74` підтвердило саму архітектуру асоціативної памʼяті,
+але negative control «поговорімо про динозаврів» при нульовому dinosaur corpus
+повернув планетарний unit із `sim=0.455`. У звіті це було названо відсутністю
+порога, хоча в ядрі вже існував `contextual_expansion_min_sim=0.45`. Реальна
+проблема — не відсутній механізм, а невідкалібрована межа.
+
+**Стратегічне рішення:**
+Не додавати lexical gate, LLM-перевірку або host-side евристику. Вони або
+зламають парафрази, заради яких існують vectors, або створять другу політику
+памʼяті поза Rust core. Використати вже канонічний raw-cosine abstention gate і
+відкалібрувати його за живою межею: false positive `0.455`, weakest observed
+positive `0.497`, default `0.47`. Інше embedding model потребує власної
+калібровки.
+
+**Що зроблено:**
+- defaults deep recall `0.30` і associative memory `0.47` отримали публічні
+  імена-константи;
+- `AssociativeMemoryItem.activation_threshold` і `why_recalled` показують, яку
+  межу пройшов hit; below-threshold note теж містить поріг;
+- Python adapter приймає optional `associative_memory_min_similarity`, але не
+  ранжує і не фільтрує сам;
+- Telegram demo trace пише ID/score/threshold і package notes без тексту
+  запиту чи памʼяті;
+- додано детермінований тест із cosine `0.455` і `0.497`, а контракт старого
+  payload без нового поля лишився читабельним.
+
+**Фактичні перевірки:**
+- targeted vector abstention test — PASS;
+- vector suite 14/14, включно з усіма associative-memory tests — PASS;
+- prompt-view tests 7/7 і contract serialization 10/10 — PASS;
+- `cargo test --workspace`, `cargo fmt --check` і full clippy `-D warnings` —
+  PASS;
+- release Python adapter rebuilt; 15/15 adapter tests — PASS;
+- Telegram host syntax, 60 wiki links і release-version consistency — PASS.
+
+**Залишок:**
+Живий Chibigochi re-run має повторити strongest negative і weakest positive на
+тому самому owner scope. До цього roadmap лишається `[~]`, а `v0.4.0` не
+тегується.
+
 ## Правила
 
 `DEVLOG.md` ведеться українською мовою.

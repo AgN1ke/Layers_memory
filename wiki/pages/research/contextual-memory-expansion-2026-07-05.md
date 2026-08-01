@@ -172,8 +172,9 @@ demo code.
 
 ### Step 2 - Contextual Expansion Phase 1
 
-Status: original behavior implemented on 2026-07-05; package-role correction in
-progress on 2026-08-01 after live Stage 2 verification.
+Status: original behavior implemented on 2026-07-05; package-role correction
+implemented and live-verified on 2026-08-01; calibrated abstention boundary
+awaits the final live re-run.
 
 Add `query_embedding` to the context request path and keep behavior unchanged
 when it is absent.
@@ -199,6 +200,11 @@ Implementation notes:
 - The engine searches the existing memory-unit vector index with
   `VectorConfig.contextual_expansion_min_sim` and
   `VectorConfig.contextual_expansion_top_k`.
+- The associative threshold is deliberately higher than explicit deep recall.
+  Live Chibigochi evidence for the bundled MiniLM model put the strongest known
+  unrelated hit at `0.455` and the weakest known useful hit at `0.497`; the
+  default is therefore `0.47`. This is an abstention boundary, not a ranking
+  weight: below it the correct product behavior is an empty section.
 - Returned memories are emitted as typed `associative_memory` items with both
   `memory_unit_id` and parent `archive_id`; they do not participate in the
   `archive_relevant` rank.
@@ -206,6 +212,11 @@ Implementation notes:
   associative and ordinary Archive trimming separately.
 - The Telegram development host sends a query embedding only when the current
   chat scope has a ready vector index and the local embedder is available.
+
+The threshold remains configurable through Rust `EngineOptions` and the Python
+adapter constructor because changing the embedding model requires a new
+calibration. Hosts may select a calibrated value; they must not add a second
+host-side relevance rule.
 
 ### Step 3 - Core-Anchored Expansion Phase 2
 

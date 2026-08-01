@@ -358,12 +358,13 @@ impl<S: Storage> MemoryEngine<S> {
         };
 
         let scope = request.core_scope.as_deref().unwrap_or(&request.session_id);
+        let min_similarity = self.options.vectors.contextual_expansion_min_sim;
         let result = self.recall_deep(DeepRecallQuery {
             scope: scope.to_string(),
             query_vec: embedding.query_vec.clone(),
             model_id: embedding.model_id.clone(),
             top_k: self.options.vectors.contextual_expansion_top_k,
-            min_sim: self.options.vectors.contextual_expansion_min_sim,
+            min_sim: min_similarity,
             now: Some(created_at.to_string()),
         })?;
 
@@ -372,7 +373,11 @@ impl<S: Storage> MemoryEngine<S> {
                 Vec::new(),
                 result
                     .reason
-                    .map(|reason| format!("associative memory skipped: {reason}."))
+                    .map(|reason| {
+                        format!(
+                            "associative memory skipped: {reason} (min_similarity={min_similarity:.3})."
+                        )
+                    })
                     .into_iter()
                     .collect(),
             ));
@@ -393,15 +398,17 @@ impl<S: Storage> MemoryEngine<S> {
                 continue;
             }
             visible.push(normalized_thesis);
-            items.push(associative_memory_item(hit, scope));
+            items.push(associative_memory_item(hit, scope, min_similarity));
         }
 
         let notes = if items.is_empty() {
-            vec!["associative memory found only already-visible detail.".to_string()]
+            vec![format!(
+                "associative memory found only already-visible detail at min_similarity={min_similarity:.3}."
+            )]
         } else {
             vec![format!(
-                "associative memory added {} current-topic detail item(s).",
-                items.len()
+                "associative memory added {} current-topic detail item(s) at min_similarity={min_similarity:.3}.",
+                items.len(),
             )]
         };
 
@@ -409,7 +416,11 @@ impl<S: Storage> MemoryEngine<S> {
     }
 }
 
-fn associative_memory_item(hit: DeepRecallHit, scope: &str) -> AssociativeMemoryItem {
+fn associative_memory_item(
+    hit: DeepRecallHit,
+    scope: &str,
+    activation_threshold: f32,
+) -> AssociativeMemoryItem {
     AssociativeMemoryItem {
         memory_unit_id: hit.memory_unit_id,
         archive_id: hit.archive_id,
@@ -418,10 +429,11 @@ fn associative_memory_item(hit: DeepRecallHit, scope: &str) -> AssociativeMemory
         created_at: hit.created_at,
         activation: AssociativeMemoryActivation::CurrentTopicVector,
         semantic_similarity: hit.sim,
+        activation_threshold,
         deep_recall_score: hit.score,
         why_recalled: Some(format!(
-            "current topic vector matched an older memory unit (sim={:.3})",
-            hit.sim
+            "current topic vector matched an older memory unit (sim={:.3} >= min_similarity={activation_threshold:.3})",
+            hit.sim,
         )),
     }
 }

@@ -32,7 +32,9 @@ use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::reflection::ReflectionAnalyzeResult;
 use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::storage::Storage;
-use ::memory_engine::vector::{DeepRecallQuery, EmbedBatchResult};
+use ::memory_engine::vector::{
+    DeepRecallQuery, EmbedBatchResult, DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY,
+};
 use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
 
 #[pyclass(name = "MemoryEngine")]
@@ -47,13 +49,15 @@ impl PyMemoryEngine {
         memory_dir,
         host_id="unknown",
         stage2_candidate_limit=40,
-        stage2_vector_weight=0.5
+        stage2_vector_weight=0.5,
+        associative_memory_min_similarity=None
     ))]
     fn new(
         memory_dir: &str,
         host_id: &str,
         stage2_candidate_limit: usize,
         stage2_vector_weight: f32,
+        associative_memory_min_similarity: Option<f32>,
     ) -> PyResult<Self> {
         if stage2_candidate_limit == 0 {
             return Err(PyValueError::new_err(
@@ -65,12 +69,23 @@ impl PyMemoryEngine {
                 "stage2_vector_weight must be finite and between 0.0 and 1.0",
             ));
         }
+        let associative_memory_min_similarity =
+            associative_memory_min_similarity.unwrap_or(DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY);
+        if !(associative_memory_min_similarity.is_finite()
+            && 0.0 < associative_memory_min_similarity
+            && associative_memory_min_similarity <= 1.0)
+        {
+            return Err(PyValueError::new_err(
+                "associative_memory_min_similarity must be finite, greater than 0.0, and at most 1.0",
+            ));
+        }
         let path = PathBuf::from(memory_dir);
         let storage = FileStorage::with_host_id(&path, host_id);
         storage.ensure_layout().map_err(map_err)?;
         let mut options = EngineOptions::default();
         options.vectors.stage2_candidate_limit = stage2_candidate_limit;
         options.vectors.stage2_vector_weight = stage2_vector_weight;
+        options.vectors.contextual_expansion_min_sim = associative_memory_min_similarity;
         Ok(Self {
             inner: CoreEngine::with_options(storage, options),
         })
