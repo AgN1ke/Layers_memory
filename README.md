@@ -33,7 +33,9 @@ journaled, restart-safe operation into separate hypothesis nodes and atomic
 MemoryUnit evidence links; graph export is exact-scope and human-inspectable,
 while the existing reflection/review API keeps working through a compatibility
 projection. Migration never invents broader/narrower relations. Hierarchical
-proposal and maturation remain the next behavior phase. This internal graph is
+proposal and maturation remain the next behavior phase. The storage/migration
+gate has passed a non-degenerate Chibigochi host-path fixture; owner memory was
+not seeded or migrated. This internal graph is
 part of the slow Archive-to-Core transition, not a fourth prompt-visible
 memory layer.
 

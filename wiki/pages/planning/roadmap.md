@@ -75,8 +75,10 @@ effects. v0.5 лишається в роботі до живого Chibigochi ac
 dedup, а v0.6 hypothesis graph із рівнями узагальнення. Storage foundation
 Phase 2 уже реалізовано окремо від live gate v0.5: schema, journaled migration,
 scope-safe export і compatibility projection не змінюють chat/reflection
-поведінку. Жива міграція Chibigochi ще не прийнята; Phase 3 reasoning не
-вважається реалізованим.
+поведінку. Невироджений disposable Chibigochi host-path fixture закрив
+migration/provenance/idempotence/projection gate; owner storage лишився
+недоторканим і без legacy candidates. Phase 3 reasoning ще не реалізований, а
+live v0.5 reflection calibration лишається окремим behavioral gate.
 
 Google Play додає незалежний release blocker: current `FileStorage` безпечно
 координує тільки один writer process на runtime directory й не є production
@@ -645,15 +647,21 @@ Archive і Core, не четвертий prompt-visible memory layer.
   працювати як `CandidateBelief`, водночас graph-only abstraction,
   contradiction, validity і evidence-directness fields не стираються під час
   legacy update. Cross-scope relations fail closed. — 2026-08-01.
-- [~] Перший прогін journaled migration на 565-file копії живого Chibigochi
+- [x] Перший прогін journaled migration на 565-file копії живого Chibigochi
   storage виконано: deterministic controls і product regression PASS, source
   не змінено, але owner storage мав 0 candidates/reinforcements, тому mapping,
-  provenance і scope controls лишилися `DATASET GAP`. — 2026-08-01,
+  provenance і scope controls чесно лишилися `DATASET GAP`. Наступний
+  невироджений fixture нижче закрив implementation gate, не переписуючи цей
+  історичний результат. — 2026-08-01,
   [acceptance result](../releases/v0.6-hypothesis-graph-storage-acceptance.md#result-2026-08-01-deterministic-pass-live-dataset-gap).
-- [ ] Закрити Phase 2 невиродженим disposable host-path fixture через реально
+- [x] Phase 2 закрито невиродженим disposable host-path fixture через реально
   rebuilt Chibigochi module: owner/other/unscoped candidates, resolved/missing
   units, duplicate/new reinforcement, exact-scope export, projection fallback
-  і repeat idempotence. Не додавати synthetic beliefs у owner storage.
+  і repeat idempotence пройшли; empty arrays перевірені direct indexing;
+  owner storage не мігрувався. Build мав dirty-tree provenance caveat, але
+  audited graph/migration/adapter paths між `e0ad0fa` і чистим descendant
+  `8875e9a` ідентичні. — 2026-08-01,
+  [final fixture result](../releases/v0.6-hypothesis-graph-storage-acceptance.md#final-result-2026-08-01-non-degenerate-fixture-pass).
 - [ ] Trigger-related candidate subgraph замість recency-only останніх N:
   structural baseline плюс optional local-vector enrichment у глибокому шарі;
   non-vector fallback повний, vectors не визначають scope або truth.

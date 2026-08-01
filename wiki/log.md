@@ -8,6 +8,21 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] acceptance | Non-degenerate graph fixture closes Phase 2
+
+Recorded the completed Chibigochi host-path fixture that replaced the first
+empty owner-data run as the implementation proof. Four candidates across three
+scope forms, resolved and missing units, duplicate/new reinforcement, seven
+deduplicated evidence links, exact-scope export, repeat idempotence, full
+CandidateBelief equality and graph-only fallback all passed. Owner storage
+remained unmigrated and unseeded.
+
+The acceptance, roadmap and reflective-belief plan now mark Phase 2 closed
+while preserving the original live `DATASET GAP` as history. They also retain
+the dirty-worktree build provenance caveat and explicitly avoid turning this
+storage PASS into a claim that Phase 3 reasoning or v0.5 live calibration is
+complete.
+
 ## [2026-08-01] implementation | Server S1 identity and ordered-turn reference
 
 Updated the accepted Google Play production track with its first implemented

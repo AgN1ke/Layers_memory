@@ -1,5 +1,38 @@
 # DEVLOG
 
+## Запис 158 — 2026-08-01 — Невироджений fixture закрив graph Phase 2
+
+**Що змінилося від попереднього приймання:**
+Owner storage як і раніше має нуль legacy candidates, але цього разу acceptance
+не повторював порожню migration. Claude побудував окремий disposable
+Chibigochi fixture з owner/other/unscoped scopes, двома resolved MemoryUnit з
+різних archives/sessions, одним missing unit і duplicate/new reinforcement.
+Жива owner memory не мігрувалася.
+
+**Фактичний результат:**
+- empty migration/export keys пройшли direct indexing як стабільні `[]`;
+- чотири candidates стали чотирма nodes і рівно сім evidence links;
+- повторний origin того самого candidate/unit не створив восьме ребро;
+- resolved provenance збігся зі своїми units, unresolved provenance не була
+  вигадана;
+- owner/other/null exports ізольовані як `2/1/1`;
+- repeat migration дала нуль writes і незмінні graph/legacy hashes;
+- `list_candidates()` до/після однаковий, а graph-only projection повністю
+  відновив тимчасово прибраний legacy candidate;
+- owner product path лишився без graph records і без regression.
+
+Phase 2 implementation gate закрито. Ієрархічне reasoning Phase 3 цим не
+оголошується готовим; live v0.5 reflection calibration також лишається окремим
+gate.
+
+**Build provenance caveat:**
+Зовнішній run побачив сім uncommitted library files і тому перевірив конкретний
+зафіксований module hash, а не формально чистий `e0ad0fa` build. Після run
+порівняно `e0ad0fa..8875e9a`: hypothesis, migration, FileStorage projection і
+обидва adapter entry points ідентичні; зміна — незалежний additive server S1
+slice та docs. Caveat лишається в acceptance record і блокує лише claim про
+окремий clean release build, не поведінковий Phase 2 PASS.
+
 ## Запис 157 — 2026-08-01 — Server S1 почався з identity, а не з PostgreSQL
 
 **Чому це наступний незалежний крок:**

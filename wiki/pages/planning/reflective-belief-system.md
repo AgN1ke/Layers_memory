@@ -206,9 +206,11 @@ evidence rejection. Це закриває фундамент цілісност�
 
 ### Phase 2 — Hypothesis graph storage (`v0.6` foundation)
 
-Статус: детермінований storage/API slice реалізовано 2026-08-01; міграція
-реального Chibigochi storage і human inspection на живих candidates ще не
-виконані. Це не змінює prompt або поведінку reflection.
+Статус: storage/API slice і невироджений Chibigochi host-path fixture закриті
+2026-08-01. Owner storage мав нуль legacy candidates, тому його перший
+live-copy run лишається історичним `DATASET GAP`; окремий disposable fixture
+фактично перевірив усі mapping/provenance/isolation/idempotence/projection
+гілки. Це не змінює prompt або поведінку reflection.
 
 Мета — перейти від плоского candidate record до графа, не змінюючи одразу
 поведінку reflection.
@@ -228,6 +230,12 @@ inspection до зміни промпта.
 Фаза завершена, коли старе сховище відкривається без втрати provenance,
 повторна міграція є ідемпотентною, а graph export дозволяє людині простежити
 кожний вузол до первинних MemoryUnit.
+
+Цей gate закрито: чотири legacy candidates у owner/other/unscoped scopes дали
+сім дедуплікованих evidence links із resolved і unresolved provenance;
+повторна migration не змінила graph, compatibility projection лишилася
+ідентичною, а graph-only fallback відновив прибраний legacy candidate. Живу
+owner memory не засівали й не мігрували.
 
 Реалізована форма використовує окремі `hypothesis_node.v1`,
 `hypothesis_evidence_link.v1` і `hypothesis_relation.v1` records у

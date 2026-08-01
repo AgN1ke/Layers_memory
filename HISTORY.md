@@ -46,6 +46,51 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Hypothesis graph Phase 2 passes a non-degenerate host-path fixture
+
+Context. The first Chibigochi storage-copy migration contained no legacy
+candidates, so it could prove empty contracts and product regression but not
+mapping, evidence cardinality, provenance or projection on actual records. The
+required disposable fixture has now exercised every one of those branches
+without seeding or migrating owner memory.
+
+**What changed:**
+- The v0.6 Phase 2 implementation gate is closed by four candidates across
+  owner, other and unscoped namespaces, two resolved units from different
+  archive/session sources, one missing unit and duplicate/new reinforcement.
+- Migration produced four nodes and exactly seven evidence links; duplicate
+  provenance did not become duplicate evidence.
+- Exact-scope export, unresolved provenance, repeat idempotence, complete
+  CandidateBelief equality and graph-only fallback all passed through the
+  Chibigochi Python module path.
+- Empty migration/export collections also passed direct key access as `[]`.
+
+**What is retracted:**
+- The Phase 2 gate is no longer open because of the first run's live
+  `DATASET GAP`. The historical fact that owner storage had no candidates
+  remains true and recorded.
+
+**What is still true:**
+- Owner storage was not migrated and no synthetic beliefs were added to it.
+- Legacy migration creates no semantic relations or abstraction levels and
+  does not implement hierarchical reflection.
+- v0.5 live reflection calibration and normal release/version gates remain
+  separate requirements.
+
+**What we are doing:**
+- Keep the build-provenance caveat visible: the external fixture ran from a
+  worktree with seven uncommitted files. A source audit confirms graph,
+  migration and adapter paths are identical from `e0ad0fa` to clean descendant
+  `8875e9a`, so the behavior gate stands, but this is not represented as a
+  dedicated clean-commit release build.
+- Continue server S2 independently. Phase 3 cognitive behavior starts only
+  under its own typed-action, maturation and live-reflection gates.
+
+**Reproducibility anchor:**
+The fixture geometry and all observed counts are recorded in
+`wiki/pages/releases/v0.6-hypothesis-graph-storage-acceptance.md`; deterministic
+fault/recovery coverage remains in `engine_hypothesis.rs`.
+
 ## 2026-08-01 — Server identity and turn ordering now have fail-closed reference contracts
 
 Context. The accepted Google Play architecture could not safely begin with SQL
