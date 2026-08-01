@@ -87,10 +87,11 @@ Rust cognitive core працює в автентифікованому Memory Ru
 server-derived vault per account зберігається транзакційно у
 PostgreSQL/pgvector. Архітектурне S0 зафіксовано, provisional capacity envelope
 має числа й відкриті owner decisions, а S1 reference contracts уже реалізують
-fail-closed vault identity та ordered/idempotent turn ledger. Storage v2,
-  PostgreSQL, game API, workers і S7 не починались. S2 вже має additive
-  transaction/work-unit reference та перший atomic ingest flow, але решта
-  correctness flows ще не перенесена. Локальні/Chibigochi
+fail-closed vault identity та ordered/idempotent turn ledger. S2.A ingest і
+S2.B Core/committed-view recall пройшли зовнішнє logical-reference приймання;
+S2.C вже має реалізований Sleep-start із внутрішнім acceptance pending.
+PostgreSQL, game API, workers і S7 ще не починались, а решта durable workflows
+не перенесена. Локальні/Chibigochi
 acceptance попередніх версій залишаються правдивими, але не є доказом
 multi-user production scale.
 
@@ -473,8 +474,10 @@ core як централізований сервіс для тисяч грав
   record revisions, idempotent receipt, bounded conflict retry та in-memory
   reference. Перший domain flow (`ingest_transactional`) атомарно комітить
   event + Session metadata. S2.B Core upsert/patch також використовує exact
-  category revision, durable operation result і shared Core policy; чинний
-  Storage/FileStorage API не зламано. Compatibility adapter і решта flow ще
+  category revision, durable operation result і shared Core policy, а recall
+  комітить ranking result і correctness feedback в одному view. S2.A/S2.B
+  externally accepted; чинний Storage/FileStorage API не зламано. S2.C
+  Sleep-start реалізований, але continuation та compatibility adapter ще
   відкриті. — 2026-08-01.
 - [x] Correctness-critical recall state класифіковано й перенесено в S2.B
   reference: `recall_transactional` читає один Archive snapshot, ранжує shared
@@ -485,8 +488,10 @@ core як централізований сервіс для тисяч грав
 - [x] S2.B Core logical implementation: versioned transactional upsert/patch,
   deterministic new fact IDs, durable replay result, exact revision retry,
   point patch із explicit category, scope/vault isolation та fault suite. Це
-  library reference; зовнішнє приймання й host adapter ще відкриті. —
-  2026-08-01, `server_core_storage_v2.rs`.
+  library reference; зовнішнє приймання `2bdc0ae` + `7314833` підтвердило Core
+  і recall suites, shared policy, concurrency/replay та legacy regression.
+  Host adapter ще відкритий. — 2026-08-01, `server_core_storage_v2.rs`,
+  `server_recall_storage_v2.rs`.
 - [x] S2.A ingest logical-reference gate пройшов deterministic
   fault/concurrency suite: before apply,
   після кожної з двох mutations, receipt-before-publish,
@@ -495,8 +500,27 @@ core як централізований сервіс для тисяч грав
   cross-vault denial. Follow-up `af932a4` пройшов зовнішню source-level
   перевірку всіх assertions. Це logical in-memory proof, не host-adapter або
   physical crash test. — 2026-08-01.
-- [ ] Sleep, reflection/review, forgetting, graph migration і tasks мають
-  пройти той самий work-unit gate; provider calls лишаються поза transactions.
+- [~] S2.C Sleep-start реалізовано як один durable-workflow claim: server
+  receive-order визначає active-tail boundary і equal-weight tie-break, а
+  shared Stage 1 policy вибирає source events, після чого
+  Session claim, preliminary Archive, два PendingTasks, initial SleepRun та
+  immutable operation result публікуються шістьма атомарними mutations.
+  Preliminary не означає Complete coverage; pending event IDs живуть окремо.
+  Одинадцять focused tests додано, включно з fail-closed incomplete coverage та
+  fail-closed rewritten-event rejection; внутрішнє приймання ще не завершене. —
+  2026-08-01, `server_sleep_stage1_storage_v2.rs`.
+- [ ] Завершити S2.C: transactional sleep pass submit, finalize і
+  cancel/recovery мають revalidate frozen state, атомарно оновити
+  task/run/archive/MemoryUnit/Session та звільнити active claim; потім перенести
+  fidelity і forgetting. Provider calls лишаються поза transactions.
+- [ ] До S3 нормалізувати Sleep payload: один bounded immutable input record
+  замість повторення raw events у tasks/run/replay result; додати serialized
+  payload/work-unit limits. До host cutover додати monotonic per-Session
+  admission sequence, бо однакові `received_at` зараз мають лише deterministic
+  ID tie-break. Continuation IDs мають бути frozen/deterministic, не `new_id`
+  усередині retry closure.
+- [ ] S2.D reflection/review, hypothesis graph migration, vector state і решта
+  task transitions мають пройти той самий work-unit gate.
 
 ### S3 — PostgreSQLVaultStorage + pgvector
 

@@ -44,12 +44,13 @@ crate/host README files stay outside the wiki.
   clarification.
 - [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md) -
   accepted production track, provisional launch envelope, implemented S1
-  identity/ordered-turn reference, active S2 transactional foundation, and
+  identity/ordered-turn reference, externally accepted S2.A/S2.B logical
+  reference, implemented S2.C Sleep-start pending internal acceptance, and
   planned PostgreSQL, durable worker, migration and launch acceptance phases.
 - [Storage v2 Work-Unit Inventory](pages/planning/storage-v2-work-unit-inventory.md)
-  - complete audit of current storage call chains, externally accepted S2.A
-    atomic-ingest logical reference, commit/lost-ack fault proof, remaining
-    migration waves and S2 exit gate.
+  - complete audit of current storage call chains, externally accepted
+    ingest/Core/Stage 1 recall reference, atomic six-mutation Sleep-start with
+    preliminary-coverage semantics, remaining migration waves and S2 exit gate.
 - [Audit 2026-06-10](pages/planning/audit-2026-06-10.md) - post-v0.2 audit,
   cleanup queue, risks, and resolved findings.
 

@@ -257,6 +257,8 @@ impl FileStorage {
                 archived_to: Vec::new(),
                 archived_event_ids: Vec::new(),
                 archived_event_index_complete: true,
+                active_sleep_task_id: None,
+                sleep_pending_event_ids: Vec::new(),
                 notes: Vec::new(),
             }
         };

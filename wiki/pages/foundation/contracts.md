@@ -13,7 +13,8 @@
 - [Reflective Belief System](../planning/reflective-belief-system.md) - phased
   source for future reflection-operation and hypothesis-graph contracts.
 - [Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md) -
-  planned vault, transaction and service contracts for centralized hosting.
+  accepted vault, transaction and service contracts; S1 identity and additive
+  S2 reference flows are implemented, while PostgreSQL remains pending.
 
 ## Для чого існує цей документ
 
@@ -350,6 +351,8 @@ Sleep запускається окремим викликом `engine.sleep(ses
   "archived_to": [],
   "archived_event_ids": [],
   "archived_event_index_complete": true,
+  "active_sleep_task_id": null,
+  "sleep_pending_event_ids": [],
   "notes": []
 }
 ```
@@ -367,7 +370,22 @@ Sleep запускається окремим викликом `engine.sleep(ses
 - `archived_to` - список complete `archive_id`, створених зі сесії;
 - `archived_event_ids` - перебудовний cache raw `event_id`, вже покритих Complete-архівами цієї сесії;
 - `archived_event_index_complete` - `true`, якщо cache можна читати без повного archive scan; старі metadata без цього поля перебудовуються з Complete archive entries;
+- `active_sleep_task_id` - additive Storage v2 reservation: ID єдиного активного
+  sleep workflow цієї Session. `null` означає, що активної резервації немає;
+- `sleep_pending_event_ids` - raw events, відібрані активним sleep workflow, але
+  ще не покриті Complete-архівом. Це processing state, не archive coverage;
 - `notes` - службові або людські нотатки.
+
+`active_sleep_task_id` і `sleep_pending_event_ids` мають serde-default, тому
+старі `session.v1` records без них читаються як `null` та `[]`. Узгоджений
+pending-стан має `status=sleep_pending`, непорожній task ID і непорожній список
+подій. `archived_to` та `archived_event_ids` змінюються тільки після переходу
+Archive у `complete`: preliminary Archive і pending reservation не мають права
+видавати незавершену консолідацію за канонічне покриття.
+
+JSON contract є backward-compatible, але додавання public полів змінює Rust
+struct literals. За pre-1.0 release governance такий source-level change
+виходить у наступній minor версії з migration note, не як patch release.
 
 ### 4.2 session.md
 
@@ -532,14 +550,23 @@ updated_at: 2026-05-17T16:45:00.000Z
 
 `status`:
 
-- `preliminary` - створений алгоритмічно на sleep-stage-1;
+- `preliminary` - створений алгоритмічно на sleep-stage-1; це durable checkpoint
+  активного workflow, але не recall-visible довгострокова памʼять і не
+  канонічне покриття raw events;
 - `complete` - оновлений після LLM-доробки або прийнятий як повний без неї;
 - `superseded` - замінений новішим спогадом;
 - `needs_review` - потребує ручного огляду.
 
 `embedding_model_id` і `embedding` на v0.1 завжди `null`.
 
-`compact_memory` — prompt-facing стиснута памʼять: plain-text тези "подія -> висновок", створені окремим LLM `compact_memory_pass`. Це не debug JSON і не програмна проекція з full archive. Якщо поле є, ordinary chat prompt має використовувати його як `archive_relevant` memory. Якщо поля немає у legacy/preliminary entry, host може fallback-нути на `gist`.
+`compact_memory` — prompt-facing стиснута памʼять: plain-text тези "подія ->
+висновок". Основний sleep driver отримує атомарні тези через
+`memory_unit_pass`, валідує `MemoryUnit` і детерміновано рендерить із них
+`compact_memory`; legacy API окремого `compact_memory_pass` лишається
+compatibility-шляхом. Це не debug JSON і не довільна програмна проекція з full
+archive. Ordinary chat recall читає лише Complete archive entries; якщо
+`compact_memory` відсутній у Complete legacy entry, projection може
+fallback-нути на `gist`.
 
 Multi-track поля `emotional_markers`, `topic_thread`, `personal_signals`, `relational_tone` заповнюються multi-pass sleep у host-і для storage/debug audit, Core bridge і майбутнього reflection. Старі archive entries можуть не мати цих полів; reader має трактувати відсутні масиви як порожні, а відсутній `relational_tone` як `null`.
 
@@ -777,7 +804,7 @@ structural recall; opt-in Stage 2 доступний через explicit `engine
 
 `utc_offset_minutes` (default `0`) — локальний зсув хоста для календарних часових міток у prompt view («вчора» — локальне поняття, сховище лишається в UTC). `clock_untrusted` (default `false`) — хост може позначити свій годинник ненадійним; тоді prompt view опускає часові мітки замість рендерити хибні. Відносні мітки ніколи не зберігаються у файлах — вони обчислюються при рендері з абсолютних timestamp-ів і `created_at` пакета, тому не «гниють» після простою.
 
-`session_recent` і `session_trace` у відповіді містять тільки active tail: події поточної сесії, які ще не покриті жодним archive entry через `source_event_ids`. Події, які вже пройшли sleep, повертаються через `archive_relevant`, а не дублюються як raw session events. Default rolling sleep лишає приблизно 30% найсвіжіших unarchived events active, якщо window досяг `partial_sleep_min_events`.
+`session_recent` і `session_trace` у відповіді містять тільки active tail: події поточної сесії, які ще не покриті жодним Complete archive entry через `source_event_ids`. Preliminary entry не прибирає їх із живого контексту. Події, які вже завершили sleep, повертаються через `archive_relevant`, а не дублюються як raw session events. Default rolling sleep лишає приблизно 30% найсвіжіших unarchived events active, якщо window досяг `partial_sleep_min_events`.
 
 `token_budget` необовʼязковий. Якщо host його не передає, ядро використовує default 11k/7k/3k/1k. Це budget для memory context package, а не повний budget усього LLM-запиту. На v0.1 token count — детермінована оцінка за conservative estimator, не provider-specific tokenizer.
 
@@ -1635,9 +1662,9 @@ storing them.
 
 ---
 
-## 10. CompactMemoryPass Result
+## 10. CompactMemoryPass Result (compatibility)
 
-Результат, який хост повертає у `engine.resume_compact_memory_pass(task_id, text)` для `compact_memory_pass`.
+Результат старого прямого шляху, який хост повертає у `engine.resume_compact_memory_pass(task_id, text)` для `compact_memory_pass`. Основний sleep-run використовує `memory_unit_pass` і рендерить `compact_memory` у ядрі; цей контракт збережений для сумісності.
 
 Це **plain text**, не JSON:
 
@@ -1702,7 +1729,10 @@ storing them.
 - `narrative` не має бути порожнім і має передавати не лише "про що говорили", а й "що сталося / що це означало / який емоційний тон був прямо підтриманий подіями";
 - `facts` може бути порожнім, але якщо факт є, він має мати `text` і `confidence`;
 - `quotes` можуть бути порожніми;
-- `compact_memory` може бути відсутнім, якщо host ще не виконав `compact_memory_pass`, але якщо присутнє — не може бути порожнім;
+- `compact_memory` може бути відсутнім у preliminary/incomplete або Complete
+  legacy entry. Основний sleep-run будує його з validated `memory_unit_pass`;
+  окремий `compact_memory_pass` лишається compatibility API. Якщо поле
+  присутнє, воно не може бути порожнім;
 - `weight` має бути `0.0..1.0`;
 - `tags` мають бути короткими машинними рядками.
 - `emotional_markers`, `topic_thread`, `personal_signals` можуть бути порожніми масивами;
@@ -1945,8 +1975,9 @@ engine instance виконує цей recovery один раз до читанн
 
 ## 15. Файли і джерела правди
 
-Цей розділ є нормативним для реалізованого `FileStorage`. Planned server
-backend має окрему operational truth boundary у §15.1, але зобовʼязаний
+Цей розділ є нормативним для реалізованого `FileStorage`. Реалізований additive
+Storage v2 server contract має окрему operational truth boundary у §15.1, але
+ще не є production PostgreSQL backend і зобовʼязаний
 round-trip-ити ті самі versioned domain records через portable export/import.
 
 Мінімальна файлова структура v0.1:
@@ -2113,7 +2144,11 @@ flow inventory і migration order зафіксовані у
   `transactional_core_upsert_result.v1` — одна Core category та durable result;
 - `transactional_core_patch_request.v1` /
   `transactional_core_patch_result.v1` — point patch, де category є явною
-  частиною frozen input.
+  частиною frozen input;
+- `transactional_sleep_start_request.v1` /
+  `transactional_sleep_start_result.v1` — атомарний старт одного sleep workflow
+  для Session. Його immutable replay target має внутрішню persisted schema
+  `sleep_start_operation_result.v1`.
 
 Core operation result зберігається атомарно окремим versioned record і
 перевіряється через receipt digest. Це дає exact replay навіть якщо category
@@ -2136,6 +2171,59 @@ revisions, тому phantom insert/delete/update спричиняє retry. Repla
 `query_embedding` відхиляється до перенесення vector records у S2.D. In-memory
 `scan_collection` доводить committed-view semantics; production S3 adapter має
 реалізувати indexed vault query, а не переносити full scan у hot path.
+
+У server domain collection `session_events` є append-only. Transactional ingest
+створює event тільки через `ExpectedRevision::Absent`; валідний StoredEvent
+залишається на revision `1` і не оновлюється або видаляється звичайним domain
+flow. Session metadata змінюється окремо. Retention/migration, якщо зʼявиться,
+має бути явною audited операцією, а не прихованим update події. Sleep scan
+fail-closed на event record, який порушує цю інваріанту.
+
+`transactional_sleep_start_request.v1` freeze-ить `session_id`, `created_at` і
+повний `SleepStage1Config` у request digest. Рекомендований
+`MemoryEngine::new_transactional_sleep_start_request` копіює policy з
+`EngineOptions`. Низькорівневий request type публічний для серіалізації й
+trusted Runtime integration, тому game API не має напряму експонувати його
+policy fields клієнту. Core валідує форму й digest, але навмисно не порівнює
+frozen policy з поточними options: replay після конфігураційної зміни повинен
+лишитися історично точним. FileStorage і Storage v2 викликають одну shared
+Stage 1 policy для compactable window, selection, preliminary Archive та task
+projection — server path не має другої когнітивної реалізації.
+
+Один успішний `sleep_start` комітить рівно шість mutations в одному vault-bound
+work unit:
+
+1. Session переходить у `sleep_pending` і отримує `active_sleep_task_id` та
+   `sleep_pending_event_ids`;
+2. створюється preliminary Archive;
+3. створюється `sleep_compression` PendingTask;
+4. створюється `memory_unit_pass` PendingTask;
+5. створюється початковий durable `SleepRun`;
+6. створюється immutable `sleep_start_operation_result.v1` snapshot.
+
+Archive/task/run/request IDs детерміновані з bound `vault_id`, operation ID,
+frozen request digest і внутрішньої label. Receipt посилається на immutable
+operation result, а не на mutable `SleepRun`, тому replay повертає початковий
+run навіть після того, як worker просуне живий run далі. Повтор того самого
+operation/input не створює нових records; той самий operation ID з іншим input
+відхиляється.
+
+Reference implementation читає exact Session і committed snapshot
+`session_events`, фільтрує тільки цю Session та відновлює server-controlled
+порядок надходження за `received_at`, потім `event_id`. Shared policy застосовує
+цей порядок і до active-tail partition, і до equal-weight truncation/final task
+order; client event `timestamp` лишається domain provenance, а не керує
+selection. Однаковий `received_at` поки має детермінований ID tie-break, але до
+host cutover server contract має додати monotonic per-Session admission
+sequence. Full-vault collection scan існує лише як in-memory conformance proof;
+production S3 adapter має дати еквівалентний vault/session-bound indexed query
+з тією самою snapshot/phantom семантикою.
+
+Жодного LLM/provider call усередині start transaction немає: атомарний commit
+лише публікує durable intent і workflow state. Transactional submit,
+finalize/Complete coverage та cancel/clear-reservation ще не реалізовані у
+Storage v2. До їх появи S2.C є перевіреною основою старту, а не завершеним
+server Sleep flow і не підставою перемикати Python/Godot adapters.
 
 PostgreSQL row-level security, composite `(vault_id, id)` references і
 non-owner runtime role є defense in depth поверх bound storage handle. Вони не

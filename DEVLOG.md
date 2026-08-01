@@ -1,5 +1,62 @@
 # DEVLOG
 
+## Запис 164 — 2026-08-01 — S2.C атомарно відкрив server Sleep workflow
+
+Після зовнішнього PASS для обох S2.B slices наступним цілісним переходом став
+не окремий task-файл, а початок Sleep як одного workflow. Transactional path
+використовує спільну Rust Stage 1 policy: той самий відбір compactable events,
+той самий active-tail ratio, preliminary Archive і task builders, що й
+FileStorage path. Окремої «серверної свідомості» для sleep не створено.
+
+Один work unit атомарно робить шість mutations: переводить Session у
+`SleepPending` і резервує точні `sleep_pending_event_ids`, створює preliminary
+Archive, `sleep_compression` task, `memory_unit_pass` task, початковий mutable
+`SleepRun` та окремий immutable operation result. Останній потрібен не для
+дублювання стану, а для чесного replay: коли provider пізніше просуне живий
+`SleepRun`, повтор того самого start operation все одно поверне первісний
+результат і не відкриє другий workflow.
+
+Під час проходу інформації уточнено важливу межу. Preliminary Archive не є
+підтвердженою довгою памʼяттю, тому start не записує його event IDs у
+`archived_event_ids` і не рухає `archived_to`. Вибрані події лишаються доступні
+живому контексту. Канонічне Complete coverage має зʼявитися лише у майбутньому
+успішному transactional finalize; cancel має звільнити reservation без
+удаваної втрати подій. Саме тому Session отримала окремі поля
+`active_sleep_task_id` і `sleep_pending_event_ids`, а не перевантажила старе
+значення archive coverage.
+
+JSON-сумісність полів additive завдяки serde defaults, але public Rust struct
+literal мусить додати обидва поля. Це source-breaking межа для downstream Rust
+і за нашою pre-1.0 SemVer політикою піде лише в minor release; поточні package
+versions до release gate навмисно не рухались.
+
+Порядок для active tail і equal-weight selection реконструюється за
+server-controlled `received_at`, а не за client event time: користувацький
+timestamp не може протиснути новий хід у compactable head, витіснити старий хід
+у захищений хвіст або виграти truncation tie. Усередині транзакції немає
+provider call — вона лише фіксує когерентний durable намір і роботу для
+зовнішнього worker.
+
+Одинадцять focused tests перевіряють six-mutation coherence, lost acknowledgement
+і exact replay після зміни живого run, спільну selection policy, receive-order
+tail, конкуренцію двох sleep starts, гонку ingest/start, rollback на кожній
+логічній межі, frozen digest/operation-ID conflict, fail-closed incomplete
+coverage index, fail-closed відмову на переписаному append-only event record та
+vault isolation. Це S2.C logical reference, не production readiness.
+
+Наступна робота — transactional submit/finalize/cancel із атомарним Complete
+Archive coverage, очищенням Session reservation і durable task/run progress.
+Manifest transitions, PostgreSQL, host adapters, workers та фізичні
+crash/WAL/network тести залишаються відкритими; живий Chibigochi path цим
+комітом не перемикається.
+
+Перед S3 лишаються ще дві навмисно зафіксовані schema-задачі. Reference shape
+поки повторює raw task inputs у PendingTasks, mutable SleepRun та immutable
+result, що доводить replay, але не є прийнятною PostgreSQL формою; потрібен один
+bounded immutable sleep-input record і посилання на нього. А `received_at +
+event_id` дає детермінований, але не справжній порядок двох одночасно прийнятих
+turns — host cutover має принести monotonic per-Session admission sequence.
+
 ## Запис 163 — 2026-08-01 — S2.B recall став committed cognitive transition
 
 Після Core slice перенесено correctness-affecting recall state. Новий
@@ -23,9 +80,9 @@ query на transactional API відхиляється до S2.D замість �
 downgrade. Full-vault scan допустимий лише в conformance reference; S3 має
 довести indexed query plan.
 
-Наступний S2.B slice: manifest/task/checkpoint transitions і Session archive
-coverage. Host adapters, PostgreSQL і production readiness залишаються
-відкритими.
+Зовнішнє приймання S2.B підтвердило Core і recall slices як PASS. Наступний
+етап — S2.C transactional Sleep lifecycle; host adapters, PostgreSQL і
+production readiness залишаються відкритими.
 
 ## Запис 162 — 2026-08-01 — S2.B почався з транзакційного Core
 

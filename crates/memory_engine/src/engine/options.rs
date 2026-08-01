@@ -23,7 +23,7 @@ pub struct EventScoringConfig {
     pub critical_floor: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SleepStage1Config {
     pub min_event_weight: f64,
     pub max_events: usize,

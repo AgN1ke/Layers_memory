@@ -51,32 +51,24 @@ impl<S: Storage> MemoryEngine<S> {
             )));
         }
 
-        let compactable_events = compactable_sleep_events(&unarchived_events, &self.options.sleep);
-        let selected_events = select_sleep_events(&compactable_events, &self.options.sleep);
         let now = now_rfc3339()?;
         let archive_id = new_id("archive")?;
-        let archive_entry =
-            build_preliminary_archive(&session, &selected_events, &archive_id, &now);
-        self.storage.write_archive_entry(&archive_entry)?;
-
-        let pending_task = build_sleep_compression_task(
+        let result = prepare_sleep_stage1(
             &session,
-            &selected_events,
-            &archive_entry,
+            &unarchived_events,
             &self.options.sleep,
             &now,
+            archive_id,
+            new_id("task")?,
+            new_id("task")?,
         )?;
-        let memory_unit_task =
-            build_memory_unit_task(&session, &selected_events, &archive_entry, &now)?;
-        self.storage.save_task(&pending_task)?;
-        self.storage.save_task(&memory_unit_task)?;
+        self.storage.write_archive_entry(&result.archive_entry)?;
+        self.storage.save_task(&result.pending_task)?;
+        if let Some(memory_unit_task) = result.memory_unit_task.as_ref() {
+            self.storage.save_task(memory_unit_task)?;
+        }
 
-        Ok(SleepStage1Result {
-            archive_entry,
-            pending_task,
-            memory_unit_task: Some(memory_unit_task),
-            compact_memory_task: None,
-        })
+        Ok(result)
     }
 
     pub fn next_sleep_batch(&self, mut run: SleepRun) -> Result<SleepRunStep> {

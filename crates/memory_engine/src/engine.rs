@@ -104,6 +104,7 @@ mod sleep_flow;
 mod transactional_core;
 mod transactional_ingest;
 mod transactional_recall;
+mod transactional_sleep;
 mod transactional_support;
 mod validation;
 mod vector_flow;
@@ -125,6 +126,7 @@ pub use transactional_core::{
 };
 pub use transactional_ingest::{TransactionalIngestRequest, TransactionalIngestResult};
 pub use transactional_recall::{TransactionalRecallRequest, TransactionalRecallResult};
+pub use transactional_sleep::{TransactionalSleepStartRequest, TransactionalSleepStartResult};
 use validation::*;
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SLEEP_RUN_SCHEMA_VERSION: &str = "sleep_run.v1";

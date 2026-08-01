@@ -47,12 +47,71 @@ pub(super) fn select_sleep_events<'a>(
         right
             .initial_weight
             .total_cmp(&left.initial_weight)
-            .then_with(|| right.timestamp.cmp(&left.timestamp))
-            .then_with(|| left.event_id.cmp(&right.event_id))
+            .then_with(|| compare_sleep_receive_order(right, left))
     });
     selected.truncate(config.max_events);
-    selected.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    selected.sort_by(|left, right| compare_sleep_receive_order(left, right));
     selected
+}
+
+pub(super) fn compare_sleep_receive_order(
+    left: &StoredEvent,
+    right: &StoredEvent,
+) -> std::cmp::Ordering {
+    match (
+        parse_rfc3339(&left.received_at),
+        parse_rfc3339(&right.received_at),
+    ) {
+        (Some(left_time), Some(right_time)) => left_time.cmp(&right_time),
+        _ => left.received_at.cmp(&right.received_at),
+    }
+    .then_with(|| left.event_id.cmp(&right.event_id))
+}
+
+/// The single Stage-1 cognitive policy used by file storage and Storage v2.
+/// Storage-specific code decides how records are read and published; event
+/// selection and the Archive/task projection live here so the two runtimes
+/// cannot drift into different memories.
+pub(super) fn prepare_sleep_stage1(
+    session: &SessionRecord,
+    unarchived_events: &[&StoredEvent],
+    config: &SleepStage1Config,
+    now: &str,
+    archive_id: String,
+    sleep_task_id: String,
+    memory_unit_task_id: String,
+) -> Result<SleepStage1Result> {
+    let compactable_events = compactable_sleep_events(unarchived_events, config);
+    let selected_events = select_sleep_events(&compactable_events, config);
+    if selected_events.is_empty() {
+        return Err(MemoryEngineError::Validation(
+            "sleep policy selected no events".to_string(),
+        ));
+    }
+
+    let archive_entry = build_preliminary_archive(session, &selected_events, &archive_id, now);
+    let pending_task = build_sleep_compression_task_with_id(
+        session,
+        &selected_events,
+        &archive_entry,
+        config,
+        now,
+        sleep_task_id,
+    )?;
+    let memory_unit_task = build_memory_unit_task_with_id(
+        session,
+        &selected_events,
+        &archive_entry,
+        now,
+        memory_unit_task_id,
+    )?;
+
+    Ok(SleepStage1Result {
+        archive_entry,
+        pending_task,
+        memory_unit_task: Some(memory_unit_task),
+        compact_memory_task: None,
+    })
 }
 
 pub(super) fn build_preliminary_archive(
@@ -114,16 +173,17 @@ pub(super) fn build_preliminary_archive(
     }
 }
 
-pub(super) fn build_sleep_compression_task(
+pub(super) fn build_sleep_compression_task_with_id(
     session: &SessionRecord,
     events: &[&StoredEvent],
     archive_entry: &ArchiveEntry,
     config: &SleepStage1Config,
     now: &str,
+    task_id: String,
 ) -> Result<PendingTask> {
     Ok(PendingTask {
         schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
-        task_id: new_id("task")?,
+        task_id,
         task_type: TaskType::SleepCompression,
         state: TaskState::Pending,
         created_at: now.to_string(),
@@ -200,15 +260,16 @@ pub(super) fn build_compact_memory_task(
     })
 }
 
-pub(super) fn build_memory_unit_task(
+pub(super) fn build_memory_unit_task_with_id(
     session: &SessionRecord,
     events: &[&StoredEvent],
     archive_entry: &ArchiveEntry,
     now: &str,
+    task_id: String,
 ) -> Result<PendingTask> {
     Ok(PendingTask {
         schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
-        task_id: new_id("task")?,
+        task_id,
         task_type: TaskType::MemoryUnitPass,
         state: TaskState::Pending,
         created_at: now.to_string(),
@@ -465,16 +526,34 @@ pub(super) fn archive_weight(events: &[&StoredEvent]) -> f64 {
 }
 
 pub(super) fn sleep_run_from_stage1(stage1: SleepStage1Result) -> Result<SleepRun> {
+    sleep_run_from_stage1_with_request_ids(
+        stage1,
+        new_id("llm_req")?,
+        [
+            new_id("llm_req")?,
+            new_id("llm_req")?,
+            new_id("llm_req")?,
+            new_id("llm_req")?,
+        ],
+    )
+}
+
+pub(super) fn sleep_run_from_stage1_with_request_ids(
+    stage1: SleepStage1Result,
+    memory_unit_request_id: String,
+    track_request_ids: [String; 4],
+) -> Result<SleepRun> {
     let mut requests = Vec::new();
     let sleep_task = stage1.pending_task;
 
     if let Some(memory_unit_task) = stage1.memory_unit_task.clone() {
         requests.push(SleepRequestState {
             track: SleepTrack::MemoryUnit,
-            request: llm_request_from_task(
+            request: llm_request_from_task_with_id(
                 &memory_unit_task,
                 "memory_unit_pass",
                 json!({ "sleep_task": memory_unit_task.inputs }),
+                memory_unit_request_id,
             )?,
             attempts: 0,
             completed: false,
@@ -482,7 +561,7 @@ pub(super) fn sleep_run_from_stage1(stage1: SleepStage1Result) -> Result<SleepRu
         });
     }
 
-    for (track, prompt_id, fallback_schema) in [
+    for ((track, prompt_id, fallback_schema), request_id) in [
         (
             SleepTrack::Emotional,
             "sleep_emotional_pass",
@@ -503,11 +582,14 @@ pub(super) fn sleep_run_from_stage1(stage1: SleepStage1Result) -> Result<SleepRu
             "sleep_relational_pass",
             "sleep_relational_pass.v1",
         ),
-    ] {
+    ]
+    .into_iter()
+    .zip(track_request_ids)
+    {
         requests.push(SleepRequestState {
             track,
             request: LlmRequest {
-                request_id: new_id("llm_req")?,
+                request_id,
                 task_id: sleep_task.task_id.clone(),
                 role_hint: sleep_task.role_hint,
                 prompt_id: prompt_id.to_string(),
@@ -547,8 +629,17 @@ pub(super) fn llm_request_from_task(
     prompt_id: &str,
     prompt_inputs: Value,
 ) -> Result<LlmRequest> {
+    llm_request_from_task_with_id(task, prompt_id, prompt_inputs, new_id("llm_req")?)
+}
+
+pub(super) fn llm_request_from_task_with_id(
+    task: &PendingTask,
+    prompt_id: &str,
+    prompt_inputs: Value,
+    request_id: String,
+) -> Result<LlmRequest> {
     Ok(LlmRequest {
-        request_id: new_id("llm_req")?,
+        request_id,
         task_id: task.task_id.clone(),
         role_hint: task.role_hint,
         prompt_id: prompt_id.to_string(),

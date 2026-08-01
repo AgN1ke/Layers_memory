@@ -46,6 +46,62 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Transactional sleep start separates reservation from durable coverage
+
+Context. Starting sleep creates several mutually dependent records before any
+provider can reason over them. On a multi-replica server, sequential writes
+could expose a preliminary Archive without its tasks, lose the orchestration
+cursor, or let two workers reserve the same Session tail. Treating that
+reservation as completed archive coverage would also make a failed sleep hide
+live events from later context.
+
+**What changed:**
+- Added a versioned transactional sleep-start request/result that reuses the
+  same Rust Stage 1 selection and task-building policy as the FileStorage path.
+- One work unit now commits six mutations: the Session `SleepPending`
+  reservation, preliminary Archive, sleep-compression task, memory-unit task,
+  initial mutable `SleepRun`, and immutable operation result.
+- Replay reads the immutable result, so it returns the exact initial run even
+  after the live `SleepRun` advances. Provider calls remain outside the
+  transaction.
+- Sleep selection protects both the active-tail boundary and equal-weight
+  truncation/order by engine-owned receive time, not by caller-controlled event
+  timestamps.
+- `SessionMetadata` adds `active_sleep_task_id` and
+  `sleep_pending_event_ids`. Old JSON remains readable through serde defaults,
+  but downstream Rust struct literals must add the new fields; under the
+  project’s pre-1.0 governance this requires a minor release, not a patch.
+
+**What is retracted:**
+- The earlier phrase “Session archive coverage” was too broad for this slice.
+  Sleep start only reserves selected event IDs. It deliberately leaves
+  `archived_event_ids` and `archived_to` untouched; only a future successful
+  transactional finalize may record Complete-archive coverage.
+
+**What is still true:**
+- The preliminary Archive is not completed long-term knowledge, and selected
+  events remain available to live context until completion.
+- Existing persisted Storage v1 data and Python/Godot runtime paths are
+  unchanged. Direct Rust construction of `SessionMetadata` has the source
+  compatibility note above. This is an in-memory logical reference, not a
+  PostgreSQL or host-readiness claim.
+- The externally reviewed S2.B Core and committed-recall slices remain PASS.
+
+**Verification:**
+- Eleven focused tests cover the coherent six-mutation commit, immutable replay
+  after a mutable run advances, receive-order tail selection, one active sleep
+  per Session, ingest/start concurrency, every logical rollback edge, frozen
+  input and operation-ID conflicts, fail-closed incomplete coverage state, and
+  fail-closed rejection of a rewritten append-only event, and vault isolation.
+
+**What we are doing:**
+- Add transactional submit/finalize/cancel before switching any host. Manifest
+  transitions, PostgreSQL, authenticated adapters, durable workers and physical
+  crash/WAL/network proof remain open.
+- Before PostgreSQL, replace repeated inline raw prompt payloads with one
+  bounded immutable sleep-input record plus references, and persist a true
+  per-Session admission sequence for equal receive timestamps.
+
 ## 2026-08-01 — Recall feedback becomes committed server correctness state
 
 Context. The compatible FileStorage path buffers recall counters inside one
@@ -74,8 +130,8 @@ forgetting protection depend on which process served the request.
   S3 still requires indexed PostgreSQL queries and query-plan evidence.
 
 **What we are doing:**
-- Continue S2.B with task/manifest/checkpoint transitions and Session archive
-  coverage, then port the larger durable workflows.
+- Continue from the accepted S2.B Core/recall gate into transactional sleep
+  lifecycle work, then port the remaining durable workflows.
 
 ## 2026-08-01 — Transactional Core preserves one policy and exact replay
 

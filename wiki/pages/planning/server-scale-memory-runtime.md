@@ -15,8 +15,9 @@
 
 ## Status and purpose
 
-Status: **accepted strategic plan; S1 reference contracts implemented; S2
-transactional foundation in progress**.
+Status: **accepted strategic plan; S1 reference contracts implemented; S2.A
+and S2.B externally accepted; S2.C Sleep-start implemented with internal
+acceptance pending**.
 
 This document is the implementation authority for taking Memory Engine from a
 single-process/local storage library to the centralized service required by a
@@ -247,8 +248,8 @@ not exist yet; and production multi-replica atomicity waits for Storage v2.
 
 ### S2 — Transaction-capable Storage v2
 
-**Outcome:** one domain transition is atomic and retryable independent of the
-physical backend.
+**Outcome:** every migrated domain transition is atomic and retryable
+independent of the physical backend.
 
 Inventory every current `Storage` call chain and classify it as read-only,
 single-record, transactional mutation or durable workflow. Introduce a
@@ -288,6 +289,40 @@ Another engine instance sees the committed counters immediately. The reference
 may scan one vault collection to prove semantics, but S3 still owes indexed
 queries and query-plan evidence. Stage 2 is rejected on this API until vector
 records migrate in S2.D.
+
+Independent source-level acceptance has passed both S2.B slices at `2bdc0ae`
+and `7314833`: shared Core/recall policy, replay, concurrency, scope/vault
+isolation, atomic feedback, cross-replica visibility and phantom protection
+were inspected alongside workspace, clippy, documentation and adapter
+regression gates. This closes S2.B as a logical in-memory reference, not as a
+host or production backend.
+
+The first S2.C slice now implements the durable Sleep start. One work unit
+freezes the shared Stage 1 policy and selected event sources, uses
+server-controlled receive time for the active-tail boundary and equal-weight
+selection, claims the Session for exactly one active sleep, and publishes six
+mutations together: Session metadata,
+preliminary Archive, compression and MemoryUnit PendingTasks, initial SleepRun
+and immutable operation result. Replay returns the original run. The Session
+stores pending source IDs separately; a preliminary Archive does not advance
+Complete coverage or remove events from the live session. Eleven focused tests
+cover that boundary, including fail-closed incomplete coverage state and
+rejection of rewritten append-only events, but internal acceptance is still
+pending.
+
+This is only the workflow start. Provider execution remains outside the work
+unit, and transactional submit, finalize and cancel/recovery must still
+revalidate frozen inputs, advance tasks/run/archive/units together and clear the
+Session claim. Fidelity, forgetting, vector state, PostgreSQL and host adapters
+remain open; therefore neither S2 nor production readiness is claimed.
+
+Two server-schema gates are explicit before S3. First, the conformance model
+currently repeats raw event prompt inputs across tasks, the mutable run and the
+immutable replay result; PostgreSQL must receive one bounded immutable input
+record plus typed references/digests, not that expanded shape. Second,
+`received_at + event_id` is deterministic for equal timestamps but is not a
+true turn order. The authenticated turn path must persist a monotonic
+per-Session admission sequence and Sleep queries must use it.
 
 ### S3 — PostgreSQLVaultStorage and pgvector
 

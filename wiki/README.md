@@ -65,8 +65,13 @@ one server-derived vault per account, transactional PostgreSQL/pgvector,
 durable workers, portable export/restore and whole-turn load/isolation gates.
 This architecture is accepted. S1 reference contracts now cover fail-closed
 vault identity, idempotent ordered turns and a local restart/isolation harness.
-Transactional Storage v2, PostgreSQL, the authenticated game API and
-production-scale acceptance remain open.
+Storage v2 has an externally accepted logical reference for ingest, Core and
+committed-view Stage 1 recall. Its first S2.C durable-workflow slice now starts
+Sleep atomically with one Session claim and immutable replay, while preserving
+the distinction between preliminary work and Complete archive coverage;
+internal acceptance is still pending. Sleep continuation/finalization,
+fidelity, forgetting, reflection/vector workflows, PostgreSQL, the
+authenticated game API and production-scale acceptance remain open.
 
 ## How To Read The Wiki
 
@@ -83,6 +88,7 @@ For current work, read:
 - [Roadmap](pages/planning/roadmap.md)
 - [Reflective Belief System](pages/planning/reflective-belief-system.md)
 - [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md)
+- [Storage v2 Work-Unit Inventory](pages/planning/storage-v2-work-unit-inventory.md)
 - [Server Memory Runtime research](pages/research/server-memory-runtime-2026-08-01.md)
 - [Contextual memory expansion](pages/research/contextual-memory-expansion-2026-07-05.md)
 - [Vector storage implementation spec](pages/research/vector-storage-tz-2026-07-03.md)

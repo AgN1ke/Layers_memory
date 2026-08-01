@@ -8,6 +8,36 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] implementation | S2.B accepted and S2.C Sleep-start recorded
+
+Recorded the independent PASS for S2.B commits `2bdc0ae` and `7314833`.
+Transactional Core and committed-view Stage 1 recall were checked for one
+shared policy, exact replay, concurrency, vault isolation, atomic feedback,
+cross-replica visibility, phantom protection and unchanged Storage v1/adapters.
+The wiki closes only that logical in-memory reference gate.
+
+Documented the next implemented slice as S2.C Sleep-start, with internal
+acceptance still pending. It freezes the shared Stage 1 policy, derives the
+active-tail boundary from server-controlled receive order and atomically
+publishes six mutations: one
+Session workflow claim, a preliminary Archive, two PendingTasks, initial
+SleepRun and immutable operation result. A separate pending-event reservation
+preserves the invariant that only Complete archives advance Session coverage.
+Eleven focused tests cover replay, active-tail ordering, contention, concurrent
+ingest, all mutation edges, tamper, operation reuse, fail-closed incomplete
+coverage state, fail-closed rejection of a rewritten event and vault isolation.
+
+The update does not call S2 complete or the runtime production-ready.
+Transactional submit/finalize/cancel, fidelity, forgetting, reflection/vector
+flows, PostgreSQL and host adapters remain open.
+
+Final review also recorded two S3-blocking schema debts rather than hiding them
+inside the reference proof: repeated raw prompt payloads must become one
+bounded immutable input record with references, and equal receive timestamps
+need a true monotonic per-Session admission sequence. Transactional
+continuation must derive/freeze IDs instead of reusing Storage v1 random-ID
+helpers inside a retry closure.
+
 ## [2026-08-01] acceptance | S2.A logical reference passes external review
 
 Recorded the independent source-level PASS for follow-up `af932a4`. The review

@@ -11,7 +11,9 @@
 - [Reflective Belief System](../planning/reflective-belief-system.md) - target
   architecture after v0.5 integrity closure.
 - [Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md) -
-  accepted production deployment architecture; not implemented yet.
+  accepted production deployment architecture; S1 identity and additive S2
+  transactional reference flows are implemented, while PostgreSQL and host
+  cutover remain pending.
 - [v0.3 acceptance](../releases/v0.3-acceptance.md) - conformance proof for
   reusable adapters.
 - [Local development](../integration/local-development.md) - practical commands
@@ -143,8 +145,9 @@ audit/debug, а `.md` exports відкладені до реального workf
 
 Ядро системи має `Storage` як Rust trait. Дефолтна імплементація — файлова. Для
 самого `FileStorage` будь-який додатковий індекс лишається кешем, перебудовним
-із файлів. Окрема server implementation має іншу operational truth boundary,
-описану нижче, але не змінює доменну модель памʼяті.
+із файлів. Additive Storage v2 уже реалізує окрему server operational truth
+boundary для перенесених domain flows, описану нижче, але не змінює доменну
+модель памʼяті й ще не є production PostgreSQL backend.
 
 Crash safety реалізується двома механізмами:
 
@@ -276,7 +279,7 @@ processing_mode: defer_to_sleep
 
 **Має ліміт розміру.** Конкретні цифри (кількість подій, символів, токенів) задаються конфігом хоста, не зашиті в ядро. При наближенні до ліміту ядро системи попередньо стискає найстаріші частини у короткий summary, який залишається в сесії, а оригінальні події переходять у буфер під sleep. Живий хвіст сесії залишається повним — це він підтримує відчуття безперервності в LLM-контексті.
 
-**Підтримує ранню фіксацію важливих подій.** Якщо подія прийшла з `importance_hint: high` або scoring дав їй високу попередню вагу, ядро системи може ще до sleep записати її як preliminary archive entry. Це страхує від втрати важливих моментів при раптовому обриві.
+**Підтримує ранню фіксацію важливих подій.** Якщо подія прийшла з `importance_hint: high` або scoring дав їй високу попередню вагу, ядро системи може ще до завершення sleep записати її як preliminary archive entry. Це durable checkpoint для відновлення workflow, а не готова довгострокова памʼять: preliminary запис не бере участі у звичайному recall і не покриває raw event канонічно.
 
 **Консолідація сесії** виконується через sleep-run driver (`begin_sleep_run` → `next_sleep_batch` → `submit_sleep_batch` → `finish_sleep_run`). Complete sleep покриває старші події archive entry через `source_event_ids`, лишає свіжий active tail у `events.jsonl`, а raw-події, які вже покриті Complete-архівами і старші за active tail, може ротувати у `sessions/<session_id>/archived/events-<NNN>.jsonl`. Покриття Complete-архівів кешується в `session.json` як `archived_to`, `archived_event_ids` і `archived_event_index_complete`, щоб `core_context_package` і sleep selection не сканували весь архів на кожен хід; для старих metadata існує rebuild path із Complete archive entries. Для prompt context такі події більше не вважаються короткостроковою памʼяттю: `core_context_package` подає їх через `long_memory`, а `short_memory` містить тільки unarchived active tail. Evidence/audit paths читають active + archived raw segments з дедуплікацією за `event_id`; `session.md` лишається повним людським журналом.
 
@@ -504,8 +507,8 @@ reflection/review operations один раз; вже отриманий LLM resu
 На v0.2 ядро системи реально використовує такі LLM-backed задачі:
 
 - **sleep_compression / consolidator prose overlay** — LLM-доробка архівного спогаду для storage/debug audit; структура збирається ядром із валідованих треків, а LLM дає prose gist/narrative overlay.
-- **compact_memory_pass** — prompt-facing компресія сесії у короткі plain-text тези "подія -> висновок". Вихід — текстове поле `compact_memory`, яке потім повертається в ordinary chat prompt замість JSON-проекції full archive.
-- **memory_unit_pass** — розбиває sleep/archive material на atomic memory units із тезами, source ids, weight і status.
+- **memory_unit_pass** — основний prompt-facing шлях: розбиває sleep/archive material на atomic memory units із тезами, source ids, weight і status; ядро детерміновано рендерить із них `compact_memory` для ordinary chat.
+- **compact_memory_pass** — старий compatibility-шлях, який напряму повертає plain-text тези "подія -> висновок"; новий sleep-run не створює його як Stage 1 task.
 - **memory_fidelity_pass** — перевіряє memory unit проти evidence pack і повертає fidelity verdict.
 - **reflection_analyze** — працює по validated memory units і Core, створює candidate beliefs.
 - **forget_review_pass** — переглядає old/low-signal units і рекомендує keep/protect/forget; engine hard-gate вирішує, що реально можна позначити Forgotten.
@@ -526,20 +529,26 @@ Sleep — процес консолідації сесії у архівний �
 1. Зчитати активні події сесії з `memory/sessions/<id>/events.jsonl`.
 2. Виконати дедуплікацію і базову нормалізацію.
 3. Виконати scoring (детермінований за подіями, або з використанням `score_event` PendingTask'у, якщо ввімкнено).
-4. Відібрати події для стискання тільки серед тих подій сесії, які ще не входять у жоден archive entry цієї сесії.
+4. Відібрати події для стискання тільки серед тих подій сесії, які ще не покриті Complete archive entry. Preliminary entry є станом незавершеного workflow, а не coverage.
 5. Якщо unarchived window достатньо великий (`partial_sleep_min_events`, default `10`), залишити найсвіжіший active tail незаархівованим. Default `active_tail_ratio` — `0.30`: при sleep старша частина переходить в archive, а найсвіжіша частина лишається в `session_recent` / `session_trace`.
-6. Серед compactable-подій застосувати `sleep.max_events` (default `80`). Якщо compactable-подій більше за `sleep.max_events`, пріоритет мають вища вага і новіші події при рівній вазі. Це не замінює майбутній агентивний salience scoring, але не дозволяє раннім рівноважним повідомленням витіснити пізніші особисто значущі частини діалогу.
-7. Згрупувати їх за темами або за часовою близькістю.
-8. Сформувати **попередній архівний спогад** із базовим summary, повним списком тегів, фактами і вагою. Цей попередній спогад зберігається у Архів одразу — він уже корисний для recall, навіть якщо LLM-доробка ніколи не відбудеться.
-9. Повернути `PendingTask` типу `sleep_compression` для LLM-доробки full archive і окремий `PendingTask` типу `compact_memory_pass` для коротких prompt-facing тез.
+6. Серед compactable-подій застосувати `sleep.max_events` (default `80`). Якщо compactable-подій більше за `sleep.max_events`, пріоритет мають вища вага і пізніший engine-owned `received_at` при рівній вазі. Client event `timestamp` зберігає domain time, але не керує truncation або порядком prompt input. Це не замінює майбутній агентивний salience scoring, але не дозволяє раннім рівноважним повідомленням витіснити пізніші особисто значущі частини діалогу.
+7. Зберегти детермінований порядок відібраних подій і вивести з них theme,
+   time range, tags та preliminary facts без другого host-side відбору.
+8. Сформувати **попередній архівний спогад** із базовим summary, повним списком тегів, фактами і вагою. Він зберігається одразу як recovery checkpoint, але не входить у звичайний recall до Complete finalize; відібрані raw events доти лишаються живою Session memory.
+9. Створити `PendingTask` типу `sleep_compression`, окремий `PendingTask` типу `memory_unit_pass` і початковий durable `SleepRun`. FileStorage і Storage v2 використовують спільну функцію Stage 1; різниться transaction/persistence boundary, а не когнітивна політика відбору.
 
 ### 8.2 Стадія 2: LLM-доробка через PendingTask
 
 Хост виконує `sleep_compression` через свого LLM-провайдера, використовуючи промпти із `prompts/`. Мінімальний baseline — один `sleep_compression.md`; Telegram host у v0.1 за замовчуванням виконує multi-pass sleep із окремими prompt-файлами для emotional/topic/personal/relational/consolidator проходів. Результат — повноцінний архівний спогад: емоційний наратив, відібрані цитати, уточнені факти, скоригована вага і multi-track поля.
 
-Паралельно хост виконує `compact_memory_pass` через `prompts/compact_memory_pass.md`. Це окрема LLM-задача над тим самим raw sleep input, а не програмна проекція з JSON і не `take(N)` / `truncate(N chars)`. Її результат — змінна кількість коротких plain-text тез "подія -> висновок", які зберігаються в `ArchiveEntry.compact_memory`. Кількість тез визначає агент за кількістю змістовних memory units у розмові: одна тема може дати одну тезу, кілька різних епізодів — кілька тез, рутина може не дати жодної окремої тези. Саме ці тези є prompt-facing стиснутою памʼяттю для звичайної відповіді бота.
+Паралельно хост виконує `memory_unit_pass` над тим самим raw sleep input. Агент повертає змінну кількість атомарних тез із source provenance, ядро валідує `MemoryUnit` і детерміновано рендерить із них `ArchiveEntry.compact_memory`. Одна тема може дати один unit, кілька різних епізодів — кілька, рутина може не дати окремого. Legacy `compact_memory_pass` лишається compatibility API, але основний sleep-run не створює його як Stage 1 task.
 
-Хост повертає результати через `engine.resume_compact_memory_pass(task_id, text)` і `engine.resume_sleep_compression(task_id, result)`. Ядро системи **оновлює** архівний спогад, що його створено у стадії 1: записує `compact_memory`, замінює базовий summary на повний наратив, додає цитати, оновлює вагу і теги. Сам ідентифікатор спогаду зберігається, тому будь-які зв'язки, що вже на нього посилались, не ламаються.
+Хост повертає typed responses через sleep-run driver (`submit_sleep_batch`;
+legacy direct resume methods лишаються compatibility API). Ядро системи
+**оновлює** архівний спогад, що його створено у стадії 1: записує memory units і
+`compact_memory`, замінює базовий summary на повний наратив, додає цитати,
+оновлює вагу і теги. Сам ідентифікатор спогаду зберігається, тому будь-які
+зв'язки, що вже на нього посилались, не ламаються.
 
 ### 8.3 Покриття подій замість очищення сесії
 
@@ -549,19 +558,29 @@ Sleep — процес консолідації сесії у архівний �
 
 ### 8.4 Sleep Triggers
 
-Manual sleep лишається публічним викликом `engine.sleep(session_id)`. Автоматичний sleep у v0.1 не привʼязаний до кількості повідомлень. Продуктові тригери тільки такі:
+Для FileStorage manual sleep лишається публічним викликом `engine.sleep(session_id)`; Storage v2 відкриває той самий когнітивний workflow через `begin_sleep_run_transactional(request)`. Автоматичний sleep у v0.1 не привʼязаний до кількості повідомлень. Продуктові тригери тільки такі:
 
 1. **Budget-pressure sleep.** Коли `core_context_package` показує, що active session/current memory наближається до token budget, хост ставить `engine.sleep(session_id)` у background queue. Мета — не дати prompt роздутися і перевести старшу частину живої розмови в compact archive memory.
 2. **Scheduled idle sleep.** Хост запускає sleep за нічним розкладом у період типової неактивності, наприклад о 04:00 локального часу, якщо сесія має незаархівовані події і певний час не отримувала нових повідомлень.
 
-Дедуплікація належить хосту і ядру разом: якщо для сесії вже є pending/submitted `sleep_compression`, новий sleep не ставиться. Якщо preliminary archive уже покрив частину подій, ці події більше не рахуються як незаархівовані і не мають повторно потрапляти в наступний `engine.sleep(session_id)`.
+Дедуплікація належить хосту і ядру разом: якщо для сесії вже є активний
+sleep-run, новий sleep не ставиться. У Storage v2 це структурно забезпечує
+Session reservation (`active_sleep_task_id` + `sleep_pending_event_ids`). Вона
+не є archive coverage: preliminary source events лишаються незаархівованими до
+Complete finalize, а retry/resume продовжує той самий workflow замість створення
+другого.
 
 Хост не стискає памʼять сам. Хост тільки:
 
 1. дивиться на token budget report або нічний idle schedule;
-2. викликає `engine.sleep(session_id)`, коли один із продуктових тригерів спрацював;
-3. виконує `compact_memory_pass` і `sleep_compression` через свій LLM-провайдер;
-4. повертає результати через `resume_compact_memory_pass` і `resume_sleep_compression`.
+2. викликає FileStorage `engine.sleep(session_id)` або Storage v2 `begin_sleep_run_transactional(request)`, коли один із продуктових тригерів спрацював;
+3. забирає extraction/consolidation batches із sleep-run driver і виконує
+   `memory_unit_pass` та спеціалізовані requests через свій LLM-провайдер;
+4. повертає typed responses через `submit_sleep_batch`, а після готовності
+   викликає `finish_sleep_run`.
+
+Прямі `resume_compact_memory_pass` / `resume_sleep_compression` лишаються
+compatibility API для старих host flows, не основною оркестрацією.
 
 ### 8.5 Multi-pass compression
 
@@ -583,7 +602,7 @@ Multi-pass sleep у v0.2 оркеструється ядром через pull-b
 
 **Consolidator.** Бере результати попередніх проходів і збирає один або кілька archive entries. Порядок пріоритету інший, ніж у wiki-summary: emotional markers і personal signals задають центр спогаду; topic facts стають контекстом, а не навпаки.
 
-**Compact memory pass.** Окремо від consolidator читає raw події sleep window і повертає короткі тези "подія -> висновок", які людина природно пригадала б через тиждень. Це не audit-запис і не enrichment: це власне prompt-facing компресія. Вона зберігається у `compact_memory` і саме вона йде в `archive_relevant` для ordinary chat.
+**Memory unit pass і compact projection.** Окремо від consolidator агент читає raw події sleep window і повертає атомарні `MemoryUnit`: кожна теза має власний зміст і source provenance. Ядро їх валідує та детерміновано збирає короткий `compact_memory`, який людина природно пригадала б через тиждень і який іде в `archive_relevant` для ordinary chat. Старий прямий `compact_memory_pass` лишається лише compatibility API.
 
 Це означає multi-track archive format. Старі поля `gist`, `narrative`, `facts`, `quotes`, `tags`, `theme`, `weight` лишаються для сумісності. Додаються окремі треки:
 
@@ -959,6 +978,30 @@ committed view: transactional Stage 1 recall ранжує snapshot, оновлю
 In-memory collection scan є conformance-механізмом; PostgreSQL реалізація має
 використовувати vault-bound indexes. Stage 2 на цьому шляху буде додано разом
 із vector storage, а до того explicit embedding request fail-closed.
+
+Наступний перенесений зріз — S2.C transactional Sleep start. Він не дублює
+FileStorage-памʼять: обидва шляхи викликають одну Stage 1 policy для active-tail
+window, selection, preliminary Archive і task projection. Server work unit
+атомарно комітить шість record mutations: Session pending reservation,
+preliminary Archive, `sleep_compression` task, `memory_unit_pass` task,
+початковий `SleepRun` та immutable operation-result snapshot. Preliminary не
+входить у recall і не змінює `archived_to`/`archived_event_ids`; ці поля
+означають тільки Complete coverage. Окрема pending reservation потрібна, щоб
+дві репліки не почали два sleep workflow над тією самою Session.
+
+Sleep-start request freeze-ить довірений runtime `SleepStage1Config`, а всі
+створювані ID детерміновані всередині vault/operation. Receipt посилається на
+immutable snapshot початкового run, тому replay не змінюється, коли робочий
+`SleepRun` пізніше просувається. Reference backend перед active-tail partition
+відновлює append order server events за `received_at` та `event_id`; shared
+selection використовує той самий receive order для equal-weight truncation і
+фінального task input. `event_id` є лише детермінованим tie-break, а не доказом
+реального порядку однакових receive timestamps; до host cutover потрібен
+monotonic per-Session admission sequence. Full collection scan є лише
+conformance proof, а PostgreSQL path потребує session-bound index/snapshot.
+Provider call лишається поза transaction. Transactional submit,
+finalize/Complete coverage і cancel/очищення reservation — наступні зрізи
+S2.C; адаптери на цей foundation ще не перемикаються.
 
 S1 уже матеріалізує цю межу як Rust contracts, не як network service.
 `VaultContext` виникає лише з matching authenticated principal та active

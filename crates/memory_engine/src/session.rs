@@ -35,6 +35,13 @@ pub struct SessionMetadata {
     pub archived_event_ids: Vec<Id>,
     #[serde(default)]
     pub archived_event_index_complete: bool,
+    /// Storage v2 sleep-start claim. It prevents two concurrent runs from
+    /// consolidating the same live events. Cleared only by a terminal sleep
+    /// transition (finish/cancel), never by a host-side timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_sleep_task_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sleep_pending_event_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
