@@ -1281,6 +1281,10 @@ Migration сканує тільки persisted `core/candidates/*.json`, а не 
 спроєктовані як candidates для compatibility; тому повторний запуск не
 перетворить майбутню graph-native hypothesis назад на legacy record.
 
+`unresolved_memory_unit_ids` і `warnings` є обовʼязковими JSON arrays навіть
+для порожньої міграції. Публічний контракт не змінює shape залежно від
+кількості кандидатів: порожній результат повертає `[]`, а не відсутній key.
+
 `export_hypothesis_graph(request)` приймає:
 
 ```json
@@ -1294,6 +1298,8 @@ Migration сканує тільки persisted `core/candidates/*.json`, а не 
 `relations` та text-safe storage warnings. Scope порівнюється точно;
 `core_scope: null` означає лише isolated unscoped namespace, ніколи wildcard.
 Python і Godot adapters лише передають ці JSON contracts у Rust core.
+Усі чотири collection keys (`nodes`, `evidence_links`, `relations`, `warnings`)
+присутні завжди; exact-scope export без записів повертає порожні arrays.
 
 Під час compatibility period кожний `write_candidate_belief` ідемпотентно
 оновлює node/evidence projection, а candidate read віддає graph projection,

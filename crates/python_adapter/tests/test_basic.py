@@ -77,6 +77,8 @@ def test_hypothesis_graph_admin_api_is_versioned_and_scope_exact(
     migration = json.loads(engine.migrate_hypothesis_graph())
     assert migration["schema_version"] == "hypothesis_graph_migration_result.v1"
     assert migration["relations_created"] == 0
+    assert migration["unresolved_memory_unit_ids"] == []
+    assert migration["warnings"] == []
 
     export = json.loads(
         engine.export_hypothesis_graph(
@@ -90,7 +92,10 @@ def test_hypothesis_graph_admin_api_is_versioned_and_scope_exact(
     )
     assert export["schema_version"] == "hypothesis_graph_export.v1"
     assert export.get("core_scope") is None
-    assert export.get("nodes", []) == []
+    assert export["nodes"] == []
+    assert export["evidence_links"] == []
+    assert export["relations"] == []
+    assert export["warnings"] == []
 
 
 def test_autonomous_reflection_abstains_without_validated_memory(

@@ -46,6 +46,47 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Empty graph admin responses keep their public collection shape
+
+Context. The first Chibigochi graph-storage acceptance ran against a complete
+copy of owner storage but found zero legacy candidates. That made the migration
+semantically empty and exposed an adapter contract defect: Rust values
+contained empty vectors, while serde omitted their JSON keys.
+
+**What changed:**
+- `hypothesis_graph_migration_result.v1` now always serializes
+  `unresolved_memory_unit_ids` and `warnings`, including as `[]`.
+- `hypothesis_graph_export.v1` now always serializes `nodes`,
+  `evidence_links`, `relations` and `warnings`, including as `[]`.
+- Core and Python-adapter regression tests use direct key access so a future
+  omitted collection fails instead of being hidden by `.get(..., [])`.
+- Acceptance now requires a disposable non-degenerate host-path fixture when
+  live owner storage has no candidates; synthetic beliefs must not be inserted
+  into owner memory.
+
+**What is retracted:**
+- The documented implication that those collection keys were already present
+  in every v1 response. Before this correction, empty collections were omitted.
+- The first live-copy run is not a full live migration PASS. It is a
+  deterministic PASS and product-regression PASS with a live `DATASET GAP`.
+
+**What is still true:**
+- Migration counts, journal recovery, idempotence, exact-scope filtering and
+  non-empty unresolved provenance behavior are unchanged.
+- The live source storage was never migrated or modified by the acceptance.
+- Phase 2 does not create semantic relations or invoke an LLM.
+
+**What we are doing:**
+- Rebuild the corrected module and execute the non-degenerate fixture through
+  the Chibigochi Python path. A successful fixture can close implementation;
+  absent live legacy candidates remain an honest dataset limitation.
+
+**Reproducibility anchor:**
+`crates/memory_engine/tests/engine_hypothesis.rs` covers empty and non-empty
+core serialization; `crates/python_adapter/tests/test_basic.py` asserts the
+empty JSON contract exposed to hosts. The live acceptance record is in
+`wiki/pages/releases/v0.6-hypothesis-graph-storage-acceptance.md`.
+
 ## 2026-08-01 — Centralized game hosting requires an authenticated Memory Runtime
 
 Context. Chibigochi is intended for Google Play with thousands of clients

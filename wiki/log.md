@@ -8,6 +8,19 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] acceptance | Empty graph contract fix and non-degenerate rerun
+
+Recorded the first Chibigochi Phase 2 run as deterministic/product PASS with a
+live dataset gap, not a full migration PASS: the complete owner copy contained
+zero legacy candidates and reinforcements. The source remained untouched.
+
+The run found that serde omitted empty public collection keys. Contracts now
+require stable arrays for migration and export, and tests use direct key access.
+The acceptance procedure now routes an empty live dataset to a separate
+disposable fixture with multiple scopes, resolved/missing units and duplicate/
+new reinforcement provenance. It explicitly forbids seeding synthetic beliefs
+into owner memory.
+
 ## [2026-08-01] strategy | Server-scale Memory Runtime for Google Play
 
 Added a primary-source research note and an accepted S0-S7 production plan for

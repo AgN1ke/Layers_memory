@@ -18,6 +18,39 @@ use memory_engine::types::{
 use memory_engine::{FileStorage, MemoryEngine};
 
 #[test]
+fn empty_graph_admin_results_keep_required_collection_fields() {
+    let root = unique_temp_dir("hypothesis_graph_empty_contract");
+    let storage = FileStorage::with_host_id(&root, "hypothesis_test");
+    storage.ensure_layout().expect("create storage layout");
+    let engine = MemoryEngine::new(storage);
+
+    let migration = serde_json::to_value(
+        engine
+            .migrate_hypothesis_graph()
+            .expect("migrate empty graph"),
+    )
+    .expect("serialize empty migration result");
+    assert_eq!(
+        migration["unresolved_memory_unit_ids"],
+        serde_json::json!([])
+    );
+    assert_eq!(migration["warnings"], serde_json::json!([]));
+
+    let export = serde_json::to_value(
+        engine
+            .export_hypothesis_graph(export_request(Some("owner_scope")))
+            .expect("export empty graph"),
+    )
+    .expect("serialize empty graph export");
+    assert_eq!(export["nodes"], serde_json::json!([]));
+    assert_eq!(export["evidence_links"], serde_json::json!([]));
+    assert_eq!(export["relations"], serde_json::json!([]));
+    assert_eq!(export["warnings"], serde_json::json!([]));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn legacy_candidates_migrate_idempotently_without_inventing_relations() {
     let root = unique_temp_dir("hypothesis_graph_migration");
     let storage = FileStorage::with_host_id(&root, "hypothesis_test");

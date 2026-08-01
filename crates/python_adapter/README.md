@@ -130,6 +130,11 @@ Migration is journaled and restart-safe. Export is exact-scope; `null` means
 only the isolated unscoped namespace. Neither method invokes an LLM or adds the
 graph to the chat prompt.
 
+The response shape is stable for empty storage. Migration always includes
+`unresolved_memory_unit_ids` and `warnings`; export always includes `nodes`,
+`evidence_links`, `relations`, and `warnings`. Empty collections are `[]`, not
+omitted keys.
+
 All payloads follow the JSON contracts in `wiki/pages/foundation/contracts.md` at the
 repository root.
 

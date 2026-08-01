@@ -632,10 +632,15 @@ Archive і Core, не четвертий prompt-visible memory layer.
   працювати як `CandidateBelief`, водночас graph-only abstraction,
   contradiction, validity і evidence-directness fields не стираються під час
   legacy update. Cross-scope relations fail closed. — 2026-08-01.
-- [ ] Прогнати journaled migration та scope export на копії живого Chibigochi
-  storage; звірити counts, unresolved IDs і provenance вручну за
-  [v0.6 Hypothesis Graph Storage Acceptance](../releases/v0.6-hypothesis-graph-storage-acceptance.md).
-  Це acceptance Phase 2, а не передумова для написання її детермінованого коду.
+- [~] Перший прогін journaled migration на 565-file копії живого Chibigochi
+  storage виконано: deterministic controls і product regression PASS, source
+  не змінено, але owner storage мав 0 candidates/reinforcements, тому mapping,
+  provenance і scope controls лишилися `DATASET GAP`. — 2026-08-01,
+  [acceptance result](../releases/v0.6-hypothesis-graph-storage-acceptance.md#result-2026-08-01-deterministic-pass-live-dataset-gap).
+- [ ] Закрити Phase 2 невиродженим disposable host-path fixture через реально
+  rebuilt Chibigochi module: owner/other/unscoped candidates, resolved/missing
+  units, duplicate/new reinforcement, exact-scope export, projection fallback
+  і repeat idempotence. Не додавати synthetic beliefs у owner storage.
 - [ ] Trigger-related candidate subgraph замість recency-only останніх N:
   structural baseline плюс optional local-vector enrichment у глибокому шарі;
   non-vector fallback повний, vectors не визначають scope або truth.

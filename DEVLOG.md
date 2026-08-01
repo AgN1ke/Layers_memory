@@ -1,5 +1,59 @@
 # DEVLOG
 
+## Запис 156 — 2026-08-01 — Вироджене live-приймання знайшло реальний JSON contract gap
+
+**Що приніс звіт:**
+Claude зупинив Chibigochi, зробив повну 565-file copy, перебудував descendant
+коду `c91b002` і не торкався source storage. Deterministic recovery,
+projection/cross-scope controls, repeat idempotence, product smoke, privacy і
+відсутність graph leakage пройшли. Але owner memory мала 0 legacy candidates і
+0 reinforcements, тому жодний mapping/evidence/provenance branch на живих
+records фактично не виконався.
+
+Вердикт розділено чесно: deterministic implementation controls PASS, product
+regression PASS, live migration NOT EXERCISED / `DATASET GAP`. Це не storage
+FAIL, але й не підстава закрити live-copy gate через vacuous 0/0 equality.
+
+**Знайдені дефекти:**
+`HypothesisGraphMigrationResult` і `HypothesisGraphExport` створювали правильні
+порожні `Vec`, але public structs мали `skip_serializing_if = Vec::is_empty`.
+Тому Python/Godot JSON не містив `unresolved_memory_unit_ids` або
+`nodes/evidence_links/relations`; host із direct key access отримував би
+KeyError. `.get(...) or []` у acceptance приховував порушення форми.
+
+**Виправлення:**
+- public migration/export collections більше не omit-яться; `warnings` також
+  стабільно присутній як array;
+- core test серіалізує реальний empty migration/export і перевіряє всі keys;
+- Python adapter test перейшов із tolerant `.get` на direct indexing;
+- contracts і adapter README прямо гарантують `[]` для empty result.
+
+**Стратегічний наслідок для acceptance:**
+Вигадувати candidates у живій owner memory заради тесту заборонено. Якщо live
+dataset порожній, окремий disposable fixture через реально rebuilt Chibigochi
+module має містити owner/other/unscoped scopes, resolved/missing units і
+duplicate/new reinforcements. Він доводить integration contract; untouched
+owner path окремо доводить product regression. Після fixture PASS Phase 2
+implementation може закритися, а live absence лишається dataset gap, не вічним
+блокером Phase 3.
+
+**Перевірки:**
+`cargo test --workspace`, clippy `-D warnings`, format, wiki links,
+release-version checker і diff check — PASS. `engine_hypothesis` тепер 4/4.
+Release wheel встановлено в isolated `target/` venv, звідти direct public JSON
+smoke пройшов і повний Python adapter suite дав 17/17 PASS.
+
+Активний PID `28684` зі звіту тримав старий `.pyd`, тому звичайний
+`maturin develop` не зміг перезаписати модуль і залишив pip salvage directory.
+Процес Chibigochi не зупинявся; тест навмисно пішов через окремий wheel/venv.
+Єдиний pytest warning — sandbox не дозволив створити `.pytest_cache`; на
+результати тестів це не вплинуло.
+
+**Операційна межа:**
+Залишену Claude копію `runtime/_accept_graph/` цей репозиторій не видаляє: вона
+лежить у Chibigochi й може знадобитися для зовнішнього аудиту. Наступний fixture
+має бути окремим, щоб не підмінити історію першого прогону.
+
 ## Запис 155 — 2026-08-01 — Google Play scale став окремим production-track
 
 **Контекст:**

@@ -553,13 +553,13 @@ pub struct HypothesisGraphExport {
     pub schema_version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_scope: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub nodes: Vec<HypothesisNode>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub evidence_links: Vec<HypothesisEvidenceLink>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub relations: Vec<HypothesisRelation>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub warnings: Vec<String>,
 }
 
@@ -589,9 +589,9 @@ pub struct HypothesisGraphMigrationResult {
     pub evidence_links_unchanged: usize,
     /// Phase 2 migration never invents semantic relations from flat text.
     pub relations_created: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub unresolved_memory_unit_ids: Vec<Id>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub warnings: Vec<String>,
 }
 
