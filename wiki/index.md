@@ -42,6 +42,10 @@ crate/host README files stay outside the wiki.
   strategic implementation plan from scope-safe durable reflection through a
   hierarchical evidence graph, temporal contradiction, and opt-in native
   clarification.
+- [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md) -
+  accepted production track for authenticated per-player vaults,
+  transactional PostgreSQL storage, durable workers, migration and launch
+  acceptance.
 - [Audit 2026-06-10](pages/planning/audit-2026-06-10.md) - post-v0.2 audit,
   cleanup queue, risks, and resolved findings.
 
@@ -96,6 +100,9 @@ crate/host README files stay outside the wiki.
   recall research draft.
 - [Vector Storage Implementation Spec](pages/research/vector-storage-tz-2026-07-03.md)
   - accepted vector storage and deep recall implementation plan.
+- [Server Memory Runtime Research](pages/research/server-memory-runtime-2026-08-01.md)
+  - GitHub, PostgreSQL and Google Play/Cloud findings behind the centralized
+  Chibigochi architecture.
 - [HISTORY Discipline Reference](pages/research/history-discipline-reference.md)
   - reference note for HISTORY discipline and trust-document style.
 - [LLM Wiki Operating Patterns](pages/research/llm-wiki-operating-patterns-2026-07-05.md)

@@ -8,6 +8,21 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] strategy | Server-scale Memory Runtime for Google Play
+
+Added a primary-source research note and an accepted S0-S7 production plan for
+centralized Chibigochi hosting. The wiki now separates the implemented local
+`FileStorage` boundary from the planned authenticated multi-replica runtime:
+server-derived per-account vaults, transactional Storage v2,
+PostgreSQL/pgvector, durable workers, deterministic export/import and
+whole-product load/isolation acceptance.
+
+Foundation pages, roadmap, Chibigochi bridge documentation and navigation now
+state that namespacing is not authorization, no server path may fall back to a
+shared default user, provider calls happen outside database transactions, and
+one vault has one authoritative backend. The update changes no runtime code and
+makes no production throughput claim.
+
 ## [2026-08-01] acceptance | Chibigochi graph-storage migration gate
 
 Added the v0.6 Phase 2 acceptance procedure for the implemented hypothesis

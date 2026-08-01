@@ -778,3 +778,41 @@ foundation графа вже реалізовано без зміни reflection
 records, journaled migration, exact-scope export і CandidateBelief projection.
 Жива міграція реального storage та Phase 3 ієрархічного reasoning лишаються
 окремими наступними воротами.
+
+## Update 2026-08-01: одна когнітивна памʼять, дві форми розгортання
+
+Підготовка Chibigochi до Google Play уточнила різницю між універсальністю
+бібліотеки й експлуатацією централізованого продукту. Локальний процес із
+власною папкою памʼяті та тисячі клієнтів, які приходять на кілька серверних
+реплік, не є одним deployment mode. Нам не потрібна друга модель памʼяті, але
+потрібна друга реалізація її операційної межі.
+
+Memory Engine лишається одним Rust core із тими самими Session, Archive, Core,
+recall, sleep і reflection. У local/reference mode він працює через
+`FileStorage`. У server mode той самий core працює всередині Memory Runtime,
+де сервер автентифікує акаунт, сам визначає його memory vault і відкриває
+транзакційне сховище, уже привʼязане до цього vault. Godot не обирає scope і не
+отримує прямого доступу до storage.
+
+Це продовжує, а не скасовує принцип людського контролю. Формулювання «файли як
+правда» лишається нормативним для `FileStorage`, але глибша вимога проєкту —
+власність, читабельність, provenance, переносимість і відновлення. У server
+mode operational truth може бути PostgreSQL, якщо кожен vault має versioned
+deterministic export/import у людсько-читабельні записи, повне видалення,
+перевірку цілісності й одну авторитетну копію. Постійний dual-write у файли та
+базу як у дві рівноправні правди заборонений.
+
+Identity є сильнішою межею за схожість, session або client-supplied `user_id`.
+Verified game account мапиться на внутрішній vault; кожен запис, vector row,
+task і hypothesis edge належить цьому vault. Відсутній або невалідний identity
+у server mode не може мовчки впасти у спільний `local_user`.
+
+Вектори й надалі не стають окремим шаром чи джерелом істини. Для server mode
+вони можуть жити як opt-in rebuildable pgvector rows поруч із канонічними
+MemoryUnit. Exact per-vault search є стартовою формою; окрема vector database,
+graph database або approximate index потребують виміряного обґрунтування.
+
+Нормативний production-track, порядок фаз і критерії запуску зафіксовано в
+[Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md), а
+зовнішні підстави — у
+[server-runtime research](../research/server-memory-runtime-2026-08-01.md).

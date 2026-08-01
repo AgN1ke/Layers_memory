@@ -1,5 +1,66 @@
 # DEVLOG
 
+## Запис 155 — 2026-08-01 — Google Play scale став окремим production-track
+
+**Контекст:**
+Питання про тисячі користувачів виявило зміну deployment model, якої не було в
+локальних Chibigochi/Godot acceptance. Поточний `LockRegistry` координує
+потоки одного `MemoryEngine`, але два процеси над спільним `FileStorage` не
+синхронізовані. Старий 1,000-session stress доводить тільки локальну
+цілісність ingest/Core path і не вимірює повний turn, vectors, sleep,
+reflection, DB pool чи tenant isolation.
+
+**Дослідження:**
+- PostgreSQL primary docs підтвердили: RLS має default-deny форму, але owner
+  обходить policies; serializable transactions потребують whole-operation
+  retry; `SKIP LOCKED` доречний для queue consumers, не для consistent recall;
+  partition-per-user є поганою стартовою геометрією;
+- pgvector дає exact nearest-neighbor із perfect recall; для невеликого
+  per-vault набору спершу потрібен звичайний vault/model filter, а HNSW/IVFFlat
+  — тільки після benchmark, бо ANN filtering може under-return;
+- Google Play відділяє platform identity від власного in-game account state:
+  backend перевіряє server auth code і сам мапить internal account/vault;
+  Play Integrity є abuse/tamper defense, не заміною identity;
+- Mem0, LangGraph, Graphiti й Letta показують корисні library/service,
+  checkpoint і namespace patterns, але також чітку заборону: `user_id`,
+  `group_id` або `thread_id` є namespacing, не authorization. Default user у
+  public server повторив би наш уже знайдений клас помилки `local_user`.
+
+**Стратегічне рішення:**
+Не шардити FileStorage по папках і не будувати памʼять у Godot. Той самий Rust
+core отримує server-side Memory Runtime. Verified account мапиться на один
+logical vault; storage handle уже bound до нього. Production backend — pooled
+PostgreSQL tables із `vault_id`, composite ownership і RLS defense in depth;
+optional vectors — pgvector у тому самому data plane.
+
+Файли не викидаються: `FileStorage` лишається local/reference/export backend.
+Для server vault PostgreSQL може бути operational truth лише разом із
+versioned deterministic human-readable export/import. Dual-authoritative
+files+database writes заборонені.
+
+Нинішній `Storage` trait не можна просто реалізувати SQL-методами: він не дає
+transaction boundary навколо multi-record domain transition. Тому перед
+PostgreSQL стоїть Storage v2 із work-unit/transaction, record revision і retry
+contract. LLM/embed ніколи не виконується під DB lock: durable intent ->
+external work -> submit/revalidate commit. Same-session live turns додатково
+потребують idempotency key і sequence.
+
+**Що зафіксовано:**
+- research authority
+  `wiki/pages/research/server-memory-runtime-2026-08-01.md`;
+- normative plan `wiki/pages/planning/server-scale-memory-runtime.md` із фазами
+  S0-S7, dependencies, risks, rejected alternatives й exit gates;
+- strategy/architecture/contracts amendment, public README clarification,
+  Chibigochi bridge boundary, Roadmap tasks, Wiki index/home/log і HISTORY
+  retraction.
+
+**Наступний крок:**
+S0 ще потребує реального product forecast замість provisional envelope. Після
+цього implementation починається з S1 identity/idempotency і cross-vault
+negative harness, а не з таблиць PostgreSQL. Cognitive v0.6 work може йти
+паралельно тільки через storage-agnostic contracts; Google Play launch
+заблокований до whole-product S7 acceptance.
+
 ## Запис 154 — 2026-08-01 — Приймання графового сховища відділено від якості роздумів
 
 **Навіщо окреме ТЗ:**

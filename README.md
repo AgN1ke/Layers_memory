@@ -53,9 +53,19 @@ topic does not carry the previous association forward. Its conservative,
 model-calibrated similarity gate may return no association at all: the core
 does not force the nearest old memory into an unrelated conversation.
 
+For a centralized Google Play deployment, the current file backend is a local
+and reference implementation, not the production topology. The accepted
+server track keeps the same Rust cognitive core behind an authenticated Memory
+Runtime, binds one logical vault per game account, and adds transactional
+PostgreSQL/pgvector storage plus durable workers. No such server backend is
+claimed as implemented yet; the phased plan and launch gates are documented in
+the [Server-scale Memory Runtime](wiki/pages/planning/server-scale-memory-runtime.md).
+
 ## Principles
 
-- **Yours and auditable** - memory lives in plain, human-readable files you can read, fix, and delete. No black box.
+- **Yours and auditable** - local memory lives in plain files; server memory
+  must round-trip through a versioned human-readable export you can inspect,
+  migrate and delete. No opaque lock-in.
 - **Private by choice** - semantic vectors are opt-in, computed by the host, and
   can stay entirely local; the non-vector recall path remains fully supported.
 - **Provider-independent by design** - the Rust core performs no network I/O and holds no model, vendor, or API key; the host runs language tasks through whatever model it chooses.
@@ -76,6 +86,7 @@ Rust memory core, PyO3 Python adapter, and runnable host examples.
 - [`wiki/pages/governance/versioning.md`](wiki/pages/governance/versioning.md) - normative SemVer, schema-version, and release-tag policy.
 - [`wiki/pages/planning/autonomous-reflection-v0.5.md`](wiki/pages/planning/autonomous-reflection-v0.5.md) - strategic design and phased acceptance for salience/time-driven reflection.
 - [`wiki/pages/planning/reflective-belief-system.md`](wiki/pages/planning/reflective-belief-system.md) - phased plan from reliable reflection to an evidence-backed hypothesis graph, contradiction handling, and native clarification.
+- [`wiki/pages/planning/server-scale-memory-runtime.md`](wiki/pages/planning/server-scale-memory-runtime.md) - production track for authenticated per-player vaults, transactional storage, durable workers, migration, and whole-path scale acceptance.
 - [`LICENSE.md`](LICENSE.md) - root license file for GitHub publication.
 
 ## Versioning

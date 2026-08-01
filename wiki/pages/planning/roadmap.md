@@ -16,6 +16,11 @@
 - [Reflective Belief System](reflective-belief-system.md) - phased transition
   from reliable autonomous reflection to an evidence-backed hypothesis graph,
   contradiction handling, and native clarification.
+- [Server-scale Memory Runtime](server-scale-memory-runtime.md) - production
+  track for authenticated vaults, transactional storage, durable workers,
+  migration and launch acceptance.
+- [Server Memory Runtime research](../research/server-memory-runtime-2026-08-01.md)
+  - GitHub/PostgreSQL/Google evidence behind that production track.
 
 Цей документ — **жива дорожня карта** проєкту. Він не дублює стратегію (`wiki/pages/foundation/strategy.md`) чи архітектуру (`wiki/pages/foundation/architecture.md`). Він відповідає на одне питання: **куди ми йдемо і де зараз стоїмо**.
 
@@ -72,6 +77,15 @@ Phase 2 уже реалізовано окремо від live gate v0.5: schema
 scope-safe export і compatibility projection не змінюють chat/reflection
 поведінку. Жива міграція Chibigochi ще не прийнята; Phase 3 reasoning не
 вважається реалізованим.
+
+Google Play додає незалежний release blocker: current `FileStorage` безпечно
+координує тільки один writer process на runtime directory й не є production
+backend-ом для тисяч клієнтів. Прийнято окремий server track S0-S7: той самий
+Rust cognitive core працює в автентифікованому Memory Runtime, а один
+server-derived vault per account зберігається транзакційно у
+PostgreSQL/pgvector. Архітектурне S0 зафіксовано; implementation S1-S7 не
+починалось. Локальні/Chibigochi acceptance попередніх версій залишаються
+правдивими, але не є доказом multi-user production scale.
 
 ## Стан на 2026-06-10
 
@@ -398,6 +412,119 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 
 ---
 
+## Production track S0-S7 — Google Play server scale
+
+Мета: не створити другу памʼять для гри, а безпечно запустити той самий Rust
+core як централізований сервіс для тисяч гравців. Нормативний порядок,
+інваріанти й acceptance gates живуть у
+[Server-scale Memory Runtime](server-scale-memory-runtime.md).
+
+### S0 — Архітектура і capacity envelope
+
+- [x] Зафіксувати різницю між local/reference `FileStorage` і production
+  server deployment; один vault має один authoritative backend, а portable
+  export/import зберігає людський контроль. — 2026-08-01,
+  [plan](server-scale-memory-runtime.md) і
+  [research](../research/server-memory-runtime-2026-08-01.md).
+- [x] Прийняти PostgreSQL + pgvector без окремої vector/graph database на
+  старті; exact per-vault vector search перед ANN. — 2026-08-01.
+- [ ] Замінити provisional envelope реальним product forecast: stored players,
+  simultaneously active players, sustained/burst turns per second, retention,
+  region, RPO/RTO і latency objectives.
+
+### S1 — Vault identity та idempotent turn contract
+
+- [ ] Ввести internal `AccountId`/`VaultId` і server-owned
+  account-to-vault membership; Godot не передає authoritative vault.
+- [ ] Визначити guest identity, verified Play Games linking і ручний conflict
+  review без автоматичного merge `local_user`.
+- [ ] Додати `client_request_id`, monotonic session turn sequence та durable
+  operation result для duplicate/concurrent requests.
+- [ ] Mobile retry тримає той самий request ID до terminal acknowledgement;
+  timeout/reconnect не створює другий memory event.
+- [ ] Закрити negative tests: missing/forged identity, cross-vault reference,
+  replay, wrong-order completion і відсутність shared fallback.
+- [ ] Усі lock/cache/dedup keys, що торкаються player state, включають vault;
+  globally unique-looking record ID не замінює isolation key.
+
+### S2 — Transaction-capable Storage v2
+
+- [ ] Проаудитити всі Storage flows і відділити read-only, atomic mutation та
+  durable workflow; не ховати multi-record races за набором SQL methods.
+- [ ] Додати transaction/work-unit boundary, point reads, record revisions і
+  retry contract, з compatibility adapter для чинного FileStorage.
+- [ ] Зробити correctness-critical state durable; replica-local telemetry не
+  може неявно змінювати recall/reflection behavior.
+- [ ] Fault-injection acceptance для ingest, sleep, reflection/review,
+  forgetting, graph migration і tasks; provider calls поза transactions.
+
+### S3 — PostgreSQLVaultStorage + pgvector
+
+- [ ] Реалізувати pooled vault-keyed schema, migrations, composite foreign
+  keys, non-owner runtime role і default-deny RLS.
+- [ ] RLS vault context задається transaction-local на кожному pooled
+  connection use; stale session state й absent context не можуть відкрити
+  попередній vault.
+- [ ] Серіалізувати короткі same-vault mutations, дозволивши різним vault
+  працювати паралельно; bounded retry для transaction conflicts.
+- [ ] Реалізувати indexed recall/task/graph reads і exact pgvector search за
+  `(vault_id, model_id)`; HNSW лише після query-plan/latency benchmark.
+- [ ] Multi-process tests: atomicity, crash recovery, cross-vault denial,
+  vector/non-vector parity, pool budget і no global archive scans.
+
+### S4 — Authenticated Memory Runtime
+
+- [ ] Побудувати Memory Runtime як internal component game backend: public
+  edge лишається game API; окремий private service дозволений пізніше без
+  зміни contract, якщо його виправдають scale/failure metrics.
+- [ ] Server-side validation/exchange Play Games auth code; Play Integrity як
+  abuse/tamper signal, не як єдине account identity.
+- [ ] Перевести Godot product path на Runtime без DB credentials і memory
+  policy у клієнті.
+- [ ] E2E: account create/link/reconnect, duplicate/concurrent turn,
+  unauthorized vault, export/delete і restart.
+
+### S5 — Durable background workers
+
+- [ ] PostgreSQL jobs/outbox із lease, attempt, backoff, idempotent completion
+  та poison/manual state; worker claim через `SKIP LOCKED`.
+- [ ] Локальні embeddings, sleep і reflection виконуються поза DB transaction
+  та submit-ять результат через version revalidation.
+- [ ] Embedder load/warmup один раз на worker, batch processing, readiness за
+  model/dim і versioned backfill без cold-start на першому user request.
+- [ ] Окремі interactive/maintenance concurrency budgets, per-vault/global
+  quotas і backpressure.
+- [ ] Kill/restart acceptance: no lost/duplicate effects, bounded queue age,
+  structural recall доступний при деградації workers.
+
+### S6 — Portability, migration, backup і deletion
+
+- [ ] Versioned deterministic vault export/import із checksums, provenance та
+  round-trip через FileStorage.
+- [ ] One-authority migration: snapshot -> validate -> import -> atomic routing
+  cutover -> verify/rollback; жодного permanent dual-write.
+- [ ] Point-in-time recovery і restore drills із визначеним RPO/RTO; schema
+  rollout/rollback procedure.
+- [ ] Повне per-vault delete/retention покриває records, vectors, tasks,
+  outbox/exports; orphaned shared `local_user` не merge-иться наосліп.
+- [ ] Google Play privacy gate: точні Data safety/privacy disclosures,
+  discoverable in-app deletion і external web deletion resource; account
+  deletion видаляє associated memory data, а retention явно пояснений.
+
+### S7 — Whole-product production acceptance
+
+- [ ] Відтворити повний workload: ingest -> embed -> context/recall -> reply
+  ingest плюс реальна частка sleep/reflection, duplicates, hot vaults і
+  provider stalls.
+- [ ] Прогнати на 2× очікуваного launch peak; зняти p50/p95/p99, pool wait,
+  vault-lock wait, queue age/depth, retries, vector latency і database growth.
+- [ ] Security gate: zero cross-vault read/write, no memory text/embeddings у
+  routine logs, verified deletion/export and abuse limits.
+- [ ] Staged rollout internal -> opt-in cohort -> percentages -> GA з
+  automatic rollback gates і перевіреним restore.
+
+---
+
 ## v0.4 — Explainable semantic recall
 
 Мета: випустити semantic recall як одну пояснювану можливість ядра, а не набір
@@ -579,7 +706,9 @@ Archive і Core, не четвертий prompt-visible memory layer.
 5. **Шар Ядро — повільний.** Потрапити в Core дорого. Випасти з Core — ще дорожче. Demotion через явні правила і час.
 6. **Агенти не правлять істину напряму.** Агенти створюють, стискають, критикують, валідують і маршрутизують. Core змінюється тільки через lifecycle і підтвердження.
 7. **Стиснення має мати fidelity check.** Якщо compressed memory unit не відповідає raw/source events, він не може стати нормальним archive/Core material без revision.
-8. **Vector storage — opt-in і пізніше.** Embeddings додаються після стабілізації ядра живої памʼяті; користувач/власник має мати режим без vector storage.
+8. **Vector storage — opt-in і derived.** Embeddings не є шаром або джерелом
+   істини; користувач/власник має повний режим без vector storage, а індекс
+   завжди можна перебудувати з MemoryUnit.
 9. **Live перевага над теорією.** Перед тим як писати v0.2, поточний v0.1 має реально працювати на живому хості. Без live-тесту наступний рівень — фантазія.
 10. **Терміни.** `ядро системи` = вся Rust-бібліотека. `шар Ядро` = стабільний шар. Не плутати.
 

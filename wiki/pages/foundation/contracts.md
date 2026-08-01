@@ -12,6 +12,8 @@
 - [Roadmap](../planning/roadmap.md) - current and planned schema-impacting work.
 - [Reflective Belief System](../planning/reflective-belief-system.md) - phased
   source for future reflection-operation and hypothesis-graph contracts.
+- [Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md) -
+  planned vault, transaction and service contracts for centralized hosting.
 
 ## Для чого існує цей документ
 
@@ -1937,6 +1939,10 @@ engine instance виконує цей recovery один раз до читанн
 
 ## 15. Файли і джерела правди
 
+Цей розділ є нормативним для реалізованого `FileStorage`. Planned server
+backend має окрему operational truth boundary у §15.1, але зобовʼязаний
+round-trip-ити ті самі versioned domain records через portable export/import.
+
 Мінімальна файлова структура v0.1:
 
 ```text
@@ -1975,6 +1981,57 @@ memory/
   незавершеної multi-file operation; це processing truth, не memory layer;
 - `manifest.json` - правда для версій сховища;
 - Markdown-файли - людський вигляд, не машинна правда.
+
+### 15.1 Planned server-storage envelope
+
+Цей підрозділ фіксує майбутню межу, а не оголошує schema реалізованою.
+Централізований runtime не може просто додати `user_id` до кількох запитів.
+Кожен server-owned record отримує однаковий envelope:
+
+```text
+vault_id
+record_id
+schema_version
+revision
+created_at
+updated_at
+```
+
+`VaultId` є opaque server-owned identity boundary. Він виводиться з
+автентифікованого internal account membership і не приймається від Godot як
+довірене значення. Session/core/reflection scopes існують усередині vault і не
+замінюють його. Відсутній identity у server mode є помилкою, не `local_user`.
+
+Storage v2 має дати ядру transaction/work-unit contract для групи point reads,
+version checks і writes. Операція комітиться повністю або не комітиться;
+retryable conflict повторює всю функцію від transaction begin. Durable
+workflow лишається двофазним: task intent commit -> зовнішній LLM/embed call ->
+submit/revalidate commit. Provider work під transaction заборонене.
+
+Live turn contract додатково містить:
+
+```text
+client_request_id
+session_id
+expected_or_assigned_turn_sequence
+operation_status
+result_reference
+```
+
+`client_request_id` є idempotency key у межах vault. Повтор не створює другу
+подію/відповідь. Turn sequence не дозволяє двом паралельним відповідям тієї
+самої session закомітитись у неправильному порядку.
+
+PostgreSQL row-level security, composite `(vault_id, id)` references і
+non-owner runtime role є defense in depth поверх bound storage handle. Вони не
+скасовують server-side account-to-vault authorization. RLS context для pooled
+connection задається заново всередині кожної транзакції; session-global tenant
+state, який може перейти наступному borrower, заборонений.
+
+Для server vault PostgreSQL є operational source of truth. Portable export має
+містити всі versioned domain records, manifest/schema state, provenance і
+checksums у детермінованому людсько-читабельному bundle. Один vault не може
+одночасно мати FileStorage і PostgreSQL як дві writable truths.
 
 ---
 

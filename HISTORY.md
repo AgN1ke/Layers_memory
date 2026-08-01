@@ -46,6 +46,60 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Centralized game hosting requires an authenticated Memory Runtime
+
+Context. Chibigochi is intended for Google Play with thousands of clients
+using a central server. The existing deployment boundary is one writer process
+per `FileStorage` runtime directory; in-process locks and local stress tests do
+not establish safe multi-replica, multi-tenant operation.
+
+**What changed:**
+- Accepted a separate production deployment track around the same Rust
+  cognitive core: server-derived per-account vaults, transaction-capable
+  Storage v2, PostgreSQL/pgvector, durable workers, portable export/import and
+  whole-product load/isolation acceptance.
+- Clarified that `FileStorage` remains the local/reference/export backend. A
+  server vault may use PostgreSQL as its operational source of truth while
+  preserving versioned human-readable round trips and one authoritative
+  backend at a time.
+- Made authentication stronger than namespacing: Godot cannot select an
+  authoritative vault, and missing identity cannot fall back to a shared
+  `local_user` in server mode.
+- Recorded that exact per-vault pgvector search is the starting design;
+  separate vector/graph databases and approximate indexes require measured
+  need.
+
+**What is retracted:**
+- Any reading of “production-shaped Chibigochi bridge”, the in-process
+  concurrency model, or the historical 1,000-session stress run as proof that
+  the current file backend is ready for thousands of centralized Google Play
+  players.
+- The unconditional public wording that files must be the operational source
+  of truth in every deployment. That remains true for `FileStorage`; the
+  project-level invariant is ownership, inspectability, portability,
+  provenance and recoverability.
+
+**What is still true:**
+- Session, Archive, Core and all cognitive policy remain in one reusable Rust
+  core. Server scale does not create a second memory system.
+- `FileStorage` remains the implemented and supported local deployment; its
+  one-writer-process rule is unchanged.
+- Vectors remain optional, rebuildable data over atomic MemoryUnits and never
+  become a fourth layer or source of truth.
+
+**What we are doing:**
+- Execute server phases S1-S7 in order: identity/idempotency, transactional
+  storage contract, PostgreSQL/pgvector, authenticated runtime, durable
+  workers, migration/operations, then whole-product acceptance and staged
+  rollout.
+- Replace provisional capacity assumptions with product forecasts before
+  making or testing a launch-capacity claim.
+
+**Research anchor:**
+`wiki/pages/research/server-memory-runtime-2026-08-01.md` records the primary
+PostgreSQL, Google Play/Cloud and GitHub sources. No production throughput
+benchmark is claimed by this entry.
+
 ## 2026-08-01 — Hypothesis graph storage is additive and migration is recoverable
 
 Context. Live v0.5 product acceptance is still pending, but the next storage

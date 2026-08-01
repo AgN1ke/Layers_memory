@@ -19,6 +19,9 @@ whole chat history.
 - [Reflective Belief System](pages/planning/reflective-belief-system.md) - how
   v0.5 integrity closure leads into hierarchical hypotheses, explainable
   support, contradiction, temporal revision, and bounded clarification.
+- [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md) -
+  how the same core becomes an isolated, transactional service for a Google
+  Play game with many players.
 - [LLM integration resources](pages/integration/llm-integration-resources.md) - what model/key resources an application must provide.
 
 ## What This Project Is
@@ -53,6 +56,13 @@ candidate migration, MemoryUnit evidence edges and scope-exact inspection.
 Hierarchical reasoning over that graph remains the next phase between Archive
 and Core.
 
+A separate production track is now explicit. The current `FileStorage` and
+in-process locks are the local/reference deployment, not proof of centralized
+multi-user scale. Google Play hosting requires an authenticated Memory Runtime,
+one server-derived vault per account, transactional PostgreSQL/pgvector,
+durable workers, portable export/restore and whole-turn load/isolation gates.
+This architecture is accepted; its implementation phases are still open.
+
 ## How To Read The Wiki
 
 Start here, then use [Wiki index](index.md) as the map.
@@ -67,6 +77,8 @@ For current work, read:
 
 - [Roadmap](pages/planning/roadmap.md)
 - [Reflective Belief System](pages/planning/reflective-belief-system.md)
+- [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md)
+- [Server Memory Runtime research](pages/research/server-memory-runtime-2026-08-01.md)
 - [Contextual memory expansion](pages/research/contextual-memory-expansion-2026-07-05.md)
 - [Vector storage implementation spec](pages/research/vector-storage-tz-2026-07-03.md)
 

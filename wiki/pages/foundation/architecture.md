@@ -10,6 +10,8 @@
   and deferred work.
 - [Reflective Belief System](../planning/reflective-belief-system.md) - target
   architecture after v0.5 integrity closure.
+- [Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md) -
+  accepted production deployment architecture; not implemented yet.
 - [v0.3 acceptance](../releases/v0.3-acceptance.md) - conformance proof for
   reusable adapters.
 - [Local development](../integration/local-development.md) - practical commands
@@ -129,11 +131,20 @@ model-calibrated порога. Для bundled multilingual MiniLM default піс
 
 Чому це правильно як стартова архітектура, а не "почати з простого, потім додати": pure-vector search провалюється на часових запитах і точних збігах. Pure-filter провалюється на парафразах. Серйозні системи пам'яті в індустрії конвертують до hybrid pipeline. Закладаючи його одразу як форму, ми не доплачуємо складність — ми не починаємо потім переписувати.
 
-### 3.3 Сховище: файли як джерело правди, з абстракцією під індекс
+### 3.3 Local/reference storage: файли як джерело правди
 
-Канонічне сховище ядра системи — **файли на диску**: JSON або JSONL для машинно-читабельних шарів і `session.md` як людський журнал поточної сесії. Archive/Core записи наразі не мають окремих Markdown-дампів: pretty-printed JSON є поточною human-inspectable формою для audit/debug, а `.md` exports відкладені до реального workflow, який їх потребуватиме. Розкладка по шарах і по сесіях, як зафіксовано в `memory/README.md`. Жодного прихованого формату.
+Канонічне сховище поточної local/reference імплементації — **файли на
+диску**: JSON або JSONL для машинно-читабельних шарів і `session.md` як
+людський журнал поточної сесії. Archive/Core записи наразі не мають окремих
+Markdown-дампів: pretty-printed JSON є поточною human-inspectable формою для
+audit/debug, а `.md` exports відкладені до реального workflow, який їх
+потребуватиме. Розкладка по шарах і по сесіях зафіксована в
+`memory/README.md`. Жодного прихованого формату.
 
-Ядро системи має `Storage` як Rust trait. Дефолтна імплементація — файлова. Можливість індексованої імплементації (наприклад, sled чи sqlite, що тримає індекс над файлами-джерелами) **закладена в інтерфейс**, але не реалізована на v0.1. Якщо індекс додається, файли залишаються правдою, індекс — кешем, перебудовним з файлів.
+Ядро системи має `Storage` як Rust trait. Дефолтна імплементація — файлова. Для
+самого `FileStorage` будь-який додатковий індекс лишається кешем, перебудовним
+із файлів. Окрема server implementation має іншу operational truth boundary,
+описану нижче, але не змінює доменну модель памʼяті.
 
 Crash safety реалізується двома механізмами:
 
@@ -144,12 +155,24 @@ Crash safety реалізується двома механізмами:
    atomic files, durable `SleepRun` checkpoints та ідемпотентному
    coverage-cache.
 
-Чому файли як правда: принцип "керованість для людини" зі стратегії — це обмеження, а не побажання. Людина має могти зайти у `memory/sessions/2026-05-17_001/session.md` і прочитати живий журнал сесії, а archive/core записи мають бути відкритими як pretty JSON, не схованими в opaque базі. SQLite-only це порушує. Файли як правда — єдиний варіант, що чесно дотримує принцип. Абстракція `Storage` страхує нас від тупика, коли архів виросте і знадобиться індекс.
+Чому файли є правдою для local/reference mode: людина має могти зайти у
+`memory/sessions/2026-05-17_001/session.md` і прочитати живий журнал сесії, а
+archive/core records мають бути відкритими як pretty JSON. Opaque database-only
+local deployment без повного export/import порушив би принцип керованості.
 
 Vector storage дотримується тієї самої межі: rows над `MemoryUnit` є derived
 sidecar index, який можна purge/rebuild із канонічного Archive. Наявність row не
 робить Archive векторним джерелом істини. Rust core володіє політикою пошуку й
 context assembly; host лише локально обчислює запитані embeddings.
+
+**Server-mode amendment, 2026-08-01.** Цей розділ точно описує поточний
+`FileStorage`, але не робить спільну файлову папку production backend-ом для
+тисяч клієнтів. Для централізованого продукту прийнято окрему реалізацію
+`PostgreSQLVaultStorage`: база є operational truth для призначеного їй vault,
+а versioned human-readable export/import зберігає inspectability і
+portability. `FileStorage` лишається local/reference/export backend. Один vault
+має одного authoritative writer backend; files+database dual-write як дві
+правди не допускається. Це target architecture, а не реалізована можливість.
 
 ### 3.4 Перший хост: Telegram-бот через PyO3
 
@@ -882,6 +905,47 @@ role_hint: balanced
 - різні session ids можуть оброблятися паралельно в одному процесі.
 
 Ця гарантія **внутрішньопроцесна**. Два окремі процеси над одним `memory/` не синхронізовані через filesystem locks; operational rule для v0.2 — один writer-процес на один runtime memory directory. Якщо другий host/debug tool має працювати над тим самим сховищем одночасно, потрібен окремий міжпроцесний lock або server-mode wrapper.
+
+### 13.1 Accepted server-mode boundary (planned)
+
+Централізований Chibigochi не відкриває одну `memory/` директорію кільком
+реплікам. Godot викликає public API гри; game backend автентифікує principal,
+переводить verified account у внутрішній `vault_id` і передає internal Memory
+Runtime уже авторизований `VaultContext`. Runtime створює storage handle,
+назавжди привʼязаний до цього vault на час операції. Client payload не є
+джерелом `vault_id`, а відсутній identity не має default fallback. На першому
+deploy Runtime є внутрішнім компонентом backend; окремий private service —
+можлива пізніша фізична форма того самого контракту, не друга memory policy.
+
+Усі persisted records у server backend мають tenant envelope: `vault_id`,
+record id, schema version, revision і timestamps. Посилання між records
+підтверджують спільний vault структурно. Application binding є першою межею;
+PostgreSQL row-level security під non-owner runtime role — другою fail-closed
+межею. Pooled connection не зберігає global/session vault state між запитами:
+tenant context задається transaction-local для кожної work unit і без нього
+policy відмовляє.
+
+Поточний `Storage` trait не обіцяє транзакцію навколо кількох викликів, тому
+простого SQL implementation недостатньо. Planned Storage v2 дає domain
+operation одну transaction/work-unit boundary. Короткі mutations одного vault
+на першій версії серіалізуються; різні vault працюють паралельно. Same-session
+turns додатково мають idempotency key і monotonic sequence, бо DB transaction
+не впорядкує дві довгі LLM-відповіді сама.
+
+LLM/embedding виклик ніколи не виконується під database transaction або lock.
+Ядро комітить durable `PendingTask`, worker виконує зовнішню роботу, а submit
+відкриває нову транзакцію, повторно звіряє input revisions і застосовує frozen
+intent. Ця форма продовжує чинний pull-based protocol замість створення другої
+оркестрації у server host.
+
+Production data plane планується як pooled PostgreSQL tables із `vault_id`, а
+не schema/database/partition per user. Optional pgvector rows зберігаються в
+тому ж контурі й спершу шукаються exact усередині vault/model filter.
+Background queue є durable; `SKIP LOCKED` допустимий для worker claims, але не
+для звичайного recall.
+
+Повна цільова форма, фази, міграція й acceptance описані у
+[Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md).
 
 ---
 

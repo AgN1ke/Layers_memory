@@ -7,9 +7,19 @@
 - [Architecture](../foundation/architecture.md) - adapter boundary and application responsibilities.
 - [LLM integration resources](llm-integration-resources.md) - model/key resources that a product bridge must provide.
 - [Roadmap](../planning/roadmap.md) - where Chibigochi/Godot work fits in the project plan.
+- [Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md) -
+  accepted Google Play deployment boundary beyond the local spike.
 
 This document defines the current production-shaped LLM boundary for the
 Chibigochi Godot spike.
+
+“Production-shaped” here means the provider/prompt responsibility seam, not
+that this local proxy is the production multi-user server. The Google Play
+client will call the authenticated public game backend; its internal Memory
+Runtime receives an already authorized vault context. The server owns
+account-to-vault binding, transactional memory storage, idempotency and durable
+jobs; Godot retains this thin request/response role and never receives database
+credentials or chooses an authoritative memory vault.
 
 The bridge is intentionally thin. Godot does not decide what should become
 memory, what should be promoted to Core, or how forgetting/fidelity work. Godot
