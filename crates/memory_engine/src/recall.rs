@@ -11,6 +11,8 @@ pub struct RecallQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personality_scope_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<Id>,
     #[serde(default)]
     pub context: Value,

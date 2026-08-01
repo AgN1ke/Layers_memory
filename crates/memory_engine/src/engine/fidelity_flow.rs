@@ -227,6 +227,12 @@ impl<S: Storage> MemoryEngine<S> {
             .enumerate()
             .filter_map(|(index, event)| source_ids.contains(&event.event_id).then_some(index))
             .collect::<Vec<_>>();
+        if source_indices.is_empty() {
+            return Err(MemoryEngineError::Validation(format!(
+                "memory unit {} has no resolvable source events for fidelity review",
+                unit.memory_unit_id
+            )));
+        }
 
         let mut selected = HashSet::new();
         for index in &source_indices {

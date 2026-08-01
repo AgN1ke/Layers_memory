@@ -2236,6 +2236,8 @@ def ingest_chat_event(
                     "source": source,
                     "timestamp": now_rfc3339(),
                     "session_id": session_id,
+                    "personality_scope_id": session_id,
+                    "memory_text": text,
                     "payload": payload,
                     "tags": tags,
                     "theme": "telegram_conversation",

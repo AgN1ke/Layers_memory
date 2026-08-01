@@ -8,6 +8,21 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-02] architecture | One event-to-prompt information authority
+
+Added [Information Flow Integrity](pages/planning/information-flow-integrity.md)
+as the canonical repair/phase plan. It records the separation of lossless host
+payload from `memory_text`, lifelong personality scope from interaction
+Session, Archive episode from canonical standalone MemoryUnit, and durable
+three-layer memory from optional rebuildable vector association.
+
+Updated Architecture and Contracts for full frozen Sleep inputs, fail-closed
+provenance, unit eligibility, present-state rendering, final-context feedback,
+typed Storage v2 snapshots, and the exact legacy isolation fallback. Updated
+the Roadmap, server-runtime plan, work-unit inventory, wiki home/index, root
+README, HISTORY, and DEVLOG so the next phase remains transactional Sleep
+submit/finalize/cancel rather than an adapter-side workaround.
+
 ## [2026-08-01] implementation | S2.B accepted and S2.C Sleep-start recorded
 
 Recorded the independent PASS for S2.B commits `2bdc0ae` and `7314833`.

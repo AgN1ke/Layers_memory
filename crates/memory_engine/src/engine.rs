@@ -9,7 +9,8 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::archive::{
-    ArchiveEntry, ArchiveFilters, ArchiveStatus, FidelityReview, FidelityStatus, ForgetDecision,
+    archive_has_prompt_eligible_memory, memory_unit_is_prompt_eligible, ArchiveEntry,
+    ArchiveFilters, ArchiveStatus, FidelityReview, FidelityStatus, ForgetDecision,
     ForgetReviewRecord, MemoryUnit, MemoryUnitStatus,
 };
 use crate::core_store::{
@@ -54,7 +55,7 @@ use crate::reflection::{
     ReflectionState, ReflectionTriggerReason, ReflectionTriggerStatus,
 };
 use crate::session::SessionRecord;
-use crate::sleep::{MemoryUnitPassResult, SleepCompressionResult};
+use crate::sleep::{MemoryUnitPassResult, SleepCompressionResult, SleepInputEvent};
 use crate::storage::{Storage, StorageReadWarning};
 use crate::tasks::{PendingTask, TaskState, TaskType};
 use crate::types::{

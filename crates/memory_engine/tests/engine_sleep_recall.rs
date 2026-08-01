@@ -93,6 +93,41 @@ fn engine_sleep_creates_preliminary_archive_and_pending_task() {
 }
 
 #[test]
+fn memory_unit_pass_rejects_event_outside_frozen_sleep_input() {
+    let root = unique_temp_dir("memory_unit_pass_rejects_event_outside_frozen_sleep_input");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Користувач цікавиться Марсом.",
+        vec!["space"],
+    );
+    let sleep = engine.sleep("live_session").expect("sleep stage1");
+    let task_id = &sleep.memory_unit_task.as_ref().unwrap().task_id;
+
+    let error = engine
+        .resume_memory_unit_pass(
+            task_id,
+            MemoryUnitPassResult {
+                schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep.archive_entry.archive_id,
+                memory_units: vec![MemoryUnitDraft {
+                    thesis: "Користувач цікавиться Марсом.".to_string(),
+                    source_event_ids: vec!["event_from_another_task".to_string()],
+                    evidence: None,
+                    tags: vec!["space".to_string()],
+                    weight: 0.8,
+                }],
+            },
+        )
+        .expect_err("invented provenance must fail closed");
+    assert!(error.to_string().contains("outside frozen sleep input"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_context_keeps_preliminary_sleep_events_active() {
     let root = unique_temp_dir("engine_context_keeps_preliminary_sleep_events_active");
     let storage = FileStorage::with_host_id(&root, "terminal");
@@ -380,6 +415,7 @@ fn engine_recall_finds_archived_memory_by_text() {
             schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
             query_id: Some("recall_test".to_string()),
             created_at: Some("2026-05-17T17:00:00.000Z".to_string()),
+            personality_scope_id: None,
             session_id: Some("live_session".to_string()),
             context: json!({ "recent_text": "Що ти памʼятаєш про моє місто?" }),
             query_text: Some("Берлін місто".to_string()),
@@ -395,6 +431,90 @@ fn engine_recall_finds_archived_memory_by_text() {
     assert!(result.items[0].gist.contains("Берліні"));
     assert!(result.items[0].relevance_score > 0.0);
     assert!(result.items[0].relevance_explanation.is_some());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn recall_uses_standalone_memory_unit_as_canonical_prompt_truth() {
+    let root = unique_temp_dir("recall_uses_standalone_memory_unit_as_canonical_prompt_truth");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Старий батьківський текст згадує Марс.",
+        vec!["space"],
+    );
+    let sleep = engine.sleep("live_session").expect("sleep stage1");
+    resume_test_sleep(
+        &mut engine,
+        &sleep,
+        "Старий кешований gist про Марс.",
+        "Старий кешований narrative про Марс.",
+    );
+    let archive = engine
+        .resume_memory_unit_pass(
+            &sleep.memory_unit_task.as_ref().unwrap().task_id,
+            MemoryUnitPassResult {
+                schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+                archive_id: sleep.archive_entry.archive_id.clone(),
+                memory_units: vec![MemoryUnitDraft {
+                    thesis: "На Титані щільна атмосфера.".to_string(),
+                    source_event_ids: sleep.archive_entry.source_event_ids.clone(),
+                    evidence: None,
+                    tags: vec!["titan".to_string()],
+                    weight: 0.9,
+                }],
+            },
+        )
+        .expect("memory unit pass");
+    let mut unit = archive.memory_units[0].clone();
+
+    unit.thesis = "На Європі є океан під льодом.".to_string();
+    unit.tags = vec!["europa".to_string(), "ocean".to_string()];
+    engine
+        .storage()
+        .write_memory_unit(&unit)
+        .expect("rewrite canonical standalone unit");
+
+    let stale = engine
+        .recall(make_recall_query(
+            "Титан атмосфера",
+            "2026-05-17T17:00:00.000Z",
+            "canonical_stale",
+        ))
+        .expect("recall stale text");
+    assert_eq!(stale.items.len(), 1);
+    assert_eq!(stale.items[0].gist, "На Європі є океан під льодом.");
+    assert!(!stale.items[0].gist.contains("Марс"));
+    assert!(!stale.items[0].gist.contains("Титан"));
+
+    let current = engine
+        .recall(make_recall_query(
+            "Європа океан лід",
+            "2026-05-17T17:01:00.000Z",
+            "canonical_current",
+        ))
+        .expect("recall canonical unit");
+    assert_eq!(current.items.len(), 1);
+    assert_eq!(current.items[0].gist, "На Європі є океан під льодом.");
+    assert!(!current.items[0].gist.contains("Марс"));
+
+    unit.status = MemoryUnitStatus::Rejected;
+    engine
+        .storage()
+        .write_memory_unit(&unit)
+        .expect("reject canonical unit");
+    let rejected = engine
+        .recall(make_recall_query(
+            "Європа океан лід",
+            "2026-05-17T17:02:00.000Z",
+            "canonical_rejected",
+        ))
+        .expect("recall after rejection");
+    assert!(rejected.items.is_empty());
 
     fs::remove_dir_all(root).ok();
 }
@@ -440,6 +560,7 @@ fn engine_recall_applies_time_decay_to_old_archive_memory() {
             schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
             query_id: Some("recall_decay".to_string()),
             created_at: Some("2026-05-02T10:00:00.000Z".to_string()),
+            personality_scope_id: None,
             session_id: Some("live_session".to_string()),
             context: json!({ "recent_text": "orchid" }),
             query_text: Some("orchid garden".to_string()),
@@ -518,6 +639,7 @@ fn engine_recall_boosts_previously_recalled_archive_memory() {
             schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
             query_id: Some("recall_boost".to_string()),
             created_at: Some("2026-05-17T18:00:00.000Z".to_string()),
+            personality_scope_id: None,
             session_id: Some("live_session".to_string()),
             context: json!({ "recent_text": "calibration" }),
             query_text: Some("calibration memory".to_string()),
@@ -582,6 +704,7 @@ fn engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts() {
             schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
             query_id: Some("first".to_string()),
             created_at: Some("2026-05-17T18:00:00.000Z".to_string()),
+            personality_scope_id: None,
             session_id: Some("live_session".to_string()),
             context: json!({ "recent_text": "calibration" }),
             query_text: Some("calibration memory".to_string()),
@@ -603,6 +726,7 @@ fn engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts() {
             schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
             query_id: Some("second".to_string()),
             created_at: Some("2026-05-17T18:01:00.000Z".to_string()),
+            personality_scope_id: None,
             session_id: Some("live_session".to_string()),
             context: json!({ "recent_text": "calibration" }),
             query_text: Some("calibration memory".to_string()),
@@ -1153,6 +1277,7 @@ fn engine_recall_with_session_id_does_not_leak_other_sessions() {
             schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
             query_id: None,
             created_at: Some("2026-05-17T16:10:00.000Z".to_string()),
+            personality_scope_id: None,
             session_id: None,
             context: json!({ "recent_text": "Микита" }),
             query_text: Some("Микита ім'я користувача".to_string()),
@@ -1167,6 +1292,64 @@ fn engine_recall_with_session_id_does_not_leak_other_sessions() {
     assert_eq!(global.items.len(), 1);
     assert_eq!(
         global.items[0].source_session_id.as_deref(),
+        Some("session_a")
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn personality_scope_recalls_across_interaction_sessions_without_global_search() {
+    let root = unique_temp_dir("personality_scope_recalls_across_interaction_sessions");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text_with_scope(
+        &mut engine,
+        "session_a",
+        "owner_personality",
+        "2026-05-17T16:00:00.000Z",
+        "Користувач хоче досліджувати Марс.",
+        vec!["space"],
+    );
+    let sleep_result = engine.sleep("session_a").expect("sleep session_a");
+    resume_test_sleep(
+        &mut engine,
+        &sleep_result,
+        "Користувач хоче досліджувати Марс.",
+        "Давня розмова про дослідження Марса.",
+    );
+    ingest_text_with_scope(
+        &mut engine,
+        "session_b",
+        "owner_personality",
+        "2026-05-17T16:05:00.000Z",
+        "Почалась нова розмова.",
+        vec!["new_session"],
+    );
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "session_b".to_string(),
+            domain_state: json!({ "current_text": "Що ми говорили про Марс?" }),
+            core_scope: Some("owner_personality".to_string()),
+            query_text: Some("Марс".to_string()),
+            query_embedding: None,
+            explain_recall: false,
+            recall_limit: 5,
+            session_recent_limit: 5,
+            session_trace_event_limit: 5,
+            include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
+            token_budget: None,
+        })
+        .expect("personality-scoped context");
+
+    assert_eq!(package.archive_relevant.len(), 1);
+    assert_eq!(
+        package.archive_relevant[0].source_session_id.as_deref(),
         Some("session_a")
     );
 
@@ -1504,6 +1687,66 @@ fn engine_core_context_package_enforces_token_budget_by_layer() {
 }
 
 #[test]
+fn context_feedback_counts_only_memory_that_survives_the_final_budget() {
+    let root =
+        unique_temp_dir("context_feedback_counts_only_memory_that_survives_the_final_budget");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let storage_probe = storage.clone();
+    let mut options = EngineOptions::default();
+    options.recall.stats_flush_interval = 0;
+    let mut engine = MemoryEngine::with_options(storage, options);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Користувач цікавиться атмосферою Титана.",
+        vec!["titan"],
+    );
+    let sleep = engine.sleep("live_session").expect("sleep");
+    resume_test_sleep(
+        &mut engine,
+        &sleep,
+        "Користувач цікавиться атмосферою Титана.",
+        "Розмова про Титан і його щільну атмосферу.",
+    );
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({}),
+            core_scope: None,
+            query_text: Some("Титан атмосфера".to_string()),
+            query_embedding: None,
+            explain_recall: false,
+            recall_limit: 5,
+            session_recent_limit: 0,
+            session_trace_event_limit: 0,
+            include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
+            token_budget: Some(CoreContextTokenBudget {
+                total_tokens: 32,
+                current_memory_tokens: 32,
+                compressed_memory_tokens: 0,
+                core_tokens: 0,
+            }),
+        })
+        .expect("budgeted context");
+
+    assert!(package.archive_relevant.is_empty());
+    assert_eq!(package.budget.as_ref().unwrap().dropped_archive_relevant, 1);
+    assert_eq!(engine.flush_recall_stats().expect("flush"), 0);
+    let archive = storage_probe
+        .read_archive_entry_by_id(&sleep.archive_entry.archive_id)
+        .expect("archive");
+    assert_eq!(archive.recall_count, 0);
+    assert!(archive.last_recalled_at.is_none());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_core_context_package_keeps_query_relevant_core_fact_under_budget() {
     let root =
         unique_temp_dir("engine_core_context_package_keeps_query_relevant_core_fact_under_budget");
@@ -1738,6 +1981,7 @@ fn make_recall_query(query_text: &str, created_at: &str, query_id: &str) -> Reca
         schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
         query_id: Some(query_id.to_string()),
         created_at: Some(created_at.to_string()),
+        personality_scope_id: None,
         session_id: Some("live_session".to_string()),
         context: json!({ "recent_text": query_text }),
         query_text: Some(query_text.to_string()),
@@ -3118,7 +3362,9 @@ fn ingest_text_in_session(
             event_type: "user_message".to_string(),
             source: "terminal_user".to_string(),
             timestamp: timestamp.to_string(),
+            personality_scope_id: None,
             session_id: session_id.to_string(),
+            memory_text: None,
             payload: json!({ "text": text }),
             tags: tags.into_iter().map(str::to_string).collect(),
             theme: Some("personal_background".to_string()),
@@ -3129,6 +3375,35 @@ fn ingest_text_in_session(
             processing_mode: Default::default(),
         })
         .expect("ingest text");
+}
+
+fn ingest_text_with_scope(
+    engine: &mut MemoryEngine<FileStorage>,
+    session_id: &str,
+    personality_scope_id: &str,
+    timestamp: &str,
+    text: &str,
+    tags: Vec<&str>,
+) {
+    engine
+        .ingest(IngestEvent {
+            schema_version: EVENT_SCHEMA_VERSION.to_string(),
+            event_type: "user_message".to_string(),
+            source: "terminal_user".to_string(),
+            timestamp: timestamp.to_string(),
+            personality_scope_id: Some(personality_scope_id.to_string()),
+            session_id: session_id.to_string(),
+            memory_text: Some(text.to_string()),
+            payload: json!({ "text": text }),
+            tags: tags.into_iter().map(str::to_string).collect(),
+            theme: Some("personal_background".to_string()),
+            emotional_tone: None,
+            speaker: None,
+            links: vec![],
+            importance_hint: memory_engine::types::ImportanceHint::High,
+            processing_mode: Default::default(),
+        })
+        .expect("ingest scoped text");
 }
 
 fn unique_temp_dir(name: &str) -> std::path::PathBuf {

@@ -186,6 +186,8 @@ func _ingest(event_type: String, source: String, text: String, tags: Array) -> D
         "source": source,
         "timestamp": timestamp,
         "session_id": SESSION_ID,
+        "personality_scope_id": CORE_SCOPE,
+        "memory_text": text,
         "payload": {"text": text},
         "tags": tags,
         "theme": "chibigochi_memory_spike",

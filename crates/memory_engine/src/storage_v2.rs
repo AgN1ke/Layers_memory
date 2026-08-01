@@ -93,6 +93,48 @@ impl RecordKey {
     }
 }
 
+/// Domain-shaped snapshot reads that production storage can map to bounded
+/// composite indexes while preserving phantom/revision detection.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "query", rename_all = "snake_case")]
+pub enum VaultSnapshotQuery {
+    Collection {
+        collection: String,
+    },
+    SessionEvents {
+        session_id: String,
+    },
+    Archives {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        personality_scope_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_session_id: Option<String>,
+    },
+}
+
+impl VaultSnapshotQuery {
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Collection { collection } => validate_component("record collection", collection),
+            Self::SessionEvents { session_id } => {
+                validate_component("session event query session_id", session_id)
+            }
+            Self::Archives {
+                personality_scope_id,
+                source_session_id,
+            } => {
+                if let Some(scope) = personality_scope_id {
+                    validate_component("archive query personality_scope_id", scope)?;
+                }
+                if let Some(session_id) = source_session_id {
+                    validate_component("archive query source_session_id", session_id)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VaultRecord {
     pub schema_version: String,
@@ -237,6 +279,14 @@ pub trait StorageWorkUnit {
         Err(MemoryEngineError::Storage(format!(
             "transactional collection snapshot is not supported: {collection}"
         ))
+        .into())
+    }
+
+    fn query_snapshot(&mut self, query: &VaultSnapshotQuery) -> StorageV2Result<Vec<VaultRecord>> {
+        query.validate()?;
+        Err(MemoryEngineError::Storage(
+            "transactional typed snapshot query is not supported".to_string(),
+        )
         .into())
     }
 
@@ -514,7 +564,7 @@ impl TransactionalStorage for InMemoryTransactionalStorage {
             intent,
             snapshot,
             observed: BTreeMap::new(),
-            observed_collections: BTreeMap::new(),
+            observed_queries: BTreeMap::new(),
             staged: BTreeMap::new(),
         }))
     }
@@ -542,7 +592,7 @@ pub struct InMemoryWorkUnit<'a> {
     intent: WorkUnitIntent,
     snapshot: BTreeMap<RecordKey, VaultRecord>,
     observed: BTreeMap<RecordKey, Option<u64>>,
-    observed_collections: BTreeMap<String, BTreeMap<RecordKey, u64>>,
+    observed_queries: BTreeMap<VaultSnapshotQuery, BTreeMap<RecordKey, u64>>,
     staged: BTreeMap<RecordKey, StagedMutation>,
 }
 
@@ -575,15 +625,21 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
     }
 
     fn scan_collection(&mut self, collection: &str) -> StorageV2Result<Vec<VaultRecord>> {
-        validate_component("record collection", collection)?;
+        self.query_snapshot(&VaultSnapshotQuery::Collection {
+            collection: collection.to_string(),
+        })
+    }
+
+    fn query_snapshot(&mut self, query: &VaultSnapshotQuery) -> StorageV2Result<Vec<VaultRecord>> {
+        query.validate()?;
         let records = self
             .snapshot
             .iter()
-            .filter(|(key, _)| key.collection == collection)
+            .filter(|(_, record)| record_matches_snapshot_query(record, query))
             .map(|(key, record)| (key.clone(), record.clone()))
             .collect::<BTreeMap<_, _>>();
-        self.observed_collections.insert(
-            collection.to_string(),
+        self.observed_queries.insert(
+            query.clone(),
             records
                 .iter()
                 .map(|(key, record)| (key.clone(), record.revision))
@@ -657,16 +713,16 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
             }
         }
 
-        for (collection, observed) in &self.observed_collections {
+        for (query, observed) in &self.observed_queries {
             let current_revisions = current
                 .records
                 .iter()
-                .filter(|(key, _)| key.collection == *collection)
+                .filter(|(_, record)| record_matches_snapshot_query(record, query))
                 .map(|(key, record)| (key.clone(), record.revision))
                 .collect::<BTreeMap<_, _>>();
             if &current_revisions != observed {
                 return Err(StorageV2Error::Conflict(format!(
-                    "collection {collection} changed while the work unit was open"
+                    "snapshot query {query:?} changed while the work unit was open"
                 )));
             }
         }
@@ -762,6 +818,40 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
         self.storage
             .fail_if_armed(&operation_id, InMemoryCommitFault::AfterPublishBeforeAck)?;
         Ok(receipt)
+    }
+}
+
+fn record_matches_snapshot_query(record: &VaultRecord, query: &VaultSnapshotQuery) -> bool {
+    match query {
+        VaultSnapshotQuery::Collection { collection } => record.key.collection == *collection,
+        VaultSnapshotQuery::SessionEvents { session_id } => {
+            record.key.collection == "session_events"
+                && record.payload.get("session_id").and_then(Value::as_str)
+                    == Some(session_id.as_str())
+        }
+        VaultSnapshotQuery::Archives {
+            personality_scope_id,
+            source_session_id,
+        } => {
+            if record.key.collection != "archives" {
+                return false;
+            }
+            let record_session = record
+                .payload
+                .get("source_session_id")
+                .and_then(Value::as_str);
+            let record_scope = record
+                .payload
+                .get("personality_scope_id")
+                .and_then(Value::as_str)
+                .or(record_session);
+            personality_scope_id
+                .as_deref()
+                .is_none_or(|scope| record_scope == Some(scope))
+                && source_session_id
+                    .as_deref()
+                    .is_none_or(|session| record_session == Some(session))
+        }
     }
 }
 

@@ -148,6 +148,16 @@ fn transactional_sleep_start_commits_one_coherent_workflow_and_replays_exactly()
     assert_eq!(task_event_ids(&memory_task), archive.source_event_ids);
     assert_eq!(sleep_task.inputs["session_id"], "session_owner");
     assert_eq!(memory_task.inputs["session_id"], "session_owner");
+    assert_eq!(sleep_task.inputs["events"], memory_task.inputs["events"]);
+    let frozen_event = &sleep_task.inputs["events"][0];
+    assert_eq!(frozen_event["schema_version"], "sleep_input_event.v1");
+    assert_eq!(frozen_event["source"], "test");
+    assert_eq!(frozen_event["received_at"], T1);
+    assert_eq!(frozen_event["session_id"], "session_owner");
+    assert_eq!(frozen_event["memory_text"], "two");
+    assert_eq!(frozen_event["emotional_tone"], "neutral");
+    assert_eq!(frozen_event["importance_hint"], "high");
+    assert_eq!(frozen_event["processing_mode"], "defer_to_sleep");
     assert_eq!(
         sleep_task.inputs["preliminary_archive_id"],
         archive.archive_id
@@ -526,6 +536,43 @@ fn rewritten_event_record_fails_closed_before_sleep_start() {
 }
 
 #[test]
+fn another_sessions_rewritten_event_does_not_block_target_sleep() {
+    let context = context("account_alpha", "vault_alpha");
+    let storage = InMemoryTransactionalStorage::new();
+    let engine = MemoryEngine::new(storage.clone());
+    ingest(
+        &engine,
+        &context,
+        "ingest_target",
+        "session_target",
+        T0,
+        "target",
+        false,
+    );
+    let foreign_event_id = ingest(
+        &engine,
+        &context,
+        "ingest_foreign",
+        "session_foreign",
+        T0,
+        "foreign",
+        false,
+    );
+    rewrite_event_at_revision_two(&storage, &context, &foreign_event_id);
+
+    let result = engine
+        .begin_sleep_run_transactional(
+            &context,
+            sleep_request(&engine, "sleep_target_only", "session_target"),
+        )
+        .expect("typed session query must isolate unrelated corrupt records");
+
+    let archive = read_archive(&storage, &context, &result.run.archive_id);
+    assert_eq!(archive.source_session_id, "session_target");
+    assert_eq!(archive.source_event_ids.len(), 1);
+}
+
+#[test]
 fn sleep_operation_id_cannot_be_reused_for_another_session() {
     let context = context("account_alpha", "vault_alpha");
     let storage = InMemoryTransactionalStorage::new();
@@ -660,11 +707,13 @@ fn ingest_with_times<S: memory_engine::TransactionalStorage>(
         event_type: "user_message".to_string(),
         source: "test".to_string(),
         timestamp: event_timestamp.to_string(),
+        personality_scope_id: None,
         session_id: session_id.to_string(),
+        memory_text: Some(text.to_string()),
         payload: json!({"text": text}),
         tags: vec![],
         theme: None,
-        emotional_tone: None,
+        emotional_tone: Some("neutral".to_string()),
         speaker: None,
         links: vec![],
         importance_hint: if high {

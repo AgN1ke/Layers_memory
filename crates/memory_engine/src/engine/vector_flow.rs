@@ -221,6 +221,21 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub fn recall_deep(&self, query: DeepRecallQuery) -> Result<DeepRecallResult> {
+        self.recall_deep_with_feedback(query, true)
+    }
+
+    pub(super) fn recall_deep_for_context(
+        &self,
+        query: DeepRecallQuery,
+    ) -> Result<DeepRecallResult> {
+        self.recall_deep_with_feedback(query, false)
+    }
+
+    fn recall_deep_with_feedback(
+        &self,
+        query: DeepRecallQuery,
+        record_feedback: bool,
+    ) -> Result<DeepRecallResult> {
         self.ensure_manifest()?;
         validate_vector_scope(&query.scope)?;
 
@@ -276,7 +291,9 @@ impl<S: Storage> MemoryEngine<S> {
                 let Ok(unit) = self.storage.read_memory_unit_by_id(&row.memory_unit_id) else {
                     continue;
                 };
-                if unit.source_session_id != query.scope || !memory_unit_is_vector_eligible(&unit) {
+                if unit.effective_personality_scope_id() != query.scope
+                    || !memory_unit_is_vector_eligible(&unit)
+                {
                     continue;
                 }
                 let age_days = timestamp_age_days(&unit.created_at, &now).unwrap_or(0.0);
@@ -317,7 +334,9 @@ impl<S: Storage> MemoryEngine<S> {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();
-            self.record_recall_stats(&archive_ids, &now)?;
+            if record_feedback {
+                self.record_recall_stats(&archive_ids, &now)?;
+            }
 
             Ok(DeepRecallResult {
                 schema_version: DEEP_RECALL_RESULT_SCHEMA_VERSION.to_string(),
@@ -384,7 +403,7 @@ impl<S: Storage> MemoryEngine<S> {
                 let Ok(unit) = self.storage.read_memory_unit_by_id(&row.memory_unit_id) else {
                     continue;
                 };
-                if unit.source_session_id != scope
+                if unit.effective_personality_scope_id() != scope
                     || unit.archive_id != row.archive_id
                     || !memory_unit_is_vector_eligible(&unit)
                 {
@@ -538,7 +557,7 @@ impl<S: Storage> MemoryEngine<S> {
         &self,
         unit: &MemoryUnit,
     ) -> Result<()> {
-        let scope = &unit.source_session_id;
+        let scope = unit.effective_personality_scope_id();
         if !self.storage.read_manifest()?.features.embeddings_enabled {
             return Ok(());
         }
@@ -608,21 +627,29 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     fn eligible_vector_units_for_scope_unlocked(&self, scope: &str) -> Result<Vec<MemoryUnit>> {
-        let events = self.read_session_events_with_archived(scope)?;
-        if session_is_multi_speaker(&events) {
-            return Ok(Vec::new());
-        }
-        let mut units = self
+        let archives = self
             .storage
             .read_archive(&ArchiveFilters::default())?
             .into_items()
             .into_iter()
             .filter(|archive| {
-                archive.status == ArchiveStatus::Complete && archive.source_session_id == scope
+                archive.status == ArchiveStatus::Complete
+                    && archive.effective_personality_scope_id() == scope
             })
-            .flat_map(|archive| archive.memory_units.into_iter())
-            .filter(memory_unit_is_vector_eligible)
             .collect::<Vec<_>>();
+        let mut units = Vec::new();
+        for archive in archives {
+            let events = self.read_session_events_with_archived(&archive.source_session_id)?;
+            if session_is_multi_speaker(&events) {
+                continue;
+            }
+            units.extend(
+                archive
+                    .memory_units
+                    .into_iter()
+                    .filter(memory_unit_is_vector_eligible),
+            );
+        }
         units.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)

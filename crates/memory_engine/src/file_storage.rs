@@ -240,11 +240,14 @@ impl FileStorage {
     fn upsert_session_metadata(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
         let path = self.session_json_path(session_id);
         let mut metadata = if path.exists() {
-            self.read_session_metadata_file(session_id)?
+            let metadata = self.read_session_metadata_file(session_id)?;
+            metadata.validate()?;
+            metadata
         } else {
             SessionMetadata {
                 schema_version: SESSION_SCHEMA_VERSION.to_string(),
                 session_id: session_id.to_string(),
+                personality_scope_id: event.personality_scope_id.clone(),
                 host_id: self.host_id.clone(),
                 status: SessionStatus::Active,
                 created_at: event.received_at.clone(),
@@ -263,6 +266,14 @@ impl FileStorage {
             }
         };
 
+        if metadata.effective_personality_scope_id() != event.effective_personality_scope_id() {
+            return Err(MemoryEngineError::Validation(format!(
+                "session {session_id} belongs to personality scope {}, not {}",
+                metadata.effective_personality_scope_id(),
+                event.effective_personality_scope_id()
+            )));
+        }
+
         metadata.updated_at = event.received_at.clone();
         metadata.event_count += 1;
 
@@ -275,6 +286,8 @@ impl FileStorage {
                 metadata.tags.push(tag.clone());
             }
         }
+
+        metadata.validate()?;
 
         self.write_session_metadata_file(&metadata)
     }
@@ -352,6 +365,25 @@ impl Storage for FileStorage {
 
     fn append_event(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
         self.ensure_layout()?;
+        event.validate()?;
+        if event.session_id != session_id {
+            return Err(MemoryEngineError::Validation(format!(
+                "event session_id {} does not match append target {session_id}",
+                event.session_id
+            )));
+        }
+        let metadata_path = self.session_json_path(session_id);
+        if metadata_path.exists() {
+            let metadata = self.read_session_metadata_file(session_id)?;
+            metadata.validate()?;
+            if metadata.effective_personality_scope_id() != event.effective_personality_scope_id() {
+                return Err(MemoryEngineError::Validation(format!(
+                    "session {session_id} belongs to personality scope {}, not {}",
+                    metadata.effective_personality_scope_id(),
+                    event.effective_personality_scope_id()
+                )));
+            }
+        }
         fs::create_dir_all(self.session_dir(session_id))?;
 
         let mut file = OpenOptions::new()
@@ -423,7 +455,8 @@ impl Storage for FileStorage {
 
     fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry> {
         let path = self.archive_entry_path_by_id(archive_id)?;
-        read_json(&path)
+        let entry = read_json(&path)?;
+        self.hydrate_archive_memory_units(entry)
     }
 
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>> {
@@ -439,7 +472,7 @@ impl Storage for FileStorage {
                 continue;
             };
             if archive_matches_filters(&entry, filters) {
-                entries.push(entry);
+                entries.push(self.hydrate_archive_memory_units(entry)?);
             }
         }
 
@@ -1210,6 +1243,15 @@ fn read_json_from_collection<T: DeserializeOwned>(
 }
 
 impl FileStorage {
+    fn hydrate_archive_memory_units(&self, mut entry: ArchiveEntry) -> Result<ArchiveEntry> {
+        let canonical =
+            <Self as Storage>::read_memory_units_for_archive(self, &entry.archive_id)?.items;
+        if !canonical.is_empty() {
+            entry.memory_units = canonical;
+        }
+        Ok(entry)
+    }
+
     fn relative_path(&self, path: &Path) -> String {
         path.strip_prefix(&self.root)
             .unwrap_or(path)
@@ -1513,10 +1555,18 @@ fn year_month_from_timestamp(timestamp: &str) -> (String, String) {
 
 fn event_summary(event: &StoredEvent) -> String {
     event
-        .payload
-        .get("text")
-        .and_then(|value| value.as_str())
+        .memory_text
+        .as_ref()
+        .map(|text| text.trim())
+        .filter(|text| !text.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            event
+                .payload
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| event.payload.to_string())
 }
 

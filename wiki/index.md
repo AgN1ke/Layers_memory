@@ -31,6 +31,10 @@ crate/host README files stay outside the wiki.
 
 ## Planning
 
+- [Information Flow Integrity](pages/planning/information-flow-integrity.md) -
+  end-to-end host-event → Session → Sleep → MemoryUnit → recall → context-plan
+  authority, implemented integrity repairs, and ordered server completion
+  phases.
 - [Roadmap](pages/planning/roadmap.md) - current implementation state, completed
   unit-focused vector Stage 2, v0.5 live gate, implemented v0.6 graph-storage
   foundation, open work, deferred items, and phase ordering.

@@ -2,24 +2,46 @@ use super::*;
 
 impl<S: Storage> MemoryEngine<S> {
     pub fn recall(&self, query: RecallQuery) -> Result<RecallResult> {
+        self.recall_with_feedback(query, true)
+    }
+
+    pub(super) fn recall_for_context(&self, query: RecallQuery) -> Result<RecallResult> {
+        self.recall_with_feedback(query, false)
+    }
+
+    fn recall_with_feedback(
+        &self,
+        query: RecallQuery,
+        record_feedback: bool,
+    ) -> Result<RecallResult> {
         validate_recall_query(&query)?;
         self.ensure_manifest()?;
 
-        let result = if let Some(session_id) = query.session_id.clone() {
-            self.with_resource_lock(session_lock_key(&session_id), || {
-                self.recall_unlocked(query)
+        let result = if let Some(scope_id) = query
+            .personality_scope_id
+            .clone()
+            .or_else(|| query.session_id.clone())
+        {
+            self.with_resource_lock(format!("archive_scope:{scope_id}"), || {
+                self.recall_unlocked(query, record_feedback)
             })
         } else {
-            self.with_resource_lock("archive:all".to_string(), || self.recall_unlocked(query))
+            self.with_resource_lock("archive:all".to_string(), || {
+                self.recall_unlocked(query, record_feedback)
+            })
         }?;
 
-        if self.recall_flush_due() {
+        if record_feedback && self.recall_flush_due() {
             self.flush_recall_stats()?;
         }
         Ok(result)
     }
 
-    pub(super) fn recall_unlocked(&self, query: RecallQuery) -> Result<RecallResult> {
+    pub(super) fn recall_unlocked(
+        &self,
+        query: RecallQuery,
+        record_feedback: bool,
+    ) -> Result<RecallResult> {
         let created_at = query.created_at.clone().map_or_else(now_rfc3339, Ok)?;
         let pending_recall_stats = self.recall_stats_snapshot()?;
         let archive_enabled = query.filters.source_layers.is_empty()
@@ -78,7 +100,11 @@ impl<S: Storage> MemoryEngine<S> {
         let mut vector_stage_debug = None;
 
         if let Some(embedding) = query.query_embedding.as_ref() {
-            if let Some(scope) = query.session_id.as_deref() {
+            if let Some(scope) = query
+                .personality_scope_id
+                .as_deref()
+                .or(query.session_id.as_deref())
+            {
                 let archive_ids = scored_entries
                     .iter()
                     .take(stage2_candidate_count)
@@ -149,7 +175,7 @@ impl<S: Storage> MemoryEngine<S> {
                     status: RecallVectorStageStatus::Disabled,
                     model_id: Some(embedding.model_id.clone()),
                     reason: Some(
-                        "session_id is required for scope-isolated vector re-ranking".to_string(),
+                        "personality_scope_id or session_id is required for scope-isolated vector re-ranking".to_string(),
                     ),
                     candidate_limit: self.options.vectors.stage2_candidate_limit,
                     candidate_count: stage2_candidate_count,
@@ -199,7 +225,9 @@ impl<S: Storage> MemoryEngine<S> {
             .iter()
             .map(|(entry, _)| entry.archive_id.clone())
             .collect::<Vec<_>>();
-        self.record_recall_stats(&selected_archive_ids, &created_at)?;
+        if record_feedback {
+            self.record_recall_stats(&selected_archive_ids, &created_at)?;
+        }
 
         for (entry, score) in selected_entries {
             items.push(recall_item_from_archive(entry, score, query.explain));
@@ -294,12 +322,20 @@ pub(super) fn token_overlap_sets(left: &BTreeSet<String>, right: &BTreeSet<Strin
 
 pub(super) fn event_text(event: &StoredEvent) -> Option<String> {
     event
-        .payload
-        .get("text")
-        .and_then(|value| value.as_str())
+        .memory_text
+        .as_deref()
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            event
+                .payload
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        })
 }
 
 pub(super) fn query_tokens(query: &RecallQuery) -> BTreeSet<String> {
@@ -323,6 +359,19 @@ pub(super) fn query_tokens(query: &RecallQuery) -> BTreeSet<String> {
 
 pub(super) fn archive_tokens(entry: &ArchiveEntry) -> BTreeSet<String> {
     let mut text = String::new();
+    if !entry.memory_units.is_empty() {
+        for unit in entry
+            .memory_units
+            .iter()
+            .filter(|unit| memory_unit_is_prompt_eligible(unit))
+        {
+            text.push_str(&unit.thesis);
+            text.push(' ');
+            text.push_str(&unit.tags.join(" "));
+            text.push(' ');
+        }
+        return tokenize(&text);
+    }
     if let Some(compact_memory) = &entry.compact_memory {
         text.push_str(compact_memory);
         text.push(' ');

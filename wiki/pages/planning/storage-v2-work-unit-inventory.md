@@ -182,11 +182,13 @@ isolation.
 
 This reference intentionally supports Stage 1 only. A request carrying
 `query_embedding` fails clearly until S2.D ports the vector scope/index; it
-does not silently degrade a caller that explicitly requested Stage 2. The
-in-memory reference scans one vault collection for conformance. S3 must replace
-that with indexed Archive queries and prove query plans; this is not a
-production scan approval. The next migration boundary is the rest of the S2.C
-Sleep workflow, not an isolated manifest or coverage write.
+does not silently degrade a caller that explicitly requested Stage 2. Domain
+flows now request typed `Archives`/`SessionEvents` snapshots. The in-memory
+reference may implement them by scanning one vault, but tracks phantoms only
+for the exact bounded result. S3 must implement the same contracts with indexed
+queries and prove query plans; this is not a production scan approval. The
+next migration boundary is the rest of the S2.C Sleep workflow, not an
+isolated manifest or coverage write.
 
 ### S2.C — Sleep, fidelity and forgetting
 
@@ -199,6 +201,12 @@ so untrusted client timestamps cannot move new turns or win a selection tie.
 The Session keeps a separate pending-event reservation;
 `archived_event_ids` and `archived_to` continue to mean coverage by Complete
 archives only.
+
+The information-flow repair also makes both Storage paths freeze the complete
+versioned `sleep_input_event.v1` projection, including `memory_text`, payload,
+personality scope, receive provenance and policy fields. A typed SessionEvents
+snapshot means a malformed/revised event in another Session cannot poison the
+target workflow; a malformed target event still fails closed.
 
 Next implement transactional pass submit, finalize and cancel/recovery. Each
 continuation must revalidate the frozen workflow and record revisions, apply

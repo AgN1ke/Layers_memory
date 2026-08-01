@@ -75,6 +75,11 @@ impl<S: Storage> MemoryEngine<S> {
         let created_at = now_rfc3339()?;
         let archived_event_ids = self.archived_event_ids_for_session(&request.session_id)?;
         let session = self.storage.read_session(&request.session_id)?;
+        let personality_scope_id = session.metadata.personality_scope_id.clone();
+        let effective_personality_scope_id = session
+            .metadata
+            .effective_personality_scope_id()
+            .to_string();
         let recent_limit = if request.session_recent_limit == 0 {
             self.options.context.default_session_recent_limit
         } else {
@@ -112,10 +117,11 @@ impl<S: Storage> MemoryEngine<S> {
             });
         let query_text_for_core_ranking = query_text.clone();
 
-        let recall_result = self.recall(RecallQuery {
+        let recall_result = self.recall_for_context(RecallQuery {
             schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
             query_id: None,
             created_at: Some(created_at.clone()),
+            personality_scope_id,
             session_id: Some(request.session_id.clone()),
             context: json!({ "recent_text": query_text.clone().unwrap_or_default() }),
             query_text,
@@ -152,11 +158,14 @@ impl<S: Storage> MemoryEngine<S> {
         notes.extend(storage_warning_notes(&core_read_warnings));
         let (associative_memory, expansion_notes) = self.associative_memory_items(
             &request,
+            &effective_personality_scope_id,
             &created_at,
-            &core_facts,
-            &session_recent,
-            &session_trace,
-            &archive_relevant,
+            VisibleMemoryLayers {
+                core_facts: &core_facts,
+                session_recent: &session_recent,
+                session_trace: &session_trace,
+                archive_relevant: &archive_relevant,
+            },
         )?;
         notes.extend(expansion_notes);
 
@@ -211,6 +220,24 @@ impl<S: Storage> MemoryEngine<S> {
             notes.push(format!(
                 "{future_timestamps} memory timestamp(s) are in the future relative to now; their time labels are omitted."
             ));
+        }
+
+        let exposed_archive_ids = budgeted
+            .archive_relevant
+            .iter()
+            .map(|item| item.id.clone())
+            .chain(
+                budgeted
+                    .associative_memory
+                    .iter()
+                    .map(|item| item.archive_id.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        self.record_recall_stats(&exposed_archive_ids, &created_at)?;
+        if self.recall_flush_due() {
+            self.flush_recall_stats()?;
         }
 
         Ok(CoreContextPackage {
@@ -272,19 +299,17 @@ impl<S: Storage> MemoryEngine<S> {
     fn associative_memory_items(
         &self,
         request: &CoreContextRequest,
+        personality_scope_id: &str,
         created_at: &str,
-        core_facts: &[CoreContextFact],
-        session_recent: &[CoreContextEvent],
-        session_trace: &[CoreContextEvent],
-        archive_relevant: &[RecallItem],
+        visible_layers: VisibleMemoryLayers<'_>,
     ) -> Result<(Vec<AssociativeMemoryItem>, Vec<String>)> {
         let Some(embedding) = request.query_embedding.as_ref() else {
             return Ok((Vec::new(), Vec::new()));
         };
 
-        let scope = request.core_scope.as_deref().unwrap_or(&request.session_id);
+        let scope = personality_scope_id;
         let min_similarity = self.options.vectors.contextual_expansion_min_sim;
-        let result = self.recall_deep(DeepRecallQuery {
+        let result = self.recall_deep_for_context(DeepRecallQuery {
             scope: scope.to_string(),
             query_vec: embedding.query_vec.clone(),
             model_id: embedding.model_id.clone(),
@@ -308,8 +333,12 @@ impl<S: Storage> MemoryEngine<S> {
             ));
         }
 
-        let mut visible =
-            visible_memory_texts(core_facts, session_recent, session_trace, archive_relevant);
+        let mut visible = visible_memory_texts(
+            visible_layers.core_facts,
+            visible_layers.session_recent,
+            visible_layers.session_trace,
+            visible_layers.archive_relevant,
+        );
         let mut items = Vec::new();
         let mut seen_units = HashSet::new();
         for hit in result.hits {
@@ -339,6 +368,13 @@ impl<S: Storage> MemoryEngine<S> {
 
         Ok((items, notes))
     }
+}
+
+struct VisibleMemoryLayers<'a> {
+    core_facts: &'a [CoreContextFact],
+    session_recent: &'a [CoreContextEvent],
+    session_trace: &'a [CoreContextEvent],
+    archive_relevant: &'a [RecallItem],
 }
 
 fn associative_memory_item(

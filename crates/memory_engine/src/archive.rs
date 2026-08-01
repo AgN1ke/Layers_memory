@@ -48,6 +48,8 @@ pub struct ArchiveEntry {
     pub archive_id: Id,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personality_scope_id: Option<Id>,
     pub source_session_id: Id,
     #[serde(default)]
     pub source_event_ids: Vec<Id>,
@@ -98,6 +100,8 @@ pub struct MemoryUnit {
     pub schema_version: String,
     pub memory_unit_id: Id,
     pub archive_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personality_scope_id: Option<Id>,
     pub source_session_id: Id,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -123,6 +127,43 @@ pub struct MemoryUnit {
     /// Additive in memory_unit.v1 so older records remain readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reflection_operation_id: Option<Id>,
+}
+
+impl ArchiveEntry {
+    pub fn effective_personality_scope_id(&self) -> &str {
+        self.personality_scope_id
+            .as_deref()
+            .unwrap_or(&self.source_session_id)
+    }
+}
+
+impl MemoryUnit {
+    pub fn effective_personality_scope_id(&self) -> &str {
+        self.personality_scope_id
+            .as_deref()
+            .unwrap_or(&self.source_session_id)
+    }
+}
+
+/// One policy for every prompt-facing Archive path. Tombstoned, rejected or
+/// revision-pending units remain auditable but cannot leak through their
+/// parent Archive's cached gist/compact text.
+pub fn memory_unit_is_prompt_eligible(unit: &MemoryUnit) -> bool {
+    matches!(
+        unit.status,
+        MemoryUnitStatus::ActiveArchive | MemoryUnitStatus::CoreCandidate
+    ) && !matches!(
+        unit.fidelity_status,
+        FidelityStatus::Unsupported | FidelityStatus::Distorted | FidelityStatus::NeedsRevision
+    )
+}
+
+pub fn archive_has_prompt_eligible_memory(entry: &ArchiveEntry) -> bool {
+    entry.memory_units.is_empty()
+        || entry
+            .memory_units
+            .iter()
+            .any(memory_unit_is_prompt_eligible)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

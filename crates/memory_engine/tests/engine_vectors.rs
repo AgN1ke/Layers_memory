@@ -553,6 +553,71 @@ fn deep_recall_finds_planet_memory_outside_stage2_candidate_window() {
 }
 
 #[test]
+fn stage2_uses_personality_scope_across_interaction_sessions() {
+    let root = unique_temp_dir("vectors_stage2_personality_scope");
+    let storage = FileStorage::with_host_id(&root, "vector_test");
+    let engine = MemoryEngine::new(storage);
+    let owner_scope = "owner_memory";
+
+    let unit_ids = create_archive_with_units_named(
+        &engine,
+        "old_interaction",
+        "old_planet",
+        "An older planetary discussion.",
+        vec![("Titan has a dense atmosphere.", 0.9)],
+    );
+    let mut archive = engine
+        .storage()
+        .read_archive_entry_by_id("archive_old_planet")
+        .unwrap();
+    archive.personality_scope_id = Some(owner_scope.to_string());
+    engine
+        .storage()
+        .update_archive_entry(&archive.archive_id, &archive)
+        .unwrap();
+    let mut unit = engine
+        .storage()
+        .read_memory_unit_by_id(&unit_ids[0])
+        .unwrap();
+    unit.personality_scope_id = Some(owner_scope.to_string());
+    engine.storage().write_memory_unit(&unit).unwrap();
+
+    engine
+        .set_vector_scope(owner_scope, true, false)
+        .expect("enable owner vectors");
+    let requests = engine
+        .pending_embedding_backfill(owner_scope)
+        .expect("owner backfill");
+    submit_embedding(&engine, &requests[0], 1);
+
+    let mut query = recall_query(
+        "new_interaction",
+        Some(unit_vector(DEFAULT_VECTOR_DIM, 1)),
+        1,
+        true,
+    );
+    query.personality_scope_id = Some(owner_scope.to_string());
+    let result = engine.recall(query).expect("cross-session Stage 2");
+
+    assert_eq!(result.stage_used, RecallStage::Stage2Embeddings);
+    assert_eq!(result.items[0].id, "archive_old_planet");
+    assert_eq!(
+        result.items[0].matched_memory_unit_id.as_deref(),
+        Some(unit_ids[0].as_str())
+    );
+    assert_eq!(
+        result
+            .debug
+            .as_ref()
+            .and_then(|debug| debug.vector_stage.as_ref())
+            .map(|stage| stage.status),
+        Some(RecallVectorStageStatus::Applied)
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn core_context_package_expands_with_vector_detail_when_query_embedding_is_present() {
     let root = unique_temp_dir("vectors_context_expansion");
     let storage = FileStorage::with_host_id(&root, "vector_test");
@@ -914,6 +979,7 @@ fn create_archive_with_units_named_at(
             schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
             memory_unit_id: format!("mu_{archive_suffix}_{index}"),
             archive_id: archive_id.clone(),
+            personality_scope_id: None,
             source_session_id: session_id.to_string(),
             created_at: created_at.to_string(),
             updated_at: created_at.to_string(),
@@ -936,6 +1002,7 @@ fn create_archive_with_units_named_at(
         archive_id,
         created_at: archive_time.clone(),
         updated_at: archive_time.clone(),
+        personality_scope_id: None,
         source_session_id: session_id.to_string(),
         source_event_ids: vec![event.event_id],
         time_range: memory_engine::types::TimeRange {
@@ -996,7 +1063,9 @@ fn ingest_user_event(
             event_type: "user_message".to_string(),
             source: "test".to_string(),
             timestamp: "2020-01-01T10:00:00Z".to_string(),
+            personality_scope_id: None,
             session_id: session_id.to_string(),
+            memory_text: None,
             payload: json!({ "text": text }),
             tags: Vec::new(),
             theme: None,
@@ -1023,7 +1092,9 @@ fn ingest_user_event_with_speaker(
             event_type: "user_message".to_string(),
             source: "test".to_string(),
             timestamp: "2020-01-01T10:00:00Z".to_string(),
+            personality_scope_id: None,
             session_id: session_id.to_string(),
+            memory_text: None,
             payload: json!({ "text": text }),
             tags: Vec::new(),
             theme: None,
@@ -1179,6 +1250,7 @@ fn recall_query(
         schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
         query_id: None,
         created_at: Some("2020-07-01T00:00:00Z".to_string()),
+        personality_scope_id: None,
         session_id: Some(scope.to_string()),
         context: json!({}),
         query_text: Some("Tell me about that planet with the atmosphere.".to_string()),

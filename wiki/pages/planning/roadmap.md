@@ -467,6 +467,13 @@ core як централізований сервіс для тисяч грав
 
 ### S2 — Transaction-capable Storage v2
 
+- [x] Наскрізний information-flow repair вирівняв local/reference path:
+  host-owned `memory_text`, stable personality scope поверх interaction
+  Sessions, повний frozen Sleep input, fail-closed source provenance,
+  standalone MemoryUnit як canonical prompt truth, один eligibility gate,
+  present-state render і recall feedback лише після final context budget/dedup.
+  Див. [Information Flow Integrity](information-flow-integrity.md). —
+  2026-08-02.
 - [x] Проаудитити всі Storage flows і відділити read-only, atomic mutation та
   durable workflow; не ховати multi-record races за набором SQL methods. —
   2026-08-01, [work-unit inventory](storage-v2-work-unit-inventory.md).
@@ -485,6 +492,11 @@ core як централізований сервіс для тисяч грав
   Replica-local deltas не беруть участі. Collection revision/membership
   захищені від phantom changes. Production indexed query лишається S3, vectors
   — S2.D. — 2026-08-01, `server_recall_storage_v2.rs`.
+- [x] Storage v2 snapshot reads отримали domain-shaped `SessionEvents` та
+  `Archives` queries з exact membership/revision phantom protection. Sleep
+  більше не сканує й не валідує чужі Session events; recall query вже має
+  форму, яку S3 може відобразити на bounded composite indexes. Full-collection
+  scan лишився тільки compatibility/conformance API. — 2026-08-02.
 - [x] S2.B Core logical implementation: versioned transactional upsert/patch,
   deterministic new fact IDs, durable replay result, exact revision retry,
   point patch із explicit category, scope/vault isolation та fault suite. Це
@@ -506,9 +518,10 @@ core як централізований сервіс для тисяч грав
   Session claim, preliminary Archive, два PendingTasks, initial SleepRun та
   immutable operation result публікуються шістьма атомарними mutations.
   Preliminary не означає Complete coverage; pending event IDs живуть окремо.
-  Одинадцять focused tests додано, включно з fail-closed incomplete coverage та
-  fail-closed rewritten-event rejection; внутрішнє приймання ще не завершене. —
-  2026-08-01, `server_sleep_stage1_storage_v2.rs`.
+  Дванадцять focused tests додано, включно з fail-closed incomplete coverage,
+  fail-closed rewritten-event rejection і доказом, що пошкоджена подія іншої
+  Session не блокує target Sleep; внутрішнє приймання ще не завершене. —
+  2026-08-02, `server_sleep_stage1_storage_v2.rs`.
 - [ ] Завершити S2.C: transactional sleep pass submit, finalize і
   cancel/recovery мають revalidate frozen state, атомарно оновити
   task/run/archive/MemoryUnit/Session та звільнити active claim; потім перенести

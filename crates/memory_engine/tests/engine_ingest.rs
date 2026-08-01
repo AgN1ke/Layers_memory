@@ -19,7 +19,9 @@ fn engine_ingest_stores_event_and_updates_session_files() {
             event_type: "user_message".to_string(),
             source: "telegram_user_42".to_string(),
             timestamp: "2026-05-17T16:32:11.420Z".to_string(),
+            personality_scope_id: None,
             session_id: "2026-05-17_005".to_string(),
+            memory_text: None,
             payload: json!({ "text": "Я переїхав у Берлін" }),
             tags: vec!["personal_fact".to_string(), "location".to_string()],
             theme: Some("personal_background".to_string()),
@@ -71,7 +73,9 @@ fn engine_ingest_rejects_wrong_schema_version() {
             event_type: "user_message".to_string(),
             source: "telegram_user_42".to_string(),
             timestamp: "2026-05-17T16:32:11.420Z".to_string(),
+            personality_scope_id: None,
             session_id: "2026-05-17_005".to_string(),
+            memory_text: None,
             payload: json!({ "text": "hello" }),
             tags: vec![],
             theme: None,
@@ -86,6 +90,53 @@ fn engine_ingest_rejects_wrong_schema_version() {
     assert!(error
         .to_string()
         .contains("incompatible schema version: expected event.v1, got event.v0"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_rejects_personality_scope_drift_before_appending_event() {
+    let root = unique_temp_dir("engine_rejects_personality_scope_drift");
+    let storage = FileStorage::with_host_id(&root, "telegram_bot");
+    let engine = MemoryEngine::new(storage);
+
+    let event = |scope: &str, timestamp: &str, text: &str| IngestEvent {
+        schema_version: EVENT_SCHEMA_VERSION.to_string(),
+        event_type: "user_message".to_string(),
+        source: "telegram_user_42".to_string(),
+        timestamp: timestamp.to_string(),
+        personality_scope_id: Some(scope.to_string()),
+        session_id: "stable_session".to_string(),
+        memory_text: Some(text.to_string()),
+        payload: json!({ "text": text }),
+        tags: vec![],
+        theme: None,
+        emotional_tone: None,
+        speaker: None,
+        links: vec![],
+        importance_hint: Default::default(),
+        processing_mode: Default::default(),
+    };
+
+    engine
+        .ingest(event("owner_alpha", "2026-05-17T16:32:11.420Z", "first"))
+        .expect("first scoped event");
+    let error = engine
+        .ingest(event(
+            "owner_beta",
+            "2026-05-17T16:32:12.420Z",
+            "must not append",
+        ))
+        .expect_err("one interaction cannot switch personality owner");
+    assert!(error.to_string().contains("belongs to personality scope"));
+
+    let events_path = root
+        .join("sessions")
+        .join("stable_session")
+        .join("events.jsonl");
+    let events = fs::read_to_string(events_path).expect("events jsonl");
+    assert_eq!(events.lines().count(), 1);
+    assert!(!events.contains("must not append"));
 
     fs::remove_dir_all(root).ok();
 }
@@ -123,7 +174,9 @@ fn engine_ingest_appends_session_markdown_without_rewriting_header() {
                 event_type: "user_message".to_string(),
                 source: "telegram_user_42".to_string(),
                 timestamp: format!("2026-05-17T16:32:1{index}.420Z"),
+                personality_scope_id: None,
                 session_id: "append_md_session".to_string(),
+                memory_text: None,
                 payload: json!({ "text": format!("Повідомлення {index}") }),
                 tags: vec!["telegram_message".to_string()],
                 theme: Some("telegram_conversation".to_string()),
@@ -153,13 +206,17 @@ fn ingest_numbered_event(
     engine: &MemoryEngine<FileStorage>,
     index: usize,
 ) -> memory_engine::IngestResult {
+    let minute = 32 + index / 60;
+    let second = index % 60;
     engine
         .ingest(IngestEvent {
             schema_version: EVENT_SCHEMA_VERSION.to_string(),
             event_type: "user_message".to_string(),
             source: "telegram_user_42".to_string(),
-            timestamp: format!("2026-05-17T16:32:1{index}.420Z"),
+            timestamp: format!("2026-05-17T16:{minute:02}:{second:02}.420Z"),
+            personality_scope_id: None,
             session_id: "event_count_session".to_string(),
+            memory_text: None,
             payload: json!({ "text": format!("Подія {index}") }),
             tags: vec!["telegram_message".to_string()],
             theme: Some("telegram_conversation".to_string()),

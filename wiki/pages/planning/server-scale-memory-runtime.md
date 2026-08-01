@@ -306,9 +306,14 @@ preliminary Archive, compression and MemoryUnit PendingTasks, initial SleepRun
 and immutable operation result. Replay returns the original run. The Session
 stores pending source IDs separately; a preliminary Archive does not advance
 Complete coverage or remove events from the live session. Eleven focused tests
-cover that boundary, including fail-closed incomplete coverage state and
-rejection of rewritten append-only events, but internal acceptance is still
-pending.
+cover that boundary, including fail-closed incomplete coverage state,
+rejection of rewritten append-only target events, and isolation from malformed
+events in unrelated Sessions, but internal acceptance is still pending.
+
+Storage v2 domain reads no longer require an untyped whole-collection contract.
+`SessionEvents` and `Archives` snapshot queries carry the same scope shape that
+PostgreSQL composite indexes must implement while retaining exact
+revision/membership phantom detection in the reference backend.
 
 This is only the workflow start. Provider execution remains outside the work
 unit, and transactional submit, finalize and cancel/recovery must still

@@ -212,6 +212,8 @@ Markdown-файли існують для людини. Вони не замін
   "source": "telegram_user_42",
   "timestamp": "2026-05-17T16:32:11.420Z",
   "session_id": "2026-05-17_005",
+  "personality_scope_id": "telegram_311422683",
+  "memory_text": "Я переїхав у Берлін минулого місяця",
   "payload": {
     "text": "Я переїхав у Берлін минулого місяця",
     "chat_id": 42
@@ -237,6 +239,8 @@ Markdown-файли існують для людини. Вони не замін
 
 Опціональні поля:
 
+- `personality_scope_id`;
+- `memory_text`;
 - `tags`;
 - `theme`;
 - `emotional_tone`;
@@ -248,6 +252,13 @@ Markdown-файли існують для людини. Вони не замін
 Правила:
 
 - `payload` належить хосту і може мати довільну JSON-структуру;
+- `memory_text` — host-approved текст для Sleep, recall і evidence. Він не
+  підміняє lossless `payload`; legacy events без нього використовують
+  `payload.text`, якщо це рядок;
+- `personality_scope_id` — довгожива памʼять однієї особистості через кілька
+  interaction Session. Відсутнє поле має exact `session_id` fallback. Існуюча
+  Session не може змінити scope наступною подією;
+- `timestamp` має бути RFC3339; некоректний час не проходить admission;
 - ядро системи не має жорстко знати всі можливі `type`;
 - `tags` мають бути короткими машинними рядками;
 - `theme` - одна основна тема, якщо хост її знає;
@@ -268,6 +279,8 @@ Markdown-файли існують для людини. Вони не замін
   "source": "telegram_user_42",
   "timestamp": "2026-05-17T16:32:11.420Z",
   "session_id": "2026-05-17_005",
+  "personality_scope_id": "telegram_311422683",
+  "memory_text": "Я переїхав у Берлін минулого місяця",
   "payload": {
     "text": "Я переїхав у Берлін минулого місяця",
     "chat_id": 42
@@ -339,6 +352,7 @@ Sleep запускається окремим викликом `engine.sleep(ses
 {
   "schema_version": "session.v1",
   "session_id": "2026-05-17_005",
+  "personality_scope_id": "telegram_311422683",
   "host_id": "telegram_bot",
   "status": "active",
   "created_at": "2026-05-17T16:30:00.000Z",
@@ -360,6 +374,8 @@ Sleep запускається окремим викликом `engine.sleep(ses
 Поля:
 
 - `session_id` - збігається з папкою;
+- `personality_scope_id` — стабільна памʼять особистості, якій належить ця
+  interaction Session; legacy fallback дорівнює `session_id`;
 - `host_id` - короткий id хоста;
 - `status` - `active`, `sleep_pending`, `archived`, `failed`;
 - `created_at`, `updated_at`, `closed_at`;
@@ -567,6 +583,15 @@ compatibility-шляхом. Це не debug JSON і не довільна про
 archive. Ordinary chat recall читає лише Complete archive entries; якщо
 `compact_memory` відсутній у Complete legacy entry, projection може
 fallback-нути на `gist`.
+
+Коли для Archive існують standalone `MemoryUnit` records, вони мають вищу
+authority за embedded `memory_units`, `gist` і `compact_memory` батьківського
+JSON. Reader hydrate-ить Archive з canonical units. Prompt eligibility
+дозволяє лише `active_archive`/`core_candidate` без
+`unsupported`/`distorted`/`needs_revision`; якщо unitized Archive не має
+жодного eligible unit, він не бере участі у prompt recall. Parent cache не
+може воскресити forgotten/rejected зміст. Legacy Archive без unit records
+зберігає старий fallback.
 
 Multi-track поля `emotional_markers`, `topic_thread`, `personal_signals`, `relational_tone` заповнюються multi-pass sleep у host-і для storage/debug audit, Core bridge і майбутнього reflection. Старі archive entries можуть не мати цих полів; reader має трактувати відсутні масиви як порожні, а відсутній `relational_tone` як `null`.
 
@@ -789,7 +814,12 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
 }
 ```
 
-`domain_state` приходить від хоста у момент запиту і не записується в Core Store. `core_scope` фільтрує `core_facts`; якщо він заданий, ядро повертає тільки факти з таким самим `scope`.
+`domain_state` приходить від хоста у момент запиту і не записується в Core
+Store. Canonical prompt renderer показує непорожній стан у
+`<current_state_json>` з явною інструкцією, що це теперішній стан хоста, а не
+згадка чи твердження користувача. `core_scope` фільтрує `core_facts`; якщо він
+заданий, ядро повертає тільки факти з таким самим `scope`. Archive/vector
+memory scope не виводиться з `core_scope`: його ядро бере з Session metadata.
 
 `query_embedding` необовʼязковий. У `core_context_package` він представляє
 актуальний user turn і активує окремий ephemeral `associative_memory` над
@@ -945,7 +975,14 @@ Core Context Package не обов'язково зберігається на д
 }
 ```
 
-На v0.1 `core_facts` заповнюється стабільними фактами поточного `core_scope`; категорії є вільними normalized `snake_case`, а не закритим списком. Хости мають використовувати `CoreContextPackage` як єдину точку збору prompt-контексту, а не дублювати session/recent/archive/core логіку в кожному host-і.
+На v0.1 `core_facts` заповнюється стабільними фактами поточного `core_scope`;
+категорії є вільними normalized `snake_case`, а не закритим списком. Хости
+мають використовувати `CoreContextPackage` як єдину точку збору
+prompt-контексту, а не дублювати session/recent/archive/core логіку в кожному
+host-і. Це також canonical context plan: token trimming та dedup відбуваються
+до того, як ядро реєструє recall feedback. Archive, який був кандидатом, але
+не пережив фінальний budget, не отримує `recall_count`; один Archive,
+видимий через дві проєкції, рахується один раз.
 
 `budget` завжди показує, скільки memory context приблизно займає після trimming.
 Active session events зберігаються від найсвіжіших назад,
@@ -1347,6 +1384,7 @@ generalization distance. Це storage compatibility, не hierarchical reasoning
   "schema_version": "recall_query.v1",
   "query_id": "recall_query_01J00000000000000000000001",
   "created_at": "2026-05-17T17:30:00.000Z",
+  "personality_scope_id": "telegram_311422683",
   "session_id": "2026-05-17_005",
   "context": {
     "active_theme": "personal_background",
@@ -1384,6 +1422,7 @@ generalization distance. Це storage compatibility, не hierarchical reasoning
 
 - `query_id`;
 - `created_at`;
+- `personality_scope_id`;
 - `session_id`;
 - `query_text`.
 - `query_embedding` (`model_id` + `query_vec`).
@@ -1396,9 +1435,33 @@ generalization distance. Це storage compatibility, не hierarchical reasoning
 
 На v0.1 основний recall працює по `archive` і `core`. Пошук у live-session може бути доданий як проста перевірка поточної сесії.
 
-`session_id` у `RecallQuery` є isolation boundary для archive recall. Якщо поле задане, ядро повертає тільки archive entries, де `source_session_id` дорівнює цьому `session_id`. Це default для `core_context_package` і звичайного chat prompt. Якщо хосту потрібен явний глобальний archive search для debug/admin-команди, він має передати `session_id: null` або не передавати поле.
+`personality_scope_id` є довгоживою cognitive isolation boundary для Archive і
+vector recall. Якщо поле задане, ядро може згадувати Archive з кількох
+interaction Session тієї самої особистості. `session_id` лишається поточним
+діалогом і legacy fallback: коли personality scope відсутній, Archive
+обмежуються exact `source_session_id`. Обидва поля `null` означають явний
+global admin/debug scan усередині уже авторизованого vault, не звичайний chat.
 
-Якщо `query_embedding` передано і vector scope для `session_id` має стан `ready`, ядро застосовує Stage 2 до перших `VectorConfig.stage2_candidate_limit` кандидатів Stage 1 (default `40`): `final = stage1_score * (1 - w_vec) + max_memory_unit_cosine * w_vec`, де `w_vec = VectorConfig.stage2_vector_weight` (default `0.5`). Max cosine береться тільки по активних vector-eligible `MemoryUnit` батьківського archive entry; якщо такого unit-вектора немає, semantic term дорівнює `0`, а debug лишає `semantic_similarity` порожнім. На рівному cosine winning unit обирається детерміновано за найменшим `memory_unit_id`. Для matched archive Stage 2 зберігає winning unit як semantic provenance: `RecallItem.matched_memory_unit_id` і debug-кандидат містять його ID, а `RecallItem.gist`/`compact_memory` проєктують саме тезу цього unit замість усього змішаного денного `compact_memory`. Archive ID, archive-level Stage 1 score, час, теги й recall statistics лишаються батьківською структурною межею. Final score обмежується діапазоном `0..1`. Без query-вектора, для disabled/building/corrupt scope або поза candidate window порядок і projection лишаються Stage 1. Незалежний `recall_deep` продовжує шукати по всьому готовому unit-індексу й страхує випадок, коли правильний archive не ввійшов у Stage 2 window.
+Якщо `query_embedding` передано і vector scope для
+`personality_scope_id` (або legacy `session_id`) має стан `ready`, ядро
+застосовує Stage 2 до перших `VectorConfig.stage2_candidate_limit` кандидатів
+Stage 1 (default `40`): `final = stage1_score * (1 - w_vec) +
+max_memory_unit_cosine * w_vec`, де `w_vec =
+VectorConfig.stage2_vector_weight` (default `0.5`). Max cosine береться тільки
+по активних vector-eligible `MemoryUnit` батьківського archive entry; якщо
+такого unit-вектора немає, semantic term дорівнює `0`, а debug лишає
+`semantic_similarity` порожнім. На рівному cosine winning unit обирається
+детерміновано за найменшим `memory_unit_id`. Для matched archive Stage 2
+зберігає winning unit як semantic provenance:
+`RecallItem.matched_memory_unit_id` і debug-кандидат містять його ID, а
+`RecallItem.gist`/`compact_memory` проєктують саме тезу цього unit замість
+усього змішаного денного `compact_memory`. Archive ID, archive-level Stage 1
+score, час, теги й recall statistics лишаються батьківською структурною межею.
+Final score обмежується діапазоном `0..1`. Без query-вектора, для
+disabled/building/corrupt scope або поза candidate window порядок і projection
+лишаються Stage 1. Незалежний `recall_deep` продовжує шукати по всьому готовому
+unit-індексу й страхує випадок, коли правильний archive не ввійшов у Stage 2
+window.
 
 `limit`:
 
@@ -1489,14 +1552,25 @@ PendingTask - спосіб, яким ядро системи просить хо
     "preliminary_archive_id": "archive_01J00000000000000000000001",
     "events": [
       {
+        "schema_version": "sleep_input_event.v1",
         "event_id": "event_01J00000000000000000000001",
         "type": "user_message",
+        "source": "telegram_user_42",
         "timestamp": "2026-05-17T16:32:11.420Z",
+        "received_at": "2026-05-17T16:32:12.003Z",
+        "session_id": "2026-05-17_005",
+        "personality_scope_id": "telegram_311422683",
+        "memory_text": "Я переїхав у Берлін минулого місяця",
         "payload": {
           "text": "Я переїхав у Берлін минулого місяця"
         },
         "tags": ["personal_fact", "location"],
-        "initial_weight": 0.75
+        "theme": "personal_background",
+        "emotional_tone": "neutral",
+        "importance_hint": "high",
+        "processing_mode": "defer_to_sleep",
+        "initial_weight": 0.75,
+        "weight_reason": "High importance hint and personal_fact tag."
       }
     ],
     "hints": {
@@ -1508,6 +1582,13 @@ PendingTask - спосіб, яким ядро системи просить хо
   "outcome": null
 }
 ```
+
+`sleep_input_event.v1` є повною frozen reasoning projection `StoredEvent`, а
+не скороченим host-specific JSON. Sleep-compression і MemoryUnit tasks одного
+workflow отримують ідентичний масив. Submit відхиляє `source_event_id`, якого
+немає у цьому масиві; ядро не виправляє чужий archive ID або provenance
+мовчки. До S3 ці повторені inline inputs мають бути нормалізовані в один
+bounded immutable record із typed references, не викидаючи жодного поля.
 
 `outcome` є optional terminal core-owned result. Старі task-файли без нього
 лишаються валідними. Для completed `reflection_analyze` це
@@ -2169,8 +2250,12 @@ revisions, тому phantom insert/delete/update спричиняє retry. Repla
 
 Поточний Storage v2 recall contract є Stage 1 reference. Explicit
 `query_embedding` відхиляється до перенесення vector records у S2.D. In-memory
-`scan_collection` доводить committed-view semantics; production S3 adapter має
-реалізувати indexed vault query, а не переносити full scan у hot path.
+reference зберігає backward-compatible `scan_collection`, але domain flows
+використовують `VaultSnapshotQuery`: `SessionEvents` обмежує Sleep однією
+Session, а `Archives` — personality scope та/або source Session. Work unit
+відстежує membership/revisions саме результату типізованого query, включно з
+phantom changes. Production S3 adapter має реалізувати ці bounded queries
+індексами, а не переносити full-vault scan у hot path.
 
 У server domain collection `session_events` є append-only. Transactional ingest
 створює event тільки через `ExpectedRevision::Absent`; валідний StoredEvent

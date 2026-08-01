@@ -6,7 +6,7 @@ use super::*;
 use crate::server_runtime::VaultContext;
 use crate::storage_v2::{
     execute_work_unit_with_retry, ExpectedRevision, RecordKey, StorageWorkUnit,
-    TransactionalStorage, WorkUnitCommit, WorkUnitIntent, WorkUnitReceipt,
+    TransactionalStorage, VaultSnapshotQuery, WorkUnitCommit, WorkUnitIntent, WorkUnitReceipt,
     DEFAULT_WORK_UNIT_MAX_ATTEMPTS, WORK_UNIT_INTENT_SCHEMA_VERSION,
 };
 
@@ -14,7 +14,6 @@ pub const TRANSACTIONAL_RECALL_REQUEST_SCHEMA_VERSION: &str = "transactional_rec
 pub const TRANSACTIONAL_RECALL_RESULT_SCHEMA_VERSION: &str = "transactional_recall_result.v1";
 pub const RECALL_WORK_UNIT_KIND: &str = "recall_stage1";
 
-const ARCHIVE_COLLECTION: &str = "archives";
 const OPERATION_RESULT_COLLECTION: &str = "operation_results";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,7 +128,14 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                         .source_layers
                         .contains(&RecallSourceLayer::Archive);
                 let records = if archive_enabled {
-                    work_unit.scan_collection(ARCHIVE_COLLECTION)?
+                    work_unit.query_snapshot(&VaultSnapshotQuery::Archives {
+                        personality_scope_id: query.personality_scope_id.clone(),
+                        source_session_id: query
+                            .personality_scope_id
+                            .is_none()
+                            .then(|| query.session_id.clone())
+                            .flatten(),
+                    })?
                 } else {
                     Vec::new()
                 };

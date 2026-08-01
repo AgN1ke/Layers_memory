@@ -199,7 +199,9 @@ fn collection_snapshot_detects_phantom_archive_insert() {
             result_digest: digest('b'),
         })
         .expect_err("collection membership changed after snapshot");
-    assert!(error.to_string().contains("collection archives changed"));
+    let message = error.to_string();
+    assert!(message.contains("snapshot query"));
+    assert!(message.contains("archives"));
 }
 
 #[test]
@@ -319,6 +321,7 @@ fn query(text: Option<&str>, limit: usize, explain: bool) -> RecallQuery {
         schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
         query_id: None,
         created_at: None,
+        personality_scope_id: None,
         session_id: Some("session_owner".to_string()),
         context: json!({"recent_text": text.unwrap_or_default()}),
         query_text: text.map(str::to_string),
@@ -391,6 +394,7 @@ fn archive(id: &str, session_id: &str, gist: &str, weight: f64) -> ArchiveEntry 
         archive_id: id.to_string(),
         created_at: T0.to_string(),
         updated_at: T0.to_string(),
+        personality_scope_id: None,
         source_session_id: session_id.to_string(),
         source_event_ids: vec![],
         time_range: memory_engine::types::TimeRange {

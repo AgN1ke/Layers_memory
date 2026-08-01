@@ -6,7 +6,7 @@ use crate::server_runtime::VaultContext;
 use crate::session::{SessionMetadata, SessionStatus};
 use crate::storage_v2::{
     execute_work_unit_with_retry, ExpectedRevision, RecordKey, StorageWorkUnit,
-    TransactionalStorage, WorkUnitCommit, WorkUnitIntent, WorkUnitReceipt,
+    TransactionalStorage, VaultSnapshotQuery, WorkUnitCommit, WorkUnitIntent, WorkUnitReceipt,
     DEFAULT_WORK_UNIT_MAX_ATTEMPTS, WORK_UNIT_INTENT_SCHEMA_VERSION,
 };
 
@@ -20,7 +20,6 @@ const SESSION_COLLECTION: &str = "sessions";
 // Storage v2 domain invariant: session events are append-only records created
 // with ExpectedRevision::Absent by transactional ingest. Sleep freezes their
 // full payloads into its tasks; later workflow stages must never rewrite them.
-const EVENT_COLLECTION: &str = "session_events";
 const ARCHIVE_COLLECTION: &str = "archives";
 const TASK_COLLECTION: &str = "tasks";
 const SLEEP_RUN_COLLECTION: &str = "sleep_runs";
@@ -205,7 +204,9 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                 validate_sleep_start_eligibility(&metadata)?;
 
                 let mut events = Vec::new();
-                for record in work_unit.scan_collection(EVENT_COLLECTION)? {
+                for record in work_unit.query_snapshot(&VaultSnapshotQuery::SessionEvents {
+                    session_id: session_id.clone(),
+                })? {
                     record.validate()?;
                     if record.revision != 1 {
                         return Err(MemoryEngineError::Storage(format!(
@@ -222,22 +223,20 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                         .into());
                     }
                     let event: StoredEvent = serde_json::from_value(record.payload)?;
-                    if event.schema_version != EVENT_SCHEMA_VERSION {
-                        return Err(MemoryEngineError::IncompatibleSchema {
-                            expected: EVENT_SCHEMA_VERSION.to_string(),
-                            actual: event.schema_version,
-                        }
-                        .into());
-                    }
+                    event.validate()?;
                     if record.key.record_id != event.event_id {
                         return Err(MemoryEngineError::Storage(
                             "session event record key does not match payload event_id".to_string(),
                         )
                         .into());
                     }
-                    if event.session_id == session_id {
-                        events.push(event);
+                    if event.session_id != session_id {
+                        return Err(MemoryEngineError::Storage(
+                            "typed session-event query returned another session".to_string(),
+                        )
+                        .into());
                     }
+                    events.push(event);
                 }
                 for event in &events {
                     if parse_rfc3339(&event.received_at).is_none() {
@@ -433,12 +432,7 @@ fn validate_sleep_policy(policy: &SleepStage1Config) -> Result<()> {
 }
 
 fn validate_sleep_session_metadata(metadata: &SessionMetadata, session_id: &str) -> Result<()> {
-    if metadata.schema_version != SESSION_SCHEMA_VERSION {
-        return Err(MemoryEngineError::IncompatibleSchema {
-            expected: SESSION_SCHEMA_VERSION.to_string(),
-            actual: metadata.schema_version.clone(),
-        });
-    }
+    metadata.validate()?;
     if metadata.session_id != session_id {
         return Err(MemoryEngineError::Storage(
             "Session record key does not match payload session_id".to_string(),

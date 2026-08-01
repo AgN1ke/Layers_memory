@@ -55,6 +55,16 @@ topic does not carry the previous association forward. Its conservative,
 model-calibrated similarity gate may return no association at all: the core
 does not force the nearest old memory into an unrelated conversation.
 
+The information path is now explicit end to end. A host keeps lossless domain
+data in `payload` and supplies a separate `memory_text` projection for
+cognition. One stable `personality_scope_id` can span multiple interaction
+Sessions without becoming a global search. Sleep freezes the complete source
+projection, and standalone MemoryUnits become the canonical prompt truth:
+forgotten, rejected, distorted, or revision-pending units cannot leak back
+through an old Archive gist. `CoreContextPackage` is the final context plan;
+budgeting/deduplication precede recall feedback, while current host state is
+rendered separately from remembered claims.
+
 For a centralized Google Play deployment, the current file backend is a local
 and reference implementation, not the production topology. The accepted
 server track keeps the same Rust cognitive core behind an authenticated Memory
@@ -104,6 +114,7 @@ Rust memory core, PyO3 Python adapter, and runnable host examples.
 - [`wiki/pages/planning/autonomous-reflection-v0.5.md`](wiki/pages/planning/autonomous-reflection-v0.5.md) - strategic design and phased acceptance for salience/time-driven reflection.
 - [`wiki/pages/planning/reflective-belief-system.md`](wiki/pages/planning/reflective-belief-system.md) - phased plan from reliable reflection to an evidence-backed hypothesis graph, contradiction handling, and native clarification.
 - [`wiki/pages/planning/server-scale-memory-runtime.md`](wiki/pages/planning/server-scale-memory-runtime.md) - production track for authenticated per-player vaults, transactional storage, durable workers, migration, and whole-path scale acceptance.
+- [`wiki/pages/planning/information-flow-integrity.md`](wiki/pages/planning/information-flow-integrity.md) - canonical event-to-prompt flow, completed integrity repairs, and remaining transactional phases.
 - [`LICENSE.md`](LICENSE.md) - root license file for GitHub publication.
 
 ## Versioning

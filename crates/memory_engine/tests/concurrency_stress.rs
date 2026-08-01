@@ -50,7 +50,9 @@ fn run_parallel_session_and_core_stress(thread_count: usize, events_per_session:
                             index % 60,
                             event_index
                         ),
+                        personality_scope_id: None,
                         session_id: session_id.clone(),
+                        memory_text: None,
                         payload: json!({
                             "text": format!("message {event_index} from session {index}")
                         }),

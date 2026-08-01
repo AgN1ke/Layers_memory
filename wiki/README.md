@@ -22,6 +22,10 @@ whole chat history.
 - [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md) -
   how the same core becomes an isolated, transactional service for a Google
   Play game with many players.
+- [Information Flow Integrity](pages/planning/information-flow-integrity.md) -
+  the canonical event-to-prompt path, personality/session boundary, one
+  MemoryUnit truth, optional association, completed repairs and remaining
+  transactional phases.
 - [LLM integration resources](pages/integration/llm-integration-resources.md) - what model/key resources an application must provide.
 
 ## What This Project Is
@@ -86,6 +90,7 @@ For strategy and boundaries, read:
 For current work, read:
 
 - [Roadmap](pages/planning/roadmap.md)
+- [Information Flow Integrity](pages/planning/information-flow-integrity.md)
 - [Reflective Belief System](pages/planning/reflective-belief-system.md)
 - [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md)
 - [Storage v2 Work-Unit Inventory](pages/planning/storage-v2-work-unit-inventory.md)

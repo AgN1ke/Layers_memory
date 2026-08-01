@@ -39,11 +39,13 @@ pub(super) fn rank_stage1_archives(
         .into_iter()
         .filter(|entry| archive_matches_filters(entry, &archive_filters))
         .filter(|entry| entry.status == ArchiveStatus::Complete)
-        .filter(|entry| {
-            query
+        .filter(archive_has_prompt_eligible_memory)
+        .filter(|entry| match query.personality_scope_id.as_deref() {
+            Some(scope) => entry.effective_personality_scope_id() == scope,
+            None => query
                 .session_id
                 .as_ref()
-                .is_none_or(|session_id| &entry.source_session_id == session_id)
+                .is_none_or(|session_id| &entry.source_session_id == session_id),
         })
         .collect::<Vec<_>>();
     let candidate_count = archive_entries.len();
@@ -297,11 +299,27 @@ pub(super) fn recall_item_from_archive(
     scored: ScoredArchiveEntry,
     explain: bool,
 ) -> RecallItem {
+    let is_unitized = !entry.memory_units.is_empty();
+    let eligible_unit_text = is_unitized.then(|| {
+        entry
+            .memory_units
+            .iter()
+            .filter(|unit| memory_unit_is_prompt_eligible(unit))
+            .map(|unit| unit.thesis.trim())
+            .filter(|thesis| !thesis.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
     let matched_memory_unit_id = scored.matched_memory_unit_id.clone();
     let matched_memory_unit_thesis =
         normalize_optional_string(scored.matched_memory_unit_thesis.as_deref());
-    let compact_memory = matched_memory_unit_thesis
-        .or_else(|| normalize_optional_string(entry.compact_memory.as_deref()));
+    let compact_memory = matched_memory_unit_thesis.or_else(|| {
+        if is_unitized {
+            normalize_optional_string(eligible_unit_text.as_deref())
+        } else {
+            normalize_optional_string(entry.compact_memory.as_deref())
+        }
+    });
     let prompt_gist = compact_memory.clone().unwrap_or_else(|| entry.gist.clone());
     let narrative = if compact_memory.is_some() {
         None

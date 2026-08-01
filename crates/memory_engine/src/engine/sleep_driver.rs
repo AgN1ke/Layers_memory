@@ -121,11 +121,10 @@ pub(super) fn build_preliminary_archive(
     now: &str,
 ) -> ArchiveEntry {
     let tags = collect_tags(events);
-    let theme = session
-        .metadata
-        .active_theme
-        .clone()
-        .or_else(|| events.iter().find_map(|event| event.theme.clone()));
+    // A Session's `active_theme` is a live navigation hint and may describe
+    // its first turn. Archive meaning must be derived from the exact frozen
+    // window that is being consolidated.
+    let theme = events.iter().rev().find_map(|event| event.theme.clone());
     let quotes = events
         .iter()
         .filter_map(|event| {
@@ -141,6 +140,7 @@ pub(super) fn build_preliminary_archive(
         archive_id: archive_id.to_string(),
         created_at: now.to_string(),
         updated_at: now.to_string(),
+        personality_scope_id: session.metadata.personality_scope_id.clone(),
         source_session_id: session.metadata.session_id.clone(),
         source_event_ids: events.iter().map(|event| event.event_id.clone()).collect(),
         time_range: time_range_from_events(events),
@@ -158,7 +158,9 @@ pub(super) fn build_preliminary_archive(
         last_recalled_at: None,
         links: events
             .iter()
-            .flat_map(|event| event.links.iter().cloned())
+            .flat_map(|event| event.links.iter())
+            .filter(|link| !matches!(link.kind.as_str(), "reply" | "reply_to"))
+            .cloned()
             .collect(),
         emotional_markers: Vec::new(),
         topic_thread: Vec::new(),
@@ -195,16 +197,7 @@ pub(super) fn build_sleep_compression_task_with_id(
         inputs: json!({
             "session_id": &session.metadata.session_id,
             "preliminary_archive_id": &archive_entry.archive_id,
-            "events": events.iter().map(|event| json!({
-                "event_id": &event.event_id,
-                "type": &event.event_type,
-                "timestamp": &event.timestamp,
-                "payload": &event.payload,
-                "tags": &event.tags,
-                "theme": &event.theme,
-                "initial_weight": event.initial_weight,
-                "weight_reason": &event.weight_reason,
-            })).collect::<Vec<Value>>(),
+            "events": events.iter().map(|event| SleepInputEvent::from(*event)).collect::<Vec<_>>(),
             "hints": {
                 "target_style": "compact_human_readable_memory",
                 "preserve_quotes": true,
@@ -238,16 +231,7 @@ pub(super) fn build_compact_memory_task(
         inputs: json!({
             "session_id": &session.metadata.session_id,
             "preliminary_archive_id": &archive_entry.archive_id,
-            "events": events.iter().map(|event| json!({
-                "event_id": &event.event_id,
-                "type": &event.event_type,
-                "timestamp": &event.timestamp,
-                "payload": &event.payload,
-                "tags": &event.tags,
-                "theme": &event.theme,
-                "initial_weight": event.initial_weight,
-                "weight_reason": &event.weight_reason,
-            })).collect::<Vec<Value>>(),
+            "events": events.iter().map(|event| SleepInputEvent::from(*event)).collect::<Vec<_>>(),
             "hints": {
                 "target_style": "short_human_memory_theses",
                 "plain_text_only": true,
@@ -281,16 +265,7 @@ pub(super) fn build_memory_unit_task_with_id(
         inputs: json!({
             "session_id": &session.metadata.session_id,
             "preliminary_archive_id": &archive_entry.archive_id,
-            "events": events.iter().map(|event| json!({
-                "event_id": &event.event_id,
-                "type": &event.event_type,
-                "timestamp": &event.timestamp,
-                "payload": &event.payload,
-                "tags": &event.tags,
-                "theme": &event.theme,
-                "initial_weight": event.initial_weight,
-                "weight_reason": &event.weight_reason,
-            })).collect::<Vec<Value>>(),
+            "events": events.iter().map(|event| SleepInputEvent::from(*event)).collect::<Vec<_>>(),
             "hints": {
                 "target_style": "atomic_human_memory_units",
                 "return_json": true,
@@ -325,16 +300,7 @@ pub(super) fn build_memory_unit_repair_task(
             "session_id": session_id,
             "preliminary_archive_id": &archive_entry.archive_id,
             "repair_reason": "complete_archive_without_memory_units",
-            "events": events.iter().map(|event| json!({
-                "event_id": &event.event_id,
-                "type": &event.event_type,
-                "timestamp": &event.timestamp,
-                "payload": &event.payload,
-                "tags": &event.tags,
-                "theme": &event.theme,
-                "initial_weight": event.initial_weight,
-                "weight_reason": &event.weight_reason,
-            })).collect::<Vec<Value>>(),
+            "events": events.iter().map(|event| SleepInputEvent::from(*event)).collect::<Vec<_>>(),
             "hints": {
                 "target_style": "atomic_human_memory_units",
                 "return_json": true,
@@ -840,7 +806,10 @@ pub(super) fn parse_sleep_response_text(
                 result.schema_version = MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string();
             }
             if result.archive_id != run.archive_id {
-                result.archive_id = run.archive_id.clone();
+                return Err(MemoryEngineError::Validation(format!(
+                    "memory_unit_pass archive_id mismatch: run={} result={}",
+                    run.archive_id, result.archive_id
+                )));
             }
             result.validate_basic()?;
             Ok(serde_json::to_value(result)?)

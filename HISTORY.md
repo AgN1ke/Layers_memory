@@ -46,6 +46,64 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-02 — Memory meaning and personality scope remain intact from event to prompt
+
+Context. The end-to-end audit found several individually reasonable APIs whose
+composition could change meaning: hosts had to hide memorable text inside an
+arbitrary payload shape; one interaction Session doubled as lifelong identity;
+Sleep tasks copied only part of a source event; standalone MemoryUnit changes
+could be shadowed by an embedded Archive copy; present game state was budgeted
+but not rendered; and recall candidates could receive feedback before the
+final context budget removed them.
+
+**What changed:**
+- `event.v1`, Session, Archive, MemoryUnit, and RecallQuery add optional
+  `personality_scope_id`; legacy records use exact Session identity as fallback.
+  An existing Session rejects scope drift.
+- `event.v1` adds optional `memory_text`, a host-owned cognitive projection
+  separate from lossless domain `payload`. Repository Telegram/Godot hosts now
+  send both fields. Event and Session timestamps/identity fail closed.
+- Sleep tasks share complete versioned `sleep_input_event.v1` records and
+  reject cited event IDs outside the frozen input. Preliminary meaning is
+  derived from the selected events and raw reply edges are not promoted to
+  lifelong Archive links.
+- Standalone MemoryUnits are canonical on Archive reads. Recall/prompt paths
+  share an eligibility gate, so rejected, forgotten, distorted, unsupported,
+  or revision-pending unitized memory cannot reappear through stale parent
+  text. Legacy Archives without standalone units keep their fallback.
+- `CoreContextPackage` records feedback only after token budget and
+  cross-route deduplication. Nonempty domain state is rendered explicitly as
+  present host state, not remembered testimony.
+- Storage v2 adds typed Session-event and Archive snapshot queries with exact
+  phantom/revision tracking; unrelated malformed Session events no longer
+  block target Sleep.
+
+**Compatibility:**
+- Persisted JSON additions are optional/defaulted. Direct downstream Rust
+  struct literals must add the new public fields, so the next pre-1.0 release
+  containing this work is a minor release under project governance, not a
+  patch. Package versions remain unchanged until the release gate.
+
+**What is retracted:**
+- `source_session_id` alone is not the lifelong personality boundary. It is an
+  interaction boundary and legacy fallback.
+- An Archive’s cached gist/embedded units are not equally authoritative once
+  canonical standalone MemoryUnit records exist.
+- A recall candidate selected before budget trimming has not necessarily been
+  exposed by the final context plan and must not be reinforced as if it were.
+
+**What is still true:**
+- Session, Archive, and Core remain the three durable layers. Vectors are an
+  optional rebuildable associative index, never a second memory authority.
+- Existing FileStorage data remains readable and the non-vector path remains
+  complete. Storage v2 is still a logical reference, not production readiness.
+
+**What we are doing:**
+- Finish transactional Sleep submit/finalize/cancel, normalize repeated Sleep
+  inputs into one bounded immutable record, add monotonic Session admission
+  order, then migrate the remaining fidelity/reflection/vector workflows before
+  PostgreSQL and host cutover.
+
 ## 2026-08-01 — Transactional sleep start separates reservation from durable coverage
 
 Context. Starting sleep creates several mutually dependent records before any

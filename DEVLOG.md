@@ -1,5 +1,63 @@
 # DEVLOG
 
+## Запис 165 — 2026-08-02 — Наскрізний потік памʼяті отримав одну семантику
+
+Після аудиту я не став латати окремо recall, Sleep чи Godot. Пройдено весь
+ланцюг `host event -> Session -> Sleep input -> Archive/MemoryUnit -> recall ->
+context plan -> prompt` і виправлено місця, де кожна локальна функція виглядала
+нормально, але разом вони могли створити іншу памʼять.
+
+На вході тепер розділені дві речі. `payload` лишається lossless доменними
+даними хоста, а `memory_text` є явною текстовою проєкцією, яку дозволено
+осмислювати. Telegram і обидва Godot hosts передають її без прихованої
+домовленості про `payload.text`. Одночасно `personality_scope_id` відділив
+довгоживу особистість від interaction Session: кілька розмов можуть належати
+одній памʼяті, але legacy session без scope лишається ізольованою сама в собі.
+Scope не можна мовчки змінити наступною подією.
+
+Sleep більше не обрізає джерело до випадкового набору полів. Обидві основні
+tasks отримують однакові `sleep_input_event.v1` з повним source/receive/scope/
+speaker/link/policy контекстом. MemoryUnit result не може послатися на event,
+якого немає у frozen input, і неправильний archive ID не переписується
+«для зручності». Preliminary theme береться з реально відібраних events;
+conversation reply edges не видаються за довічні семантичні звʼязки.
+
+Закрито проблему двох істин. Якщо standalone MemoryUnits існують, FileStorage
+hydrate-ить Archive саме з них. Stage 1 text, Stage 2 projection і prompt
+eligibility використовують одну policy. Тому forget/fidelity/revision змінюють
+реальну поведінку: rejected або forgotten unit не воскресає через старий
+parent gist. Legacy archives без units продовжують читатися.
+
+`CoreContextPackage` тепер фактично є context plan. Внутрішній recall не
+підкріплює кандидатів наперед; після budget і dedup ядро реєструє тільки ті
+Archive IDs, які лишились у `archive_relevant` або `associative_memory`, один
+раз на Archive. `domain_state`, який раніше рахувався в budget, але губився в
+renderer, виходить окремим `<current_state_json>` і позначений як теперішній
+стан, не спогад.
+
+Storage v2 отримав typed snapshot queries. Sleep читає події однієї Session,
+recall — Archive одного personality/session scope; reference backend і далі
+ловить точкові revision changes та phantoms. Це не SQL implementation, але вже
+правильна форма майбутнього індексованого query, а не дозвіл сканувати всі
+записи тисяч користувачів. Окремий regression доводить: переписаний event чужої
+Session не отруює target Sleep, тоді як переписаний target event fail-closed.
+
+Новий [Information Flow Integrity](wiki/pages/planning/information-flow-integrity.md)
+фіксує рішення, завершені фази та реальний наступний етап. Відкритий головний
+серверний розрив не прихований: Storage v2 ще не має transactional
+submit/finalize/cancel, одного bounded immutable Sleep input record і
+monotonic Session admission sequence. Після цього тим самим work-unit gate
+проходять fidelity, forgetting, reflection/hypothesis та vector workflow;
+лише потім PostgreSQL і host cutover.
+
+Перевірки: workspace tests зелені (1000-session stress лишається explicit
+ignored release gate); нові сценарії покривають canonical standalone unit,
+prompt ineligibility, cross-session personality recall, final-budget feedback,
+present domain state і typed Session isolation. Clippy після структурного
+скорочення аргументів запускається повторно перед commit. JSON additions
+backward-compatible, але public Rust literals source-breaking, тому релізна
+межа — наступний pre-1.0 minor, не patch; package versions зараз не рухались.
+
 ## Запис 164 — 2026-08-01 — S2.C атомарно відкрив server Sleep workflow
 
 Після зовнішнього PASS для обох S2.B slices наступним цілісним переходом став

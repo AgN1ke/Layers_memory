@@ -166,8 +166,9 @@ impl<S: Storage> MemoryEngine<S> {
 
             let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
             let fidelity_requests = self.auto_route_memory_fidelity_requests(&archive_entry)?;
-            let embedding_requests =
-                self.pending_embedding_backfill_unlocked(&archive_entry.source_session_id)?;
+            let embedding_requests = self.pending_embedding_backfill_unlocked(
+                archive_entry.effective_personality_scope_id(),
+            )?;
             let covered_event_ids = self
                 .record_completed_archive_in_session_metadata_unlocked(&session_id, &archive_entry)?
                 .into_iter()
@@ -567,7 +568,7 @@ impl<S: Storage> MemoryEngine<S> {
             .filter(|event| event.event_type == "user_message")
             .map(|event| event.event_id.clone())
             .collect::<HashSet<_>>();
-        let scope = Some(archive.source_session_id.as_str());
+        let scope = Some(archive.effective_personality_scope_id());
 
         for signal in &archive.personal_signals {
             let text = normalize_whitespace(&signal.text);
@@ -940,6 +941,29 @@ impl<S: Storage> MemoryEngine<S> {
                 result.archive_id
             )));
         }
+        let allowed_event_ids = task
+            .inputs
+            .get("events")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                MemoryEngineError::Validation(format!(
+                    "memory_unit_pass task has no frozen events: {task_id}"
+                ))
+            })?
+            .iter()
+            .map(|event| {
+                event
+                    .get("event_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        MemoryEngineError::Validation(format!(
+                            "memory_unit_pass task has event without event_id: {task_id}"
+                        ))
+                    })
+            })
+            .collect::<Result<HashSet<_>>>()?;
+        result.validate_source_event_ids(&allowed_event_ids)?;
 
         let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
         let now = now_rfc3339()?;
@@ -961,6 +985,7 @@ impl<S: Storage> MemoryEngine<S> {
                 schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
                 memory_unit_id: new_id("mu")?,
                 archive_id: archive_entry.archive_id.clone(),
+                personality_scope_id: archive_entry.personality_scope_id.clone(),
                 source_session_id: archive_entry.source_session_id.clone(),
                 created_at: now.clone(),
                 updated_at: now.clone(),
@@ -1036,6 +1061,7 @@ fn push_repair_memory_unit(
         schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
         memory_unit_id: new_id("mu")?,
         archive_id: archive_entry.archive_id.clone(),
+        personality_scope_id: archive_entry.personality_scope_id.clone(),
         source_session_id: archive_entry.source_session_id.clone(),
         created_at: now.to_string(),
         updated_at: now.to_string(),

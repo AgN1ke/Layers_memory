@@ -142,6 +142,22 @@ pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &s
             "ongoing"
         }
     ));
+    if !package.domain_state.is_null()
+        && !package
+            .domain_state
+            .as_object()
+            .is_some_and(serde_json::Map::is_empty)
+    {
+        lines.push("<current_state_json>".to_string());
+        lines.push(xml_escape(
+            &serde_json::to_string(&package.domain_state).unwrap_or_else(|_| "null".to_string()),
+        ));
+        lines.push("</current_state_json>".to_string());
+        lines.push(
+            "instruction: current_state_json is present host state, not a remembered user claim."
+                .to_string(),
+        );
+    }
     if prior_recent.is_empty() {
         lines.push(
             "instruction: No prior active dialogue is visible; a short greeting is allowed if natural."
@@ -613,6 +629,25 @@ mod tests {
             "- [older memory: earlier this month | sim 0.71] We once discussed the atmosphere of Mars."
         ));
         assert!(view.contains("</associative_memory>"));
+    }
+
+    #[test]
+    fn memory_view_renders_domain_state_as_present_state_not_memory() {
+        let mut package = labeled_package("2026-07-09T10:00:00Z", false);
+        package.domain_state = serde_json::json!({
+            "player": {"health": 73, "location": "mars_base"},
+            "quest": "restore_oxygen"
+        });
+
+        let view = render_memory_view(&package, "What should I do now?");
+
+        assert!(view.contains("<current_state_json>"));
+        assert!(view.contains("\"health\":73"));
+        assert!(view.contains("\"location\":\"mars_base\""));
+        assert!(
+            view.contains("current_state_json is present host state, not a remembered user claim")
+        );
+        assert!(!view.contains("<long_memory>\n{&quot;player&quot;"));
     }
 
     fn labeled_package(created_at: &str, clock_untrusted: bool) -> CoreContextPackage {

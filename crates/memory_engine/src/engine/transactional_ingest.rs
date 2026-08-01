@@ -116,6 +116,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
             initial_weight,
             weight_reason,
         );
+        stored_event.validate()?;
         let ingest = IngestResult {
             schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
             stored_event: stored_event.clone(),
@@ -139,6 +140,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                     Some(record) => {
                         record.validate()?;
                         let metadata: SessionMetadata = serde_json::from_value(record.payload)?;
+                        metadata.validate()?;
                         if metadata.session_id != stored_event.session_id {
                             return Err(MemoryEngineError::Storage(
                                 "session record key does not match payload session_id".to_string(),
@@ -152,12 +154,24 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                             ))
                             .into());
                         }
+                        if metadata.effective_personality_scope_id()
+                            != stored_event.effective_personality_scope_id()
+                        {
+                            return Err(MemoryEngineError::Validation(format!(
+                                "session {} belongs to personality scope {}, not {}",
+                                metadata.session_id,
+                                metadata.effective_personality_scope_id(),
+                                stored_event.effective_personality_scope_id()
+                            ))
+                            .into());
+                        }
                         (metadata, ExpectedRevision::Exact(record.revision))
                     }
                     None => (
                         SessionMetadata {
                             schema_version: SESSION_SCHEMA_VERSION.to_string(),
                             session_id: stored_event.session_id.clone(),
+                            personality_scope_id: stored_event.personality_scope_id.clone(),
                             host_id: host_id.clone(),
                             status: SessionStatus::Active,
                             created_at: stored_event.received_at.clone(),
@@ -190,6 +204,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                         metadata.tags.push(tag.clone());
                     }
                 }
+                metadata.validate()?;
 
                 work_unit.put(
                     event_key.clone(),

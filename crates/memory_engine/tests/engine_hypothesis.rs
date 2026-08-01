@@ -319,6 +319,7 @@ fn memory_unit(memory_unit_id: &str, archive_id: &str, session_id: &str) -> Memo
         schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
         memory_unit_id: memory_unit_id.to_string(),
         archive_id: archive_id.to_string(),
+        personality_scope_id: None,
         source_session_id: session_id.to_string(),
         created_at: "2026-07-01T10:00:00Z".to_string(),
         updated_at: "2026-07-01T10:00:00Z".to_string(),

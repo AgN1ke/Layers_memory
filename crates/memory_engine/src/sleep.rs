@@ -1,7 +1,73 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashSet;
 
 use crate::archive::{EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem};
-use crate::types::{Id, Link, Quote, WeightedFact};
+use crate::event::StoredEvent;
+use crate::types::{
+    Id, ImportanceHint, Link, ProcessingMode, Quote, Speaker, Timestamp, WeightedFact,
+};
+
+pub const SLEEP_INPUT_EVENT_SCHEMA_VERSION: &str = "sleep_input_event.v1";
+
+/// Immutable cognitive projection of one raw event. Sleep tasks use this
+/// shared shape instead of maintaining several lossy, hand-written JSON maps.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SleepInputEvent {
+    pub schema_version: String,
+    pub event_id: Id,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub source: String,
+    pub timestamp: Timestamp,
+    pub received_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personality_scope_id: Option<Id>,
+    pub session_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_text: Option<String>,
+    pub payload: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emotional_tone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<Speaker>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
+    pub importance_hint: ImportanceHint,
+    pub processing_mode: ProcessingMode,
+    pub initial_weight: f64,
+    pub weight_reason: String,
+}
+
+impl From<&StoredEvent> for SleepInputEvent {
+    fn from(event: &StoredEvent) -> Self {
+        Self {
+            schema_version: SLEEP_INPUT_EVENT_SCHEMA_VERSION.to_string(),
+            event_id: event.event_id.clone(),
+            event_type: event.event_type.clone(),
+            source: event.source.clone(),
+            timestamp: event.timestamp.clone(),
+            received_at: event.received_at.clone(),
+            personality_scope_id: event.personality_scope_id.clone(),
+            session_id: event.session_id.clone(),
+            memory_text: event.memory_text.clone(),
+            payload: event.payload.clone(),
+            tags: event.tags.clone(),
+            theme: event.theme.clone(),
+            emotional_tone: event.emotional_tone.clone(),
+            speaker: event.speaker.clone(),
+            links: event.links.clone(),
+            importance_hint: event.importance_hint,
+            processing_mode: event.processing_mode,
+            initial_weight: event.initial_weight,
+            weight_reason: event.weight_reason.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SleepCompressionResult {
@@ -68,6 +134,22 @@ impl MemoryUnitPassResult {
             }
         }
 
+        Ok(())
+    }
+
+    /// Proves that model-produced provenance points only at events in the
+    /// immutable task input. Empty provenance remains readable for legacy
+    /// results, but invented/cross-task IDs fail closed.
+    pub fn validate_source_event_ids(&self, allowed_event_ids: &HashSet<Id>) -> crate::Result<()> {
+        for unit in &self.memory_units {
+            for event_id in &unit.source_event_ids {
+                if !allowed_event_ids.contains(event_id) {
+                    return Err(crate::MemoryEngineError::Validation(format!(
+                        "memory unit cites event outside frozen sleep input: {event_id}"
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 }

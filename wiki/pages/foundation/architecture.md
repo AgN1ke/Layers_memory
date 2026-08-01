@@ -73,7 +73,7 @@
 
 Ядро системи живе на межі між подіями застосунку і довготривалою пам'яттю. Хост знає, що сталося у його світі. Ядро системи знає, як перетворити це на пам'ять.
 
-Потік номер один іде **від хоста до ядра системи**: події, стани, повідомлення, тригери sleep і reflection. Хост-адаптер нормалізує їх у тип `Event` і викликає `engine.ingest(event)`. Подія потрапляє у шар Сесія.
+Потік номер один іде **від хоста до ядра системи**: події, стани, повідомлення, тригери sleep і reflection. Хост-адаптер нормалізує їх у тип `Event`, явно відділяє lossless domain `payload` від дозволеної для памʼяті текстової проєкції `memory_text`, і викликає `engine.ingest(event)`. Подія потрапляє у шар Сесія.
 
 Потік номер два іде **від ядра системи до хоста**: коли ядру треба мовна задача (стискання сесії, оцінка значущості, reflection-висновок), воно повертає `PendingTask`. Хост виконує задачу через свій LLM-стек і повертає результат через `engine.resume(task_id, result)`.
 
@@ -108,11 +108,25 @@ Recall у ядрі системи спроєктований як **трирів
 
 **Стадія 1 — структурний фільтр і детермінована формула.** Працює завжди. Фільтрує кандидатів по тегах, темі, часовому вікну, порозі ваги, прив'язках до шару Ядро. Ранжує простою формулою: вага × decay × відповідність контексту запиту × бонус за зв'язок із поточною темою. Не потребує LLM, не потребує embeddings. Детермінована, швидка, пояснювана.
 
-**Межа сесії у recall.** Якщо `RecallQuery.session_id` заданий, stage1 archive recall розглядає тільки `ArchiveEntry` з таким самим `source_session_id`. Це default для `core_context_package` і звичайного chat prompt: нова сесія не має підхоплювати старі archive memories тільки тому, що запит семантично схожий. Глобальний пошук по всьому Архіву дозволений лише для явного admin/debug сценарію, коли хост передає `session_id: null`.
+**Межа особистості та взаємодії у recall.** `session_id` означає один
+поточний діалог/ігровий інтервал, а `personality_scope_id` — довгоживу памʼять
+однієї особистості через багато таких Session. Якщо scope заданий, Stage 1,
+Stage 2 і асоціативний deep recall працюють тільки в ньому; активний хвіст усе
+одно читається лише з поточної Session. Legacy записи без scope мають exact
+`session_id` fallback, тому вони не стають глобальними. Відсутність обох полів
+дозволена лише для явного admin/debug scan; account/vault authorization завжди
+лишається зовнішньою fail-closed межею.
 
 **Стадія 2 — re-ranking за embeddings.** На v0.1 не реалізована, але формат архівного спогаду вже містить поле `embedding_model_id` і місце під вектор. Працює як re-ranking над топ-K кандидатів зі стадії 1, а не як основний пошук. Це принципово: ми не робимо vector search замість фільтрів, ми додаємо semantic re-rank поверх них. Embeddings рахуються в момент створення архівного спогаду через `PendingTask`. Поле `embedding_model_id` дозволяє відслідкувати, які записи embedovaní якою моделлю, і безпечно мігрувати при зміні моделі.
 
 **Implementation update 2026-07-31.** Реалізація після v0.3 уточнила ранній дизайн: vector rows належать validated active `MemoryUnit`, не цілому archive entry. Stage 2 лишає Archive структурною межею Stage 1, але semantic score бере від найкращого unit усередині archive. У фінальний `RecallItem` ядро проєктує тезу саме цього unit і повертає `matched_memory_unit_id`; денний archive не повинен знову змішувати кілька тем у prompt лише тому, що одна з них семантично збіглась. Без query embedding Stage 1 projection не змінюється.
+
+**Canonical-unit correction 2026-08-02.** Коли Archive вже має standalone
+MemoryUnit records, саме вони є prompt truth. Archive hydrate-иться з них на
+read, а Stage 1 tokens і фінальна projection пропускають тільки active/core
+candidate units з допустимим fidelity state. Forgotten, rejected, distorted,
+unsupported і needs-revision unit не може повернутись через застарілий parent
+gist/compact cache.
 
 **Context assembly correction 2026-08-01.** Explicit `recall()` і
 `core_context_package()` мають різні вихідні ролі. Explicit recall може
@@ -126,6 +140,11 @@ turn. Асоціативний gate має право повернути пор�
 вектор не є спогадом, якщо його raw cosine не досягає окремого
 model-calibrated порога. Для bundled multilingual MiniLM default після live
 калібрування — `0.47`; explicit `recall_deep` зберігає власний нижчий поріг.
+
+`CoreContextPackage` є фінальним context plan, а не сирим набором кандидатів:
+budget і cross-layer dedup застосовуються до feedback. `recall_count` отримують
+тільки Archive, що пережили план, один раз на Archive. `domain_state`
+рендериться окремо як поточний стан хоста і ніколи не маскується під спогад.
 
 На практиці Stage 2 не входить у найближчу v0.2. Векторне сховище вмикається тільки після стабілізації Core/reflection/forgetting і тільки як opt-in feature. Частина користувачів не захоче зберігати семантичні вектори про себе; хост має мати явний перемикач "без embeddings" / "з embeddings". При вимкнених embeddings Stage 1 лишається повністю працездатним.
 

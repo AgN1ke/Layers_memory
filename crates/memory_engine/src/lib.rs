@@ -53,7 +53,8 @@ pub use server_runtime::{
 pub use storage_v2::{
     execute_work_unit_with_retry, BeginWorkUnit, ExpectedRevision, InMemoryCommitFault,
     InMemoryTransactionalStorage, RecordKey, StorageV2Error, StorageV2Result, StorageWorkUnit,
-    TransactionalStorage, VaultRecord, WorkUnitCommit, WorkUnitIntent, WorkUnitReceipt,
+    TransactionalStorage, VaultRecord, VaultSnapshotQuery, WorkUnitCommit, WorkUnitIntent,
+    WorkUnitReceipt,
 };
 pub use vector::{
     DeepRecallHit, DeepRecallQuery, DeepRecallResult, EmbedBatchInputs, EmbedBatchItem,
