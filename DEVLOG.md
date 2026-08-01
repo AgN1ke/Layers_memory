@@ -1,5 +1,33 @@
 # DEVLOG
 
+## Запис 160 — 2026-08-01 — Fault proof розширено до lost acknowledgement
+
+**Що виявило зовнішнє приймання `04b0457`:**
+Всі вісім заявлених S2 tests і старі контракти пройшли, але формулювання
+`fault injection` було ширшим за доказ. Reference backend умів відмовити лише
+після повного складання next state безпосередньо перед publish. Це доводило
+один atomic boundary, але не моделювало помилку між двома staged mutations або
+невідомий для caller результат після commit.
+
+**Що виправлено:**
+- failpoint тепер привʼязаний до конкретного `operation_id`, тому паралельний
+  commit іншого vault/operation не може випадково його спожити;
+- pre-publish edges: before apply, after mutation 1, after mutation 2 та after
+  receipt before publish — кожен лишає нуль records і нуль receipts, після чого
+  той самий operation успішно повторюється;
+- after publish before ack повертає typed `CommitOutcomeUnknown` на межі
+  backend; work-unit executor одразу звіряє operation receipt і повертає
+  успішний результат, а наступний caller replay теж не подвоює event_count;
+- недосяжний `AfterMutation(n)` відхиляється як invalid test setup замість
+  тихого перенесення fault на майбутній commit.
+
+**Чесна межа:**
+Десять deterministic tests тепер покривають усі логічні edges in-memory
+commit protocol, operation-targeting failpoint і безпечне відхилення
+недосяжного edge. Це все ще не process kill, filesystem tear, PostgreSQL crash
+або network proxy fault. Фізичну durability/unknown-outcome гарантію має
+окремо довести S3 на реальному PostgreSQL backend.
+
 ## Запис 159 — 2026-08-01 — Storage v2 почався з цілісного ingest
 
 **Чому не почали з PostgreSQL schema:**
@@ -14,18 +42,20 @@ methods. Найменший продуктовий доказ — ingest: оди
   optimistic expected revisions, атомарним commit, idempotent operation receipt
   і bounded whole-unit retry;
 - in-memory transactional reference, що публікує повну нову vault state одним
-  кроком і має failpoint безпосередньо перед publish;
+  кроком; початковий commit мав один failpoint перед publish, розширений logical
+  fault proof зафіксовано окремим записом вище;
 - `MemoryEngine::ingest_transactional`, який використовує той самий validation
   і scoring, детермінований event ID та одним work unit пише event і Session
   metadata;
 - Storage v1/FileStorage/чинні host APIs не переключені й не зламані.
 
 **Що доведено локально:**
-Вісім S2 tests закривають no-partial-write під injected failure, retry після
+Початкові вісім S2 tests закривали no-partial-write на одному injected edge, retry після
 failure, identical replay без другого event_count, conflicting replay,
 tamper після frozen digest, versioned serialization, concurrent same-session
 ingests, optimistic multi-record rollback, однакові keys у різних vault і
-fail-closed wrong membership.
+fail-closed wrong membership. Ширша fault-claim була уточнена після зовнішнього
+приймання у записі 160.
 
 **Що не оголошується готовим:**
 Це не PostgreSQL, не multi-process capacity proof і не закрита S2. Наступна

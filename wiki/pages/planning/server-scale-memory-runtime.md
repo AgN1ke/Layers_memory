@@ -270,9 +270,10 @@ Rust work-unit contract, vault record envelope, optimistic revisions,
 idempotent receipts, bounded deterministic retry and in-memory transactional
 reference now exist. `ingest_transactional` is the first migrated domain
 transition: event and Session metadata publish atomically, including under
-fault and concurrent-write tests. Existing Storage/FileStorage hosts remain on
-the compatible v1 path. S2 is not complete until the remaining flows in the
-exit gate use the same boundary.
+logical pre-publish, lost-acknowledgement and concurrent-write tests. These are
+reference-protocol failpoints, not physical database crash claims. Existing
+Storage/FileStorage hosts remain on the compatible v1 path. S2 is not complete
+until the remaining flows in the exit gate use the same boundary.
 
 ### S3 — PostgreSQLVaultStorage and pgvector
 

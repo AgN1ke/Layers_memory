@@ -7,8 +7,7 @@
 //! retry closure.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +23,15 @@ pub const WORK_UNIT_INTENT_SCHEMA_VERSION: &str = "storage_work_unit_intent.v1";
 pub const WORK_UNIT_RECEIPT_SCHEMA_VERSION: &str = "storage_work_unit_receipt.v1";
 pub const DEFAULT_WORK_UNIT_MAX_ATTEMPTS: usize = 4;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InMemoryCommitFault {
+    BeforeApply,
+    AfterMutation(usize),
+    AfterReceiptBeforePublish,
+    AfterPublishBeforeAck,
+}
+
 pub type StorageV2Result<T> = std::result::Result<T, StorageV2Error>;
 
 #[derive(Debug, Error)]
@@ -31,6 +39,9 @@ pub type StorageV2Result<T> = std::result::Result<T, StorageV2Error>;
 pub enum StorageV2Error {
     #[error("storage conflict: {0}")]
     Conflict(String),
+
+    #[error("storage commit outcome is unknown: {0}")]
+    CommitOutcomeUnknown(String),
 
     #[error(transparent)]
     Engine(#[from] MemoryEngineError),
@@ -47,6 +58,9 @@ impl From<StorageV2Error> for MemoryEngineError {
         match error {
             StorageV2Error::Conflict(message) => {
                 Self::Storage(format!("retryable storage conflict: {message}"))
+            }
+            StorageV2Error::CommitOutcomeUnknown(message) => {
+                Self::Storage(format!("storage commit outcome is unknown: {message}"))
             }
             StorageV2Error::Engine(error) => error,
         }
@@ -284,6 +298,19 @@ where
                     Err(StorageV2Error::Conflict(message)) => {
                         last_conflict = Some(message);
                     }
+                    Err(StorageV2Error::CommitOutcomeUnknown(message)) => {
+                        match storage.begin_work_unit(context, intent.clone()) {
+                            Ok(BeginWorkUnit::AlreadyCommitted(receipt)) => return Ok(*receipt),
+                            Ok(BeginWorkUnit::Started(_)) => {
+                                return Err(StorageV2Error::CommitOutcomeUnknown(message));
+                            }
+                            Err(reconcile_error) => {
+                                return Err(StorageV2Error::CommitOutcomeUnknown(format!(
+                                    "{message}; receipt reconciliation failed: {reconcile_error}"
+                                )));
+                            }
+                        }
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -304,7 +331,13 @@ pub struct InMemoryTransactionalStorage {
 #[derive(Debug, Default)]
 struct InMemoryInner {
     vaults: RwLock<BTreeMap<String, VaultState>>,
-    fail_before_publish: AtomicU64,
+    commit_fault: Mutex<Option<CommitFaultInjection>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommitFaultInjection {
+    operation_id: String,
+    phase: InMemoryCommitFault,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -326,12 +359,35 @@ impl InMemoryTransactionalStorage {
         Self::default()
     }
 
-    /// Deterministic test hook: the next commit builds and validates its full
-    /// replacement state, then fails before publishing any mutation.
-    pub fn inject_commit_failure_once(&self) {
-        self.inner
-            .fail_before_publish
-            .fetch_add(1, Ordering::SeqCst);
+    /// Deterministic conformance hook for one named operation. It models
+    /// logical commit-edge failures; it is not a physical database crash test.
+    pub fn inject_commit_fault_once(
+        &self,
+        operation_id: impl Into<String>,
+        phase: InMemoryCommitFault,
+    ) -> StorageV2Result<()> {
+        let operation_id = operation_id.into();
+        validate_component("fault operation id", &operation_id)?;
+        if phase == InMemoryCommitFault::AfterMutation(0) {
+            return Err(MemoryEngineError::Validation(
+                "AfterMutation fault index must be at least 1".to_string(),
+            )
+            .into());
+        }
+        let mut fault = self.inner.commit_fault.lock().map_err(|_| {
+            MemoryEngineError::Storage("storage v2 fault lock was poisoned".to_string())
+        })?;
+        if fault.is_some() {
+            return Err(MemoryEngineError::Validation(
+                "a storage v2 commit fault is already armed".to_string(),
+            )
+            .into());
+        }
+        *fault = Some(CommitFaultInjection {
+            operation_id,
+            phase,
+        });
+        Ok(())
     }
 
     pub fn committed_receipt(
@@ -369,6 +425,51 @@ impl InMemoryTransactionalStorage {
         self.inner.vaults.write().map_err(|_| {
             MemoryEngineError::Storage("storage v2 write lock was poisoned".into()).into()
         })
+    }
+
+    fn fail_if_armed(&self, operation_id: &str, phase: InMemoryCommitFault) -> StorageV2Result<()> {
+        let mut fault = self.inner.commit_fault.lock().map_err(|_| {
+            MemoryEngineError::Storage("storage v2 fault lock was poisoned".to_string())
+        })?;
+        let should_fail = fault.as_ref().is_some_and(|injection| {
+            injection.operation_id == operation_id && injection.phase == phase
+        });
+        if !should_fail {
+            return Ok(());
+        }
+        fault.take();
+        let message = format!("injected storage v2 failure at {phase:?}");
+        if phase == InMemoryCommitFault::AfterPublishBeforeAck {
+            Err(StorageV2Error::CommitOutcomeUnknown(message))
+        } else {
+            Err(MemoryEngineError::Storage(message).into())
+        }
+    }
+
+    fn validate_armed_fault_reachable(
+        &self,
+        operation_id: &str,
+        mutation_count: usize,
+    ) -> StorageV2Result<()> {
+        let mut fault = self.inner.commit_fault.lock().map_err(|_| {
+            MemoryEngineError::Storage("storage v2 fault lock was poisoned".to_string())
+        })?;
+        let unreachable = fault.as_ref().is_some_and(|injection| {
+            injection.operation_id == operation_id
+                && matches!(
+                    injection.phase,
+                    InMemoryCommitFault::AfterMutation(index) if index > mutation_count
+                )
+        });
+        if !unreachable {
+            return Ok(());
+        }
+        let injection = fault.take().expect("checked armed fault");
+        Err(MemoryEngineError::Validation(format!(
+            "commit fault {:?} exceeds {mutation_count} staged mutation(s)",
+            injection.phase
+        ))
+        .into())
     }
 }
 
@@ -498,6 +599,9 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
 
     fn commit(self, commit: WorkUnitCommit) -> StorageV2Result<WorkUnitReceipt> {
         commit.validate()?;
+        let operation_id = self.intent.operation_id.clone();
+        self.storage
+            .validate_armed_fault_reachable(&operation_id, self.staged.len())?;
         let mut vaults = self.storage.write_vaults()?;
         let current = vaults
             .get(self.context.vault_id.as_str())
@@ -522,6 +626,9 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
             }
         }
 
+        self.storage
+            .fail_if_armed(&operation_id, InMemoryCommitFault::BeforeApply)?;
+
         let mut next = current.clone();
         if next.binding.is_none() {
             next.binding = Some(VaultBinding {
@@ -529,7 +636,7 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
                 membership_id: self.context.membership_id.clone(),
             });
         }
-        for (key, mutation) in &self.staged {
+        for (applied_index, (key, mutation)) in self.staged.iter().enumerate() {
             match mutation {
                 StagedMutation::Put {
                     expected,
@@ -568,6 +675,10 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
                     next.records.remove(key);
                 }
             }
+            self.storage.fail_if_armed(
+                &operation_id,
+                InMemoryCommitFault::AfterMutation(applied_index + 1),
+            )?;
         }
 
         let commit_sequence = if next.next_commit_sequence == 0 {
@@ -597,26 +708,14 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
         next.receipts
             .insert(receipt.operation_id.clone(), receipt.clone());
 
-        if self
-            .storage
-            .inner
-            .fail_before_publish
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                if remaining > 0 {
-                    Some(remaining - 1)
-                } else {
-                    None
-                }
-            })
-            .is_ok()
-        {
-            return Err(MemoryEngineError::Storage(
-                "injected storage v2 failure before atomic publish".to_string(),
-            )
-            .into());
-        }
+        self.storage.fail_if_armed(
+            &operation_id,
+            InMemoryCommitFault::AfterReceiptBeforePublish,
+        )?;
 
         vaults.insert(self.context.vault_id.as_str().to_string(), next);
+        self.storage
+            .fail_if_armed(&operation_id, InMemoryCommitFault::AfterPublishBeforeAck)?;
         Ok(receipt)
     }
 }

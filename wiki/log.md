@@ -8,6 +8,19 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] correction | Storage v2 fault claim matches its evidence
+
+Recorded the external `04b0457` acceptance as PASS and preserved its useful
+caveat: the original reference injected only one failure before publish, not an
+arbitrary failure point. The implementation and wiki now cover every logical
+pre-publish edge plus publish-before-ack recovery through the committed receipt.
+The work-unit executor now reconciles the typed unknown outcome immediately;
+ordinary caller replay remains idempotent as a second safety boundary.
+
+The documentation explicitly stops at that boundary. These deterministic
+in-memory hooks do not stand in for process-kill, filesystem, PostgreSQL or
+network fault tests, which remain S3 acceptance work.
+
 ## [2026-08-01] implementation | Storage v2 foundation and atomic ingest
 
 Added the Storage v2 work-unit inventory as the migration authority between

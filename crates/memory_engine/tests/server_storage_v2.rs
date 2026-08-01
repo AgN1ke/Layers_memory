@@ -11,46 +11,161 @@ use memory_engine::storage_v2::{
     WorkUnitCommit, WorkUnitIntent, WORK_UNIT_INTENT_SCHEMA_VERSION,
 };
 use memory_engine::types::{EVENT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION};
-use memory_engine::{InMemoryTransactionalStorage, MemoryEngine, TransactionalIngestRequest};
+use memory_engine::{
+    InMemoryCommitFault, InMemoryTransactionalStorage, MemoryEngine, TransactionalIngestRequest,
+};
 use serde_json::json;
 
 const T0: &str = "2026-08-01T12:00:00Z";
 const T1: &str = "2026-08-01T12:00:01Z";
 
 #[test]
-fn transactional_ingest_publishes_event_and_session_together_or_not_at_all() {
+fn transactional_ingest_rolls_back_at_every_logical_pre_publish_edge() {
+    let phases = [
+        InMemoryCommitFault::BeforeApply,
+        InMemoryCommitFault::AfterMutation(1),
+        InMemoryCommitFault::AfterMutation(2),
+        InMemoryCommitFault::AfterReceiptBeforePublish,
+    ];
+
+    for (case, phase) in phases.into_iter().enumerate() {
+        let context = context("account_alpha", "vault_alpha");
+        let storage = InMemoryTransactionalStorage::new();
+        let engine = MemoryEngine::new(storage.clone());
+        let operation_id = format!("ingest_atomic_{case}");
+        let request = ingest_request(&operation_id, "session_alpha", "first");
+        let session_key = RecordKey::new("sessions", "session_alpha").unwrap();
+
+        storage
+            .inject_commit_fault_once(&operation_id, phase)
+            .unwrap();
+        let error = engine
+            .ingest_transactional(&context, request.clone())
+            .expect_err("injected commit must fail before publish");
+        assert!(error.to_string().contains(&format!("{phase:?}")));
+        assert_eq!(storage.record_count(&context).unwrap(), 0);
+        assert!(storage
+            .read_record(&context, &session_key)
+            .unwrap()
+            .is_none());
+        assert!(storage
+            .committed_receipt(&context, &request.work_unit.operation_id)
+            .unwrap()
+            .is_none());
+
+        let result = engine
+            .ingest_transactional(&context, request)
+            .expect("same operation can be retried after a pre-publish failure");
+        assert_eq!(result.receipt.mutation_count, 2);
+        assert_eq!(storage.record_count(&context).unwrap(), 2);
+        let session = storage
+            .read_record(&context, &session_key)
+            .unwrap()
+            .expect("session committed with event");
+        assert_eq!(session.payload_schema_version, SESSION_SCHEMA_VERSION);
+        assert_eq!(session.payload["event_count"], 1);
+    }
+}
+
+#[test]
+fn transactional_ingest_reconciles_receipt_when_commit_ack_is_lost() {
     let context = context("account_alpha", "vault_alpha");
     let storage = InMemoryTransactionalStorage::new();
     let engine = MemoryEngine::new(storage.clone());
-    let request = ingest_request("ingest_atomic_1", "session_alpha", "first");
+    let operation_id = "ingest_lost_ack_1";
+    let request = ingest_request(operation_id, "session_alpha", "committed once");
     let session_key = RecordKey::new("sessions", "session_alpha").unwrap();
 
-    storage.inject_commit_failure_once();
-    let error = engine
+    storage
+        .inject_commit_fault_once(operation_id, InMemoryCommitFault::AfterPublishBeforeAck)
+        .unwrap();
+    let first = engine
         .ingest_transactional(&context, request.clone())
-        .expect_err("injected commit must fail before publish");
-    assert!(error.to_string().contains("before atomic publish"));
-    assert_eq!(storage.record_count(&context).unwrap(), 0);
-    assert!(storage
-        .read_record(&context, &session_key)
-        .unwrap()
-        .is_none());
-    assert!(storage
-        .committed_receipt(&context, &request.work_unit.operation_id)
-        .unwrap()
-        .is_none());
+        .expect("work-unit executor must reconcile a lost commit acknowledgement");
 
-    let result = engine
-        .ingest_transactional(&context, request)
-        .expect("same operation can be retried after the failed commit");
-    assert_eq!(result.receipt.mutation_count, 2);
     assert_eq!(storage.record_count(&context).unwrap(), 2);
+    let committed_receipt = storage
+        .committed_receipt(&context, operation_id)
+        .unwrap()
+        .expect("receipt was published atomically with domain records");
+    assert_eq!(first.receipt, committed_receipt);
     let session = storage
         .read_record(&context, &session_key)
         .unwrap()
-        .expect("session committed with event");
-    assert_eq!(session.payload_schema_version, SESSION_SCHEMA_VERSION);
+        .expect("session was committed before acknowledgement was lost");
     assert_eq!(session.payload["event_count"], 1);
+
+    let replay = engine
+        .ingest_transactional(&context, request)
+        .expect("retry recovers the already committed receipt");
+    assert_eq!(replay.receipt, committed_receipt);
+    assert_eq!(replay, first);
+    assert_eq!(storage.record_count(&context).unwrap(), 2);
+    assert_eq!(
+        storage
+            .read_record(&context, &session_key)
+            .unwrap()
+            .unwrap()
+            .payload["event_count"],
+        1
+    );
+}
+
+#[test]
+fn commit_fault_targets_one_operation_and_invalid_edge_is_consumed_safely() {
+    let context = context("account_alpha", "vault_alpha");
+    let storage = InMemoryTransactionalStorage::new();
+    let engine = MemoryEngine::new(storage.clone());
+
+    storage
+        .inject_commit_fault_once("ingest_target_1", InMemoryCommitFault::BeforeApply)
+        .unwrap();
+    engine
+        .ingest_transactional(
+            &context,
+            ingest_request("ingest_other_1", "session_alpha", "other operation"),
+        )
+        .expect("another operation must not consume the targeted fault");
+    let target_error = engine
+        .ingest_transactional(
+            &context,
+            ingest_request("ingest_target_1", "session_alpha", "target operation"),
+        )
+        .expect_err("target operation must consume its fault");
+    assert!(target_error.to_string().contains("BeforeApply"));
+    assert_eq!(storage.record_count(&context).unwrap(), 2);
+
+    storage
+        .inject_commit_fault_once(
+            "ingest_invalid_edge_1",
+            InMemoryCommitFault::AfterMutation(3),
+        )
+        .unwrap();
+    let request = ingest_request(
+        "ingest_invalid_edge_1",
+        "session_alpha",
+        "invalid fault edge",
+    );
+    let invalid_error = engine
+        .ingest_transactional(&context, request.clone())
+        .expect_err("fault beyond two staged mutations must be rejected");
+    assert!(invalid_error
+        .to_string()
+        .contains("exceeds 2 staged mutation(s)"));
+    assert_eq!(storage.record_count(&context).unwrap(), 2);
+
+    engine
+        .ingest_transactional(&context, request)
+        .expect("invalid fault was consumed and cannot poison the retry");
+    assert_eq!(storage.record_count(&context).unwrap(), 3);
+    let session = storage
+        .read_record(
+            &context,
+            &RecordKey::new("sessions", "session_alpha").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.payload["event_count"], 2);
 }
 
 #[test]

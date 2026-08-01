@@ -48,9 +48,9 @@ pub use server_runtime::{
     TurnTerminalOutcome, TurnTerminalResult, VaultContext, VaultId, VaultTurnLedger,
 };
 pub use storage_v2::{
-    execute_work_unit_with_retry, BeginWorkUnit, ExpectedRevision, InMemoryTransactionalStorage,
-    RecordKey, StorageV2Error, StorageV2Result, StorageWorkUnit, TransactionalStorage, VaultRecord,
-    WorkUnitCommit, WorkUnitIntent, WorkUnitReceipt,
+    execute_work_unit_with_retry, BeginWorkUnit, ExpectedRevision, InMemoryCommitFault,
+    InMemoryTransactionalStorage, RecordKey, StorageV2Error, StorageV2Result, StorageWorkUnit,
+    TransactionalStorage, VaultRecord, WorkUnitCommit, WorkUnitIntent, WorkUnitReceipt,
 };
 pub use vector::{
     DeepRecallHit, DeepRecallQuery, DeepRecallResult, EmbedBatchInputs, EmbedBatchItem,

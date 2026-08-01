@@ -59,8 +59,10 @@ without its matching Session state.
   vault key.
 - Added point reads, mandatory optimistic expected revisions, atomic work-unit
   publication, typed retryable conflicts and same-input operation replay.
-- Added an in-memory transactional conformance backend with a failure-before-
-  publish hook.
+- Added an in-memory transactional conformance backend. Follow-up acceptance
+  expanded its operation-bound fault hooks across every logical pre-publish
+  edge and the post-publish/pre-ack edge; an unknown commit outcome is reconciled
+  through the operation receipt before the engine reports failure.
 - Added `MemoryEngine::ingest_transactional`: event and Session metadata now
   form one authoritative commit on the new path and reuse existing event
   validation/scoring policy.
@@ -69,6 +71,10 @@ without its matching Session state.
 - The server track is no longer accurately described as “Storage v2 not
   started”. Only its foundation and ingest transition exist; this is not a
   production storage or scale claim.
+- The initial test description implied arbitrary-point fault injection. Commit
+  `04b0457` proved one deterministic failure immediately before publish. The
+  expanded reference now proves logical commit edges and lost acknowledgement,
+  but still does not prove physical database/process crash durability.
 
 **What is still true:**
 - Existing `Storage`, `FileStorage` and `MemoryEngine::ingest` behavior remains

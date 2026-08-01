@@ -82,8 +82,12 @@ commit fail halfway.
   optimistic conflict. Storage/provider failures are not silently retried as
   conflicts;
 - the in-memory reference builds the complete next vault state and publishes it
-  once. Its failpoint proves that a failure immediately before publication
-  leaves no records and no receipt.
+  once. Operation-bound failpoints cover before apply, each staged mutation,
+  receipt creation before publish, and publish before acknowledgement. Every
+  pre-publish failure leaves no records/receipt; a lost acknowledgement is
+  classified as `CommitOutcomeUnknown`, then the executor reopens the same
+  operation and returns its committed receipt. A later caller replay returns
+  that same result without another mutation.
 
 The first migrated domain transition is `MemoryEngine::ingest_transactional`.
 It derives a stable event ID from vault and operation identity, applies the same
@@ -101,11 +105,14 @@ does not begin until S2’s domain migration gate closes.
 
 ### S2.A — Foundation and ingest (implemented, acceptance pending)
 
-The code boundary and in-memory reference exist. Deterministic tests cover
-atomic failure, idempotent replay, conflicting replay, concurrent same-session
-ingest, optimistic rollback and vault isolation. Before this subphase is called
-accepted, an external host-path test must verify the public serialization shape
-and retry behavior from the built adapter that will actually call it.
+The code boundary and in-memory reference exist. Ten deterministic tests cover
+all logical pre-publish edges, automatic receipt reconciliation after a lost
+commit acknowledgement, idempotent and conflicting replay, frozen-input tamper, concurrent same-session ingest,
+optimistic rollback, operation-targeted failpoints, invalid-edge cleanup,
+versioned serialization and vault isolation. An external source-level
+acceptance independently passed the original foundation claims. Before this
+subphase is called host-ready, the built adapter that will actually call Storage
+v2 must still verify the same public serialization and retry behavior.
 
 ### S2.B — Correctness state and small mutations
 
@@ -140,8 +147,10 @@ their semantics.
 
 ## Known limits and deliberate non-goals
 
-The in-memory backend snapshots a vault for deterministic conformance. It is not
-a capacity model and does not claim cross-process durability. Membership
+The in-memory backend snapshots a vault for deterministic conformance. Logical
+failpoints are not OS process kills, filesystem tears, PostgreSQL crash tests or
+network-proxy faults. It is not a capacity model and does not claim
+cross-process durability. Membership
 authentication remains the server runtime’s responsibility; Storage v2 binds a
 seen vault to the authorized account/membership and rejects a later mismatch,
 but it is not the identity registry. The retry closure cannot technically prove
