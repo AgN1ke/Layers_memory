@@ -8,6 +8,80 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] integrity | Reflection Phase C.1 is recoverable
+
+Implemented and documented the deterministic integrity closure that the prior
+audit made mandatory. Reflection apply and candidate review now persist frozen
+journal intent, revalidate live evidence, replay each desired side effect
+idempotently after restart, and leave a text-free durable task outcome. Absent
+scope is isolated, review scope is immutable, and terminal candidates cannot
+re-enter review.
+
+The wiki now distinguishes the closed deterministic C.1 gate from still-open
+live Chibigochi acceptance. Roadmap Phase C/C.1 items are complete; the v0.6
+hypothesis graph remains a separate next schema phase rather than being folded
+into recovery work.
+
+## [2026-08-01] strategy | Reliable reflection and hierarchical belief plan
+
+Added `pages/planning/reflective-belief-system.md` as the phased authority for
+closing v0.5 integrity before moving to a v0.6 hypothesis graph and v0.7
+contradiction/clarification work. The plan records the target information
+model, agent/core/host boundary, end-to-end flow, release dependencies,
+acceptance gates, risks, and explicit non-goals.
+
+Reopened autonomous reflection Phase C acceptance after the information-flow
+audit found missing multi-file recovery, unsafe absent-scope behavior, and
+review transition/scope gaps. Updated strategy, architecture, contracts,
+roadmap, the Generative Agents research note, root/wiki navigation, HISTORY,
+and DEVLOG. The research note now connects Generative Agents and Letta
+sleep-time memory work with LangGraph/Temporal durable execution and Mem0's
+comparison-before-write pattern.
+
+The accepted cognitive direction preserves narrow and broad hypotheses as
+separate related claims with explainable evidence strength, rather than
+forcing every related wording into one flat candidate. No runtime schema or
+behavior is claimed by this documentation-only decision.
+
+## [2026-08-01] living memory | Autonomous reflection v0.5 Phase C
+
+Implemented the typed result lifecycle from the normative v0.5 plan. New
+reflection tasks can create one hypothesis, reinforce an existing candidate
+with genuinely new evidence, open a reviewable Core challenge, or return a
+structured no-insight outcome. Candidate reinforcement accumulates provenance
+without duplicating beliefs, while Core remains owner-reviewed. The new schema
+coexists with legacy saved-task responses. Deterministic acceptance is green;
+live Chibigochi acceptance remains pending.
+
+## [2026-08-01] living memory | Autonomous reflection v0.5 Phase B
+
+Documented the shift from session-scoped reflection evidence to an explicit
+personality boundary. `core_scope` now owns a durable list of host-bound source
+sessions; trigger salience may accumulate across them without inferring account
+links from text similarity.
+
+The architecture and contracts now distinguish new trigger evidence from
+bounded related history, define the non-vector structural selector and its
+weights, include existing in-scope candidates, and preserve cross-session
+candidate provenance. Phase B is deterministic-green but remains live-pending;
+typed candidate reinforcement is explicitly Phase C.
+
+## [2026-08-01] living memory | Autonomous reflection v0.5 Phase A
+
+Added `pages/planning/autonomous-reflection-v0.5.md` as the implementation
+authority for the next cognitive-memory capability. The page defines
+critical-mass, sleep, and interval semantics; preserves the rule that agents do
+not write Core; separates processing state from the three memory layers; and
+records Phase A implementation versus the still-open personality-scope and
+reinforcement phases.
+
+Updated strategy, architecture, contracts, roadmap, the Generative Agents
+review, wiki home/index, root README, prompt documentation, HISTORY, and DEVLOG.
+The documentation records the new `reflection_state.v1`, compatible per-unit
+reflection markers, structured trigger status, opt-in host execution, initial
+calibration values, and the v0.5 release boundary without claiming live
+acceptance.
+
 ## [2026-08-01] recall calibration | Associative memory may abstain
 
 Recorded the live boundary discovered after the associative-layer acceptance:

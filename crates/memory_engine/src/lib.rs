@@ -28,7 +28,7 @@ pub mod vector;
 
 pub use engine::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult, MemoryEngine,
-    RecallStage1Config, SleepStage1Config, SleepStage1Result,
+    RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result,
 };
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;

@@ -8,6 +8,8 @@
   architecture.
 - [Roadmap](../planning/roadmap.md) - implementation state for v0.1/v0.2/v0.3
   and deferred work.
+- [Reflective Belief System](../planning/reflective-belief-system.md) - target
+  architecture after v0.5 integrity closure.
 - [v0.3 acceptance](../releases/v0.3-acceptance.md) - conformance proof for
   reusable adapters.
 - [Local development](../integration/local-development.md) - practical commands
@@ -136,7 +138,11 @@ model-calibrated порога. Для bundled multilingual MiniLM default піс
 Crash safety реалізується двома механізмами:
 
 1. **Атомарний запис одного файлу:** запис у тимчасовий файл, fsync, перейменування. Стандартний UNIX-патерн.
-2. **Журнал операцій для мульти-файлових змін:** у v0.2 це зарезервований storage primitive і цільовий механізм для майбутніх migration/recovery-heavy операцій. Runtime sleep зараз не пише transaction journal; crash safety забезпечується атомарним записом окремих файлів, durable `SleepRun` checkpoints і ідемпотентним coverage-cache.
+2. **Журнал операцій для мульти-файлових змін:** після v0.5 Phase C.1 він
+   активно захищає reflection apply та candidate review через frozen intent і
+   idempotent replay. Runtime sleep навмисно лишається на іншому механізмі —
+   atomic files, durable `SleepRun` checkpoints та ідемпотентному
+   coverage-cache.
 
 Чому файли як правда: принцип "керованість для людини" зі стратегії — це обмеження, а не побажання. Людина має могти зайти у `memory/sessions/2026-05-17_001/session.md` і прочитати живий журнал сесії, а archive/core записи мають бути відкритими як pretty JSON, не схованими в opaque базі. SQLite-only це порушує. Файли як правда — єдиний варіант, що чесно дотримує принцип. Абстракція `Storage` страхує нас від тупика, коли архів виросте і знадобиться індекс.
 
@@ -445,6 +451,8 @@ Embeddings обчислюватимуться для validated memory units аб
 - **expected_output_schema** — опис очікуваної форми результату: JSON schema name для structured passes або plain/prose contract для текстових overlay-проходів.
 - **created_at** — час створення задачі.
 - **state** — `pending`, `submitted`, `completed`, `failed`. Ядро змінює state при відповідних операціях.
+- **outcome** — optional terminal machine-readable підсумок. Для reflection це
+  text-free operation/digest/ID record; він не змінює frozen reasoning input.
 
 ### 7.2 Resume і tracking
 
@@ -458,7 +466,13 @@ Embeddings обчислюватимуться для validated memory units аб
 
 ### 7.3 Серіалізація і lifecycle resilience
 
-Усі pending tasks зберігаються у `memory/tasks/<task_id>.json` одразу при створенні. Стан `state` оновлюється у файлі при кожній зміні. При запуску ядро системи читає `memory/tasks/`, бачить незавершені задачі і повертає їх список хосту через `engine.pending_tasks()`. Хост вирішує, які з них продовжувати виконувати.
+Усі pending tasks зберігаються у `memory/tasks/<task_id>.json` одразу при
+створенні. Стан `state` оновлюється у файлі при кожній зміні. Перший звичайний
+API-виклик нового engine instance відновлює незавершені journal-backed
+reflection/review operations один раз; вже отриманий LLM result не запитується
+повторно. Тому `pending_tasks()` показує тільки справді незавершені мовні
+задачі, але recovery guarantee не залежить від того, чи host викликав саме цей
+метод першим.
 
 Це дає очевидну поведінку при обриві: застосунок вбили посеред sleep — ми не втрачаємо ані сесію (вона у файлах), ані задачу (вона у `memory/tasks/`). При наступному запуску ядро каже хосту "є незавершений `sleep_compression` для сесії 2026-05-17_001", і хост вирішує: виконати зараз, відкласти, відкинути.
 
@@ -617,6 +631,85 @@ Promotion у Core має бути багаторівневою:
 
 Це не доменний хардкод. Rust core не знає, що саме є "кішкою", "родиною" або "цінністю". Core бачить структурований кандидат, evidence, вагу, статуси review і рішення власника. Який саме спогад існує і як його назвати, вирішує LLM-pass; чи можна йому довіряти як трансформації — перевіряє validator; чи потрапить він у Core — вирішує lifecycle.
 
+### 9.1 Autonomous reflection trigger (v0.5)
+
+Автономність reflection стосується моменту запуску, а не права змінювати Core.
+Після sleep/fidelity або під час scheduled maintenance хост передає ядру лише
+можливість виконати перевірку. Ядро саме рахує нові validated units, накопичену
+вагу, critical-unit boundary, часовий interval і наявність active task.
+
+`reflection_status(...)` є read-only поясненням рішення.
+`begin_reflection_if_due(...)` атомарно повторює перевірку під per-scope lock і
+створює `reflection_analyze` PendingTask тільки для due-стану. Один scope не
+може мати дві pending/submitted reflection-задачі.
+
+Reflection input не читає raw session і не повинен необмежено рости. Phase A
+дала автоматичній задачі bounded batch нових validated units. Phase B робить
+evidence personality-scoped: `core_scope` є explicit identity boundary, а
+reflection state памʼятає source sessions, які host свідомо предʼявив цьому
+scope. Схожий текст або сусідство файлів не можуть звʼязати двох людей.
+`bind_reflection_session` робить цей звʼязок без LLM/task і дозволяє host-у
+реєструвати session під час lifecycle або контрольовано backfill-ити історію.
+`begin_reflection_if_due` виконує той самий bind idempotently.
+
+Автоматична задача розділяє нові `trigger` units і вже осмислені
+`related_history` units. Related history підбирається детерміновано й без
+vectors за структурним overlap links/themes/topic threads/tags, має bounded
+limit і пояснювані score/reasons. Summaries беруться тільки з parent archives
+фактично включених units. Draft/ready candidates того ж scope теж входять у
+bounded context, щоб analysis бачив уже сформульовані гіпотези. Optional vector
+enrichment може зʼявитися пізніше, але не визначатиме identity membership і не
+замінить structural baseline.
+
+Phase C переводить результат із «списку нових текстів» у typed lifecycle.
+Analysis може створити нову гіпотезу, підсилити наявну новим доказом, відкрити
+reviewable challenge до Core або явно не знайти стійкого висновку. Ядро
+перевіряє всі ID проти bounded task input і не дозволяє повторно видати старий
+unit за нове підсилення. Reinforcement змінює тільки candidate record;
+challenge також лишається candidate record. Жодна з цих дій не минає owner
+review на переході до Core.
+
+Успішний submit пересуває checkpoint і ставить `reflection_count`,
+`last_reflected_at` та `last_reflection_operation_id` на input units навіть для
+нульового candidate result. Failed task не змінює ці markers. Reflection state
+є orchestration metadata, не
+четвертим шаром і не джерелом prompt context. Повний план:
+[Autonomous Reflection v0.5](../planning/autonomous-reflection-v0.5.md).
+
+**Integrity closure 2026-08-01.** Functional flow тепер має multi-file recovery
+guarantee. Typed apply та owner review спершу фіксують frozen journal intent,
+потім ідемпотентно проводять candidate/Core effects, unit/archive checkpoint,
+reflection state і terminal task outcome. Restart продовжує ту саму операцію
+без нового LLM call. Scope immutable, відсутній `core_scope` є isolated
+unscoped namespace, а cited evidence повторно перевіряється до першого side
+effect. Детальний gate зафіксовано в
+[Autonomous Reflection Phase C.1](../planning/autonomous-reflection-v0.5.md#phase-c1---integrity-and-recovery-closure).
+
+### 9.2 Planned hypothesis graph after v0.5
+
+Плоский `CandidateBelief` є поточною v0.5 формою reviewable висновку. Наступна
+архітектурна форма не замінює його одним «кращим» текстом, а представляє
+проміжне розуміння як граф гіпотез між Archive і Core.
+
+Вузол графа є окремим твердженням із personality scope, evidence, support,
+contradiction, часовою застосовністю і lifecycle. Ребра відрізняють ширше
+узагальнення, вужче уточнення, можливу еквівалентність і суперечність. Один
+validated MemoryUnit може підтримувати кілька рівнів, але його source identity
+не множиться: поширення підтримки вгору послаблюється й не створює нове
+незалежне свідчення.
+
+Граф не входить у звичайний prompt як четверта памʼять. Він є внутрішнім
+робочим простором reflection і review. Chat prompt бачить тільки живу Session,
+відібраний Archive/associative context і перевірений Core. Optional local
+vectors можуть знайти стару повʼязану гіпотезу всередині третього, глибокого
+шару, але structural scope та non-vector fallback лишаються обовʼязковими.
+
+LLM пропонує формулювання й relations; Rust core володіє evidence identity,
+confidence components, propagation, transitions, journal і promotion gates.
+Схеми та API для цієї форми не вважаються реалізованими цим описом. Їхня
+послідовність визначена у
+[Reflective Belief System](../planning/reflective-belief-system.md).
+
 ---
 
 ## 10. Storage у деталях
@@ -648,6 +741,8 @@ memory/
   runs/
     sleep/
       <sleep_task_id>.json   — durable SleepRun orchestration cursor
+    reflection/
+      <scope>.json           — reflection checkpoint і остання trigger-причина
   journal/
     <op_id>.json             — журнал мульти-файлових операцій
 ```
@@ -666,6 +761,8 @@ memory/
 - `update_archive_entry(id, patch)`
 - `read_archive(filters) -> StorageCollection<ArchiveEntry>`
 - `read_memory_units_for_archive(archive_id) -> StorageCollection<MemoryUnit>`
+- `read_reflection_state(scope) -> Option<ReflectionState>`
+- `write_reflection_state(state)`
 - `read_core_store_category(category) -> CoreStoreCategory`
 - `read_core_store_categories() -> StorageCollection<CoreStoreCategory>`
 - `write_core_store_category(category)`
@@ -679,20 +776,23 @@ memory/
 
 ### 10.3 Crash safety
 
-Implementation note 2026-06-10: runtime sleep recovery is currently provided by
-durable `SleepRun` checkpoints in `memory/runs/sleep/` plus idempotent
-event-coverage rules. The `memory/journal/` primitive exists in `Storage`, but
-v0.2 runtime sleep does not yet use it as a multi-file transaction journal.
-Journal-based recovery is deferred until schema migrations, raw-event
-compaction, or another operation needs explicit recover/rollback semantics.
+Runtime sleep recovery is provided by durable `SleepRun` checkpoints in
+`memory/runs/sleep/` plus idempotent event-coverage rules. Phase C.1 later made
+`memory/journal/` active for the concrete recovery-heavy operations that need
+it: reflection apply and candidate review. Sleep still does not use the
+transaction journal.
 
 **Один файл:** запис іде у `<file>.tmp`, виконується fsync, потім `rename(<file>.tmp, <file>)`. На більшості файлових систем це атомарна операція.
 
-**Мульти-файлові операції, коли вони будуть підключені до journal:** перед операцією у `memory/journal/<op_id>.json` пишеться запис із описом задуму (які файли зміняться, який цільовий стан). Після успішного завершення операції journal-запис помічається `completed: true` і його можна видалити. На v0.2 це опис цільового механізму для майбутніх міграцій/recovery-heavy операцій; runtime sleep зараз покладається на durable `SleepRun` checkpoints і idempotent event coverage. Коли journal вмикається для конкретної операції, при запуску ядро системи перевіряє `memory/journal/` і:
+**Мульти-файлові journal operations:** перед першим domain side effect у
+`memory/journal/<op_id>.json` атомарно пишеться frozen intent із цільовим
+станом і progress. Після успішного завершення запис переходить у `completed` і
+лишається inspectable audit trail. Перший звичайний API-виклик нового engine
+instance перевіряє journal один раз і:
 
-- завершує операції з повним описом задуму, якщо це безпечно (наприклад, sleep можна повторити);
-- відкочує операції, які не можуть бути безпечно завершені;
-- лишає ті, що потребують ручного огляду власника.
+- ідемпотентно завершує `started` reflection/review із повним frozen intent;
+- зупиняється на unreadable journal record замість тихого skip;
+- не продовжує `needs_manual_review`, а повертає видиму помилку з operation ID.
 
 ### 10.4 Manifest
 

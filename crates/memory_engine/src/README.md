@@ -18,6 +18,12 @@
 - `recall.rs` - `RecallQuery`, `RecallResult` і stage markers.
 - `tasks.rs` - `PendingTask` і task attempts.
 - `sleep.rs` - `SleepCompressionResult` і базова валідація результату.
+- `reflection.rs` - manual/autonomous reflection contracts, trigger status і
+  durable per-scope processing state.
+- `engine/reflection_flow.rs` - core-owned eligibility, task orchestration,
+  personality-scope membership, bounded structural history selection,
+  typed result actions, reinforcement, checkpointing і CandidateBelief
+  lifecycle.
 - `manifest.rs` - `memory/manifest.json`.
 - `journal.rs` - journal operation для crash safety.
 - `storage.rs` - `Storage` trait як межа між ядром системи і фізичним сховищем.
@@ -29,3 +35,20 @@
 Модулі мають залишатися малими і відповідати контрактам у `wiki/pages/foundation/contracts.md`.
 
 Якщо нова логіка потребує нового типу даних, спочатку оновлюємо контракт або явно фіксуємо, чому це внутрішній тип, який не є частиною зовнішнього формату.
+
+## Personality-scope reflection
+
+Autonomous reflection не прирівнює сесію до особистості. Host явно передає
+стабільний `core_scope`; reflection state памʼятає привʼязані до нього source
+sessions, а кожний unit зберігає власне походження. Давня history входить у
+task лише через bounded structural match і маркується окремо від нового
+trigger evidence.
+
+Phase C actions do not add another truth store. A reinforcement extends the
+same candidate record with new evidence, while a Core challenge remains a
+candidate until explicit review. New tasks request
+`reflection_actions_result.v1`; legacy `reflection_result.v1` responses remain
+readable for compatibility. Scope isolation, terminal review guards, live
+evidence revalidation, journal-backed idempotent apply/review and text-free
+task outcomes are implemented; live v0.5 acceptance remains pending. The
+post-v0.5 hypothesis graph is planned, not part of the current source contract.

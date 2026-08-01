@@ -13,6 +13,12 @@ whole chat history.
 - [Architecture](pages/foundation/architecture.md) - how the library is structured.
 - [Contracts](pages/foundation/contracts.md) - data and task shapes that integrations must respect.
 - [Roadmap](pages/planning/roadmap.md) - current state and next planned work.
+- [Autonomous reflection v0.5](pages/planning/autonomous-reflection-v0.5.md) -
+  how validated experience reaches reflection by salience, sleep, and time,
+  then matures one reviewable understanding through typed outcomes.
+- [Reflective Belief System](pages/planning/reflective-belief-system.md) - how
+  v0.5 integrity closure leads into hierarchical hypotheses, explainable
+  support, contradiction, temporal revision, and bounded clarification.
 - [LLM integration resources](pages/integration/llm-integration-resources.md) - what model/key resources an application must provide.
 
 ## What This Project Is
@@ -39,9 +45,11 @@ The project has already proved the main foundation:
   memory units;
 - project documentation now lives in this wiki with checked internal links.
 
-The active design direction is contextual memory expansion: keep the ordinary
-context small, and add a few detailed memories only when the current topic needs
-them.
+The active design direction has two ordered tracks. Contextual memory expansion
+keeps ordinary chat context small and activates old details only for the
+current topic. Autonomous reflection first closes durable scope-safe apply and
+review, then evolves into an internal graph of evidence-backed hypotheses
+between Archive and Core.
 
 ## How To Read The Wiki
 
@@ -56,6 +64,7 @@ For strategy and boundaries, read:
 For current work, read:
 
 - [Roadmap](pages/planning/roadmap.md)
+- [Reflective Belief System](pages/planning/reflective-belief-system.md)
 - [Contextual memory expansion](pages/research/contextual-memory-expansion-2026-07-05.md)
 - [Vector storage implementation spec](pages/research/vector-storage-tz-2026-07-03.md)
 

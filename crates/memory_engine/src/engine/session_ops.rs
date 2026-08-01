@@ -36,6 +36,11 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn ensure_manifest(&self) -> Result<()> {
+        self.ensure_manifest_initialized()?;
+        self.ensure_pending_memory_operations_recovered()
+    }
+
+    pub(super) fn ensure_manifest_initialized(&self) -> Result<()> {
         if self.manifest_initialized.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -53,7 +58,23 @@ impl<S: Storage> MemoryEngine<S> {
         })
     }
 
+    fn ensure_pending_memory_operations_recovered(&self) -> Result<()> {
+        if self.memory_operations_recovered.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.with_resource_lock("memory_operations_recovery".to_string(), || {
+            if self.memory_operations_recovered.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            self.recover_pending_memory_operations_unlocked()?;
+            self.memory_operations_recovered
+                .store(true, Ordering::Release);
+            Ok(())
+        })
+    }
+
     pub fn pending_tasks(&self) -> Result<Vec<PendingTask>> {
+        self.ensure_manifest()?;
         Ok(self
             .storage
             .load_tasks()?

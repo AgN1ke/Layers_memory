@@ -13,10 +13,13 @@ use crate::event::StoredEvent;
 use crate::journal::{JournalOperation, JournalState};
 use crate::llm::SleepRun;
 use crate::manifest::Manifest;
+use crate::reflection::ReflectionState;
 use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
 use crate::storage::{Storage, StorageCollection, StorageReadWarning};
 use crate::tasks::TaskState;
-use crate::types::{CORE_STORE_SCHEMA_VERSION, SESSION_SCHEMA_VERSION};
+use crate::types::{
+    CORE_STORE_SCHEMA_VERSION, REFLECTION_STATE_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
+};
 use crate::vector::{
     VectorAppendRecord, VectorIndexData, VectorIndexManifest, VectorTombstone,
     VECTOR_INDEX_SCHEMA_VERSION,
@@ -61,6 +64,7 @@ impl FileStorage {
         fs::create_dir_all(self.root.join("tasks"))?;
         fs::create_dir_all(self.root.join("tasks").join("completed"))?;
         fs::create_dir_all(self.root.join("runs").join("sleep"))?;
+        fs::create_dir_all(self.root.join("runs").join("reflection"))?;
         fs::create_dir_all(self.root.join("journal"))?;
         Ok(())
     }
@@ -161,6 +165,13 @@ impl FileStorage {
             .join("runs")
             .join("sleep")
             .join(format!("{sleep_task_id}.json"))
+    }
+
+    fn reflection_state_path(&self, scope: &str) -> PathBuf {
+        self.root
+            .join("runs")
+            .join("reflection")
+            .join(format!("{scope}.json"))
     }
 
     fn journal_path(&self, op_id: &str) -> PathBuf {
@@ -508,6 +519,18 @@ impl Storage for FileStorage {
         read_json(&path)
     }
 
+    fn read_candidate_belief_optional(
+        &self,
+        candidate_id: &str,
+    ) -> Result<Option<CandidateBelief>> {
+        self.ensure_layout()?;
+        let path = self.candidate_path(candidate_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(read_json(&path)?))
+    }
+
     fn read_candidate_beliefs(&self) -> Result<StorageCollection<CandidateBelief>> {
         self.ensure_layout()?;
         let mut files = Vec::new();
@@ -627,6 +650,41 @@ impl Storage for FileStorage {
             items: runs,
             warnings,
         })
+    }
+
+    fn read_reflection_state(&self, scope: &str) -> Result<Option<ReflectionState>> {
+        validate_reflection_scope_component(scope)?;
+        self.ensure_layout()?;
+        let path = self.reflection_state_path(scope);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let state: ReflectionState = read_json(&path)?;
+        if state.schema_version != REFLECTION_STATE_SCHEMA_VERSION {
+            return Err(MemoryEngineError::IncompatibleSchema {
+                expected: REFLECTION_STATE_SCHEMA_VERSION.to_string(),
+                actual: state.schema_version,
+            });
+        }
+        if state.reflection_scope != scope {
+            return Err(MemoryEngineError::Validation(format!(
+                "reflection state scope mismatch: requested {scope}, stored {}",
+                state.reflection_scope
+            )));
+        }
+        Ok(Some(state))
+    }
+
+    fn write_reflection_state(&self, state: &ReflectionState) -> Result<()> {
+        validate_reflection_scope_component(&state.reflection_scope)?;
+        if state.schema_version != REFLECTION_STATE_SCHEMA_VERSION {
+            return Err(MemoryEngineError::IncompatibleSchema {
+                expected: REFLECTION_STATE_SCHEMA_VERSION.to_string(),
+                actual: state.schema_version.clone(),
+            });
+        }
+        self.ensure_layout()?;
+        atomic_write_json(&self.reflection_state_path(&state.reflection_scope), state)
     }
 
     fn read_vector_index(&self, scope: &str) -> Result<Option<VectorIndexData>> {
@@ -791,6 +849,43 @@ impl Storage for FileStorage {
         let mut operation: JournalOperation = read_json(&path)?;
         operation.state = JournalState::Completed;
         atomic_write_json(&path, &operation)
+    }
+
+    fn load_journaled_operation(&self, op_id: &str) -> Result<Option<JournalOperation>> {
+        self.ensure_layout()?;
+        let path = self.journal_path(op_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(read_json(&path)?))
+    }
+
+    fn load_journaled_operations(&self) -> Result<StorageCollection<JournalOperation>> {
+        self.ensure_layout()?;
+        let mut files = Vec::new();
+        collect_json_files_shallow(&self.root.join("journal"), &mut files)?;
+
+        let mut operations = Vec::new();
+        let mut warnings = Vec::new();
+        for path in files {
+            if let Some(operation) = read_json_from_collection::<JournalOperation>(
+                self,
+                &path,
+                "journal operation",
+                &mut warnings,
+            )? {
+                operations.push(operation);
+            }
+        }
+        operations.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.op_id.cmp(&right.op_id))
+        });
+        Ok(StorageCollection {
+            items: operations,
+            warnings,
+        })
     }
 }
 
@@ -1055,6 +1150,21 @@ fn validate_scope_component(scope: &str) -> Result<()> {
     {
         return Err(MemoryEngineError::Validation(format!(
             "invalid vector scope path component: {scope}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_reflection_scope_component(scope: &str) -> Result<()> {
+    if scope.trim().is_empty()
+        || scope.contains('/')
+        || scope.contains('\\')
+        || scope == "."
+        || scope == ".."
+        || scope.contains("..")
+    {
+        return Err(MemoryEngineError::Validation(format!(
+            "invalid reflection scope path component: {scope}"
         )));
     }
     Ok(())

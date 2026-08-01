@@ -30,6 +30,7 @@ impl<S: Storage> MemoryEngine<S> {
                 inputs: serde_json::to_value(&inputs)?,
                 attempts: Vec::new(),
                 last_error: None,
+                outcome: None,
             };
             self.storage.save_task(&task)?;
             let request = llm_request_from_task(

@@ -15,6 +15,8 @@
 - після успішного sleep переносить достатньо впевнені `personal_signals` з archive у Core без regex-хардкоду;
 - додає мʼякі event-теги для можливих профільних фактів, щоб майбутній reflection міг їх переглянути;
 - виконує `compact_memory_pass` і `sleep_compression` pending tasks через Gemini; default flow є multi-pass: compact memory pass, emotional pass, topic thread pass, personal signal pass, relational pass і consolidator;
+- може після sleep/fidelity виконати core-owned autonomous reflection, якщо
+  власник явно увімкнув `MEMORY_BOT_AUTO_REFLECTION=1`;
 - повертає plain-text compact memory у `resume_compact_memory_pass` і один `sleep_compression_result.v1` у `resume_sleep_compression`.
 
 ## Запуск
@@ -112,6 +114,22 @@ Core-факти ізольовані по Telegram chat id. Якщо bot-у пи
 Після успішного sleep host бере `personal_signals`, які виділив LLM-прохід, і переносить у Core тільки сигнали з confidence `>= 0.85`, підтримкою хоча б одного `user_message` source event і без near-duplicate у поточному Core scope. Категорія є вільним normalized `snake_case` полем (`name`, `pet`, `physical_trait`, `food_preference`, тощо), а не whitelist. Це не regex-витяг фактів із raw text: код не шукає "кішку", "імʼя" чи інші конкретні сутності. Він лише застосовує загальні gate-правила до структурованого результату sleep. `/core_seed` повторює цей крок для вже завершених archive-записів.
 
 Для debug можна повернути старий single-pass sleep через env `MEMORY_BOT_SLEEP_MODE=single`. `compact_memory_pass` все одно виконується окремо, бо саме він створює prompt-facing стиснуту памʼять. За замовчуванням використовується multi-pass sleep.
+
+Autonomous reflection вимкнений за замовчуванням, бо може спричинити додатковий
+reasoning-model call. При `MEMORY_BOT_AUTO_REFLECTION=1` host після завершення
+sleep і auto-fidelity викликає `begin_reflection_if_due(..., "after_sleep")`.
+Пороги, eligibility, bounded input і deduplication належать Rust core; bot лише
+виконує повернений `PendingTask`. У постійний sleep log пишуться reason, counts і
+candidate count без текстів памʼяті. Phase B telemetry також показує кількість
+привʼязаних sessions, нових units, related-history units і вже наявних
+candidates. У Telegram `core_scope` стабільно дорівнює поточному chat scope;
+схожість текстів не звʼязує різні чати.
+
+Reflection prompt v3 повертає typed outcomes. Bot не вирішує сам, чи створити
+новий candidate, підсилити наявний або відкрити Core challenge: він виконує
+`PendingTask` і передає відповідь назад у ядро. Text-free telemetry окремо
+показує кількість нових і reinforced candidates та machine-readable
+`no_insight` reason.
 
 Активний system prompt для Telegram-чату лежить у:
 

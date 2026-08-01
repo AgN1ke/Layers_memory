@@ -307,11 +307,29 @@ pub enum CandidateStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CandidateReinforcement {
+    pub reinforcement_id: Id,
+    pub created_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_session_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_memory_unit_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supporting_archive_ids: Vec<Id>,
+    pub evidence_summary: String,
+    pub confidence: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidateBelief {
     pub schema_version: String,
     pub candidate_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_session_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_scope: Option<String>,
     pub created_at: Timestamp,
@@ -338,6 +356,10 @@ pub struct CandidateBelief {
     pub review: Option<ReviewRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+    /// Evidence-bearing updates from later reflection passes. Reinforcement
+    /// matures one candidate instead of minting semantic duplicates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reinforcements: Vec<CandidateReinforcement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

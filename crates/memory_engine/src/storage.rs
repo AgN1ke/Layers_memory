@@ -4,6 +4,7 @@ use crate::event::StoredEvent;
 use crate::journal::JournalOperation;
 use crate::llm::SleepRun;
 use crate::manifest::Manifest;
+use crate::reflection::ReflectionState;
 use crate::session::{SessionMetadata, SessionRecord};
 use crate::tasks::PendingTask;
 use crate::vector::{VectorAppendRecord, VectorIndexData, VectorIndexManifest, VectorTombstone};
@@ -76,6 +77,8 @@ pub trait Storage {
     fn write_core_store_category(&self, category: &CoreStoreCategory) -> Result<()>;
     fn write_candidate_belief(&self, candidate: &CandidateBelief) -> Result<()>;
     fn read_candidate_belief(&self, candidate_id: &str) -> Result<CandidateBelief>;
+    fn read_candidate_belief_optional(&self, candidate_id: &str)
+        -> Result<Option<CandidateBelief>>;
     fn read_candidate_beliefs(&self) -> Result<StorageCollection<CandidateBelief>>;
 
     fn save_task(&self, task: &PendingTask) -> Result<()>;
@@ -85,6 +88,9 @@ pub trait Storage {
     fn save_sleep_run(&self, run: &SleepRun) -> Result<()>;
     fn load_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun>;
     fn load_sleep_runs(&self) -> Result<StorageCollection<SleepRun>>;
+
+    fn read_reflection_state(&self, scope: &str) -> Result<Option<ReflectionState>>;
+    fn write_reflection_state(&self, state: &ReflectionState) -> Result<()>;
 
     fn read_vector_index(&self, scope: &str) -> Result<Option<VectorIndexData>>;
     fn write_vector_index(&self, scope: &str, index: &VectorIndexData) -> Result<()>;
@@ -100,4 +106,6 @@ pub trait Storage {
 
     fn begin_journaled_operation(&self, operation: &JournalOperation) -> Result<()>;
     fn complete_journaled_operation(&self, op_id: &str) -> Result<()>;
+    fn load_journaled_operation(&self, op_id: &str) -> Result<Option<JournalOperation>>;
+    fn load_journaled_operations(&self) -> Result<StorageCollection<JournalOperation>>;
 }

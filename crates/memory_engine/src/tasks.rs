@@ -55,6 +55,11 @@ pub struct PendingTask {
     pub attempts: Vec<TaskAttempt>,
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Durable, machine-readable terminal result owned by the core.
+    /// Prompt inputs remain frozen; operation outcomes live here instead of
+    /// being injected back into the reasoning payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

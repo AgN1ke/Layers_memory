@@ -34,6 +34,14 @@ crate/host README files stay outside the wiki.
 - [Roadmap](pages/planning/roadmap.md) - current implementation state, completed
   unit-focused vector Stage 2, explicit v0.4 release closure, open work,
   deferred items, and phase ordering.
+- [Autonomous Reflection v0.5](pages/planning/autonomous-reflection-v0.5.md) -
+  strategic design, trigger semantics, personality-scope evidence, bounded
+  related history, typed candidate reinforcement/Core challenge/no-insight,
+  integrity audit, journaled Phase C.1 closure, and acceptance boundary.
+- [Reflective Belief System](pages/planning/reflective-belief-system.md) -
+  strategic implementation plan from scope-safe durable reflection through a
+  hierarchical evidence graph, temporal contradiction, and opt-in native
+  clarification.
 - [Audit 2026-06-10](pages/planning/audit-2026-06-10.md) - post-v0.2 audit,
   cleanup queue, risks, and resolved findings.
 
@@ -67,8 +75,9 @@ crate/host README files stay outside the wiki.
 - [Agentic Architectures](pages/research/agentic-architectures.md) - agent
   framework landscape and what Memory Engine adopts or rejects.
 - [Generative Agents Memory Stream](pages/research/generative-agents-memory-stream-2026-07-06.md)
-  - external retrieval-scoring pattern review; findings feeding into vector
-    deep-recall calibration and a new reflection auto-trigger item.
+  - external retrieval/reflection review, expanded with Letta sleep-time,
+    LangGraph/Temporal durability, Mem0 comparison-before-write, and the
+    accepted hypothesis-graph conclusion.
 - [Contextual Memory Expansion](pages/research/contextual-memory-expansion-2026-07-05.md)
   - plan for topic-triggered expansion of detailed memory under budget.
 - [Memory Time Perception](pages/research/memory-time-perception-2026-07-02.md)

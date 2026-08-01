@@ -115,6 +115,14 @@ pub struct MemoryUnit {
     pub fidelity_review: Option<FidelityReview>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forget_review: Option<ForgetReviewRecord>,
+    #[serde(default)]
+    pub reflection_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reflected_at: Option<Timestamp>,
+    /// Idempotency marker for the latest reflection checkpoint operation.
+    /// Additive in memory_unit.v1 so older records remain readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reflection_operation_id: Option<Id>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

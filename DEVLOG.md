@@ -1,5 +1,233 @@
 # DEVLOG
 
+## Запис 152 — 2026-08-01 — Reflection переживає обрив посеред власного рішення
+
+**Проблематика:**
+Після Phase C інформаційний аудит показав, що правильний typed result ще не
+дорівнює надійному рішенню. Candidate/reinforcement, unit/archive checkpoint,
+reflection state, task completion, owner review і Core transition жили в
+окремих atomic files без однієї відновлюваної операції. Додатково absent
+`core_scope` читав named scopes як wildcard, review міг підмінити scope або
+повторно змінити terminal candidate, а довго виконуваний task міг застосувати
+вже застарілу версію evidence.
+
+**Стратегічне рішення Phase C.1:**
+LLM-рішення не застосовується «ланцюжком записів». Ядро спочатку перевіряє
+живі версії всіх cited records і фіксує frozen intent у journal. Після цього
+кожний side effect лише приводить storage до вже визначеного стану. Restart
+продовжує цю ж операцію без нового provider call; operation/action IDs та
+per-unit marker роблять повтор безпечним. Owner review використовує той самий
+принцип, а не окрему слабшу дорогу до Core.
+
+**Що реалізовано:**
+- `reflection_apply` і `candidate_review` стали активними
+  `JournalOperationType`; їхні intents мають версію
+  `reflection_operation.v1`, deterministic IDs, frozen effects і progress;
+- `ReflectionCandidatesResult` повертає operation ID та SHA-256 result digest;
+  completed task зберігає text-free `reflection_outcome.v1`;
+- `MemoryUnit.last_reflection_operation_id` не дозволяє повторному replay
+  вдруге збільшити `reflection_count`;
+- recovery повторно звіряє фактичний стан із desired effects, а не довіряє
+  progress flag; unrecoverable validation conflict переходить у
+  `needs_manual_review` з видимою помилкою;
+- перший звичайний API-виклик нового engine instance один раз відновлює
+  started memory operations до читання/зміни memory; Python і Godot мають
+  також explicit `recover_pending_memory_operations()`;
+- task snapshots отримали `updated_at` ревізії MemoryUnit, candidate і Core
+  fact; нові apply відхиляють змінений evidence, старі saved tasks без цих
+  additive полів лишаються читабельними;
+- absent scope бачить тільки unscoped Core; review не змінює candidate scope і
+  приймає лише draft/ready states;
+- review approval повторно перевіряє valid active units, Complete archives та
+  active contradicted Core facts у тому самому scope.
+
+**Перевірки:**
+- reflection integration suite: 18/18;
+- fault-boundary replay від frozen intent: до candidate, після candidate,
+  після checkpoint, після task completion;
+- reinforcement replay зберігає один reinforcement і один unit checkpoint;
+- candidate review відновлюється після Core write і відхиляє terminal replay;
+- stale-evidence та unscoped/named-scope negative controls — PASS;
+- unreadable journal зупиняє recovery замість тихого skip — PASS;
+- conflicting candidate не перезаписується replay-єм, operation переходить у
+  `needs_manual_review` — PASS;
+- contract serialization: 14/14;
+- `cargo test --workspace` — PASS;
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS;
+- `cargo fmt --check`, `git diff --check` і wiki link checker — PASS.
+
+**Чесна межа:**
+Phase C.1 закриває deterministic integrity blocker, а не доводить якість
+гіпотез на живих розмовах. v0.5 все ще потребує кількох реальних
+sleep/reflection cycles у Chibigochi, після чого — release manifests/tag за
+SemVer. Hypothesis graph не підмішаний у цей closure і лишається v0.6.
+
+## Запис 151 — 2026-08-01 — Рефлексія памʼятає власні гіпотези
+
+**Проблематика:**
+Phase B навчила reflection бачити повторення між сесіями та показувала їй
+наявні candidates, але результат усе ще був лише списком нових текстів. Коли
+пізніший досвід підтверджував уже сформовану гіпотезу, система могла тільки
+промовчати або створити дублікат. «Нічого стійкого» теж не мало власної
+машинної семантики, а суперечність із Core виглядала так само, як звичайний
+новий candidate.
+
+**Стратегічне рішення Phase C:**
+Reflection має не просто генерувати твердження, а вести reviewable життєвий
+цикл розуміння. Новий досвід або народжує гіпотезу, або дозріває наявну, або
+ставить під сумнів факт Core, або чесно не змінює довготривале уявлення. Влада
+над Core не передається агенту: challenge лишається candidate до owner review.
+
+**Що реалізовано:**
+- нові tasks запитують prompt v3 і `reflection_actions_result.v1`;
+- typed actions `new_candidate`, `reinforce_candidate`,
+  `challenge_core_fact` та structured `no_insight`;
+- typed apply повертає окремий `reflection_apply_result.v1`, не маскуючи
+  applied records під LLM input contract;
+- reinforcement приймає тільки нові task-visible units, зберігає окремий
+  `CandidateReinforcement`, обʼєднує unit/archive/session provenance і не
+  знижує confidence;
+- exact duplicate candidate/action, чужий candidate, reused-only evidence та
+  challenge без видимого Core fact відхиляються без checkpoint;
+- Core challenge отримує `core_challenge`, але старий факт лишається active до
+  звичайного `review_candidate(Approved)`;
+- `submit_reflection_response` маршрутизує обидві схеми, тому збережені
+  `reflection_result.v1` tasks і старі hosts не ламаються;
+- Python і Godot отримали прямий `resume_reflection_actions`, а звичайний host
+  може лишатися на універсальному submit.
+
+**Перевірки на цьому етапі:**
+- reflection integration suite: 14/14;
+- contract serialization: 13/13;
+- окремо доведені typed no-insight checkpoint, reinforcement без дубля,
+  fail-closed reused evidence, review-gated Core challenge і legacy response;
+- `cargo test --workspace` — PASS;
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS;
+- Python adapter на фінальному release `.pyd`: 16/16 — PASS;
+- host syntax, wiki links, release versions, formatting і `git diff --check` —
+  PASS;
+- фінальний `.pyd` SHA-256:
+  `92AE94D250EA416B692BA276DD98D3F72D4113E4FCFE79A5BAFF34D5D687F057`.
+
+**Чесна межа:**
+Детермінована Phase C і release build завершені, але живий Chibigochi
+acceptance ще не виконаний. До live PASS не калібруємо thresholds і не
+вмикаємо auto-confirm; останній прямо не входить у v0.5.
+
+## Запис 150 — 2026-08-01 — Reflection бачить досвід особистості, а не одну розмову
+
+**Проблематика:**
+Phase A зробила trigger і checkpoint per-scope, але eligibility та LLM evidence
+читали тільки `source_session_id` поточного виклику. Scope уже означав
+особистість, а матеріал для осмислення ще означав одну розмову. Це не дозволяло
+побачити повільний патерн, який проявився в різні дні.
+
+**Стратегічне рішення:**
+`core_scope` є єдиною явною межею особистості, яку бібліотека отримує від
+хоста. Reflection state зберігає лише сесії, які host явно предʼявив цьому
+scope через `begin_reflection_if_due` або manual reflection. Текстова схожість
+не може самостійно звʼязати дві сесії або двох людей.
+
+**Що реалізовано у Phase B:**
+- additive `ReflectionState.source_session_ids` і trigger status із повним
+  bounded/auditable membership;
+- `bind_reflection_session` для explicit lifecycle/backfill без task або LLM;
+- critical mass та interval eligibility рахуються по нових validated units
+  усіх привʼязаних сесій, але checkpoint споживає тільки trigger units;
+- task розрізняє `trigger`, `related_history` і manual evidence roles;
+- already-reflected history підбирається без vectors за exact structural
+  overlap: links > archive theme > topic/subtopic > unit/archive tags;
+- related history обмежена `max_related_units=20`, незакриті in-scope
+  candidates — `max_existing_candidates=20`; default related gate `2` не
+  дозволяє одному слабкому generic tag підмішати давній спогад;
+- task містить `new_memory_unit_ids`, `related_memory_unit_ids`, session та
+  archive provenance, relation score/reasons і existing draft/ready candidates;
+- candidate evidence на submit приймається тільки з units/archives/Core facts,
+  які реально були в task, а `CandidateBelief.source_session_ids` фіксує
+  cross-session provenance;
+- prompt `reflection_analyze` v2 не видає давню history за поточну подію і не
+  створює дубліката вже наявного кандидата.
+
+**Перевірки на цьому етапі:**
+- reflection integration suite: 9/9, включно з cross-session accumulation,
+  чужим scope negative control, bounded related history, weak-tag abstention та
+  existing candidate;
+- contract serialization: 12/12, legacy state/candidate без нових масивів
+  читаються;
+- `cargo test --workspace` — PASS;
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS;
+- Python adapter: 16/16 на фінальному release `.pyd` — PASS;
+- host syntax, wiki links, release versions і `git diff --check` — PASS;
+- фінальний `.pyd` SHA-256:
+  `56FCEDBA8B433BD0F54285AB0951EB04A4A1B2A4C7BBC1532211B27C42D2DE7E`.
+
+**Чесна межа Phase B:**
+Existing candidates уже входять у evidence і блокують дублікати, але
+`reflection_result.v1` ще не має typed action для reinforcement. Phase C має
+додавати нові докази до наявного кандидата, окремо представляти contradiction
+і no-insight та не покладати lifecycle-рішення на вільний текст моделі.
+
+## Запис 149 — 2026-08-01 — Памʼять отримала власний ритм осмислення
+
+**Проблематика:**
+Після живого підтвердження асоціативної памʼяті власник попросив повернутися до
+верхньорівневої мети: не латати recall, а зробити памʼять схожою на памʼять
+особистості. Зовнішній Generative Agents pattern підсвітив конкретний пропуск:
+reflection умів створювати кандидати, але запускався лише вручну й не був
+частиною природного циклу sleep -> experience -> understanding.
+
+**Фідбек власника:**
+Reflection має запускатися за критичною масою значущого досвіду та під час
+сну/за часом. Це не повинен бути окремий постійний агент, новий шар памʼяті або
+ще одна vector-система. Рішення має виростати з фундаментальних описів
+Session/Archive/Core, а не бути набором гарячих фіксів.
+
+**Стратегічне рішення:**
+Автономним стає момент запуску reflection, але не влада над Core. Rust core
+визначає eligibility, critical mass, часовий safety net, bounded input,
+deduplication і checkpoint. Host дає sleep/maintenance opportunity та виконує
+повернений reasoning `PendingTask`. LLM може повернути zero candidates; Core як
+і раніше змінюється тільки через review.
+
+**Що реалізовано у Phase A:**
+- `ReflectionConfig` з явними початковими defaults `2.5 / 0.95 / 7 days /
+  2 units / 40 units`;
+- `reflection_status` і `begin_reflection_if_due` зі структурованими причинами
+  `critical_memory`, `accumulated_salience`, `scheduled_interval`, abstention і
+  `already_pending`;
+- automatic eligibility тільки для нових `ActiveArchive` + fidelity-valid
+  `MemoryUnit`;
+- bounded input і archive summaries тільки parent archives автоматичних units;
+- `runs/reflection/<scope>.json` як durable orchestration state, не новий шар;
+- compatible `MemoryUnit.reflection_count` / `last_reflected_at`;
+- successful zero-candidate checkpoint, failure-safe retry semantics і
+  per-scope task lock/deduplication;
+- thin Python/Godot APIs та конфігуровані thresholds у Python constructor;
+- opt-in Telegram after-sleep executor через `MEMORY_BOT_AUTO_REFLECTION=1`, з
+  text-free reason/count telemetry.
+
+**Перевірки на цьому етапі:**
+- reflection integration suite: 6/6, включно з critical, accumulated,
+  scheduled, duplicate-task, restart/failure, zero-candidate checkpoint і
+  відмовою читати state з несумісною схемою або чужим scope;
+- `cargo test --workspace` — PASS;
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS;
+- Python adapter: 16/16 — PASS;
+- `python -m py_compile hosts/telegram_gemini_bot/bot.py` — PASS.
+- wiki links, release-version consistency і `git diff --check` — PASS.
+
+**Чесна межа Phase A:**
+Scope lock і checkpoint уже належать особистості, але evidence selection поки
+читає units конкретного `source_session_id`. Phase B має зробити bounded
+cross-session personality evidence, передавати existing candidates і
+розрізняти new belief / reinforcement / contradiction / no insight. Без цього
+повний v0.5 product claim робити не можна.
+
+**Наступні кроки:**
+Передати Phase A у Chibigochi на кілька реальних sleep cycles. Після живих
+даних калібрувати defaults і лише тоді реалізовувати Phase B, не змішуючи його
+з незакритим v0.4 recall release.
+
 ## Запис 148 — 2026-08-01 — Порожня асоціація краща за найближчий чужий спогад
 
 **Проблематика:**
@@ -6489,3 +6717,65 @@ commercial use і далі потребує окремої письмової у
 **Наступний крок:**
 Перезібрати бібліотеку в Chibigochi й виконати live topic-switch acceptance.
 До цього не створювати `v0.4.0` tag і не міняти semantic weights.
+
+## Запис 148 — 2026-08-01 — Reflection audit і план графа гіпотез
+
+**Чому повернулися до планування:**
+Після реалізації autonomous reflection Phase C власник попросив пройти повний
+шлях інформації, а не обмежуватися happy-path тестами. Аудит підтвердив, що
+typed actions працюють, provenance доходить до candidate/reinforcement, а
+Core не змінюється без review. Водночас release-гарантії в документах були
+сильніші за реалізацію.
+
+**Що знайшов аудит:**
+- якщо `core_scope` відсутній, reflection input включає scoped Core facts без
+  фільтра; окремий локальний сценарій із `scope_a` і `scope_b` відтворив витік;
+- typed apply послідовно пише candidate/reinforcement, unit/archive checkpoint,
+  reflection state і PendingTask без однієї recoverable operation;
+- owner review не фіксує terminal transitions, дозволяє caller-у запропонувати
+  інший scope і не є цілісним разом із contested/Core promotion;
+- existing candidates відбираються recency limit-ом, тому давня релевантна
+  гіпотеза може не потрапити в analysis;
+- no-insight/reinforcement outcome не повністю зберігається у durable core-owned
+  history та не повністю показується ручним host UX.
+
+**Стратегічна корекція власника:**
+Схожі твердження не завжди є дублями. Конкретний інтерес до Марса, ширший
+інтерес до колонізації планет і загальний інтерес до космосу можуть існувати як
+окремі гіпотези. Прямий evidence сильно підтримує вузький рівень і лише
+послаблено — ширші. Нові незалежні розмови дозрівають відповідні рівні, а
+заперечення користувача має звужувати, робити contested або time-bound, а не
+стирати історію.
+
+**Зовнішня перевірка здійсненності:**
+- Generative Agents підтверджує threshold-triggered reflection над memory
+  stream;
+- Letta sleep-time compute відділяє live conversation від асинхронного
+  memory work;
+- LangGraph і Temporal використовують persisted history/checkpoints,
+  deterministic replay та idempotent side effects;
+- Mem0 демонструє comparison-before-write над релевантною наявною памʼяттю.
+
+Висновок: агенту лишається semantic judgment, а scope, replay, confidence
+components, transitions і promotion gates належать Rust core. Повні зовнішні
+фреймворки вбудовувати не треба; наявного PendingTask, journal primitive,
+resource locks і atomic single-file storage достатньо для спеціалізованої
+реалізації.
+
+**Що зафіксовано:**
+- створено `wiki/pages/planning/reflective-belief-system.md` із цільовою
+  моделлю, responsibility boundary, наскрізним потоком, фазами v0.5–v0.7,
+  acceptance gates, ризиками й non-goals;
+- `autonomous-reflection-v0.5.md` отримав обовʼязкову Phase C.1; Phase C більше
+  не позначається release-ready;
+- strategy, architecture, contracts і roadmap синхронізовано з графом
+  гіпотез та чесною межею поточної реалізації;
+- research note доповнено Letta/LangGraph/Temporal/Mem0 і прийнятим рішенням;
+- README, wiki home/index/log і HISTORY оновлено.
+
+**Порядок наступної реалізації:**
+Спершу v0.5 integrity closure: scope, journaled apply/review, revalidation і
+fault injection. Потім v0.6 storage/migration графа, після нього hierarchical
+reflection та maturation. Contradiction/time revision і opt-in native
+clarification належать v0.7. Нові prompts/schemas не створюються раніше коду,
+який їх реально використовує.

@@ -153,6 +153,7 @@ pub(super) fn build_sleep_compression_task(
         }),
         attempts: Vec::new(),
         last_error: None,
+        outcome: None,
     })
 }
 
@@ -195,6 +196,7 @@ pub(super) fn build_compact_memory_task(
         }),
         attempts: Vec::new(),
         last_error: None,
+        outcome: None,
     })
 }
 
@@ -237,6 +239,7 @@ pub(super) fn build_memory_unit_task(
         }),
         attempts: Vec::new(),
         last_error: None,
+        outcome: None,
     })
 }
 
@@ -281,6 +284,7 @@ pub(super) fn build_memory_unit_repair_task(
         }),
         attempts: Vec::new(),
         last_error: None,
+        outcome: None,
     })
 }
 

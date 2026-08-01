@@ -1,20 +1,135 @@
 use memory_engine::archive::{
-    ArchiveEntry, ArchiveStatus, EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem,
+    ArchiveEntry, ArchiveStatus, EmotionalMarker, MemoryUnit, PersonalSignal, RelationalTone,
+    TopicThreadItem,
 };
-use memory_engine::core_store::CoreContextPackage;
+use memory_engine::core_store::{CandidateBelief, CoreContextPackage};
 use memory_engine::event::{IngestEvent, StoredEvent};
 use memory_engine::file_storage::FileStorage;
+use memory_engine::journal::{
+    JournalOperation, JournalOperationType, JournalState, RecoveryPolicy,
+};
 use memory_engine::recall::{RecallCandidateDebug, RecallItem};
+use memory_engine::reflection::{
+    ReflectionActionDraft, ReflectionActionsResult, ReflectionNoInsightReason, ReflectionOutcome,
+    ReflectionState,
+};
 use memory_engine::sleep::SleepCompressionResult;
 use memory_engine::storage::Storage;
 use memory_engine::tasks::{PendingTask, TaskState, TaskType};
 use memory_engine::types::{
     ModelRole, Quote, TimeRange, WeightedFact, ARCHIVE_ENTRY_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
-    PENDING_TASK_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    JOURNAL_OPERATION_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION,
+    REFLECTION_OUTCOME_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[test]
+fn memory_unit_reflection_markers_are_additive() {
+    let raw = json!({
+        "schema_version": "memory_unit.v1",
+        "memory_unit_id": "mu_legacy",
+        "archive_id": "archive_legacy",
+        "source_session_id": "session_legacy",
+        "created_at": "2026-07-01T10:00:00Z",
+        "updated_at": "2026-07-01T10:00:00Z",
+        "thesis": "Legacy unit without reflection metadata.",
+        "source_event_ids": [],
+        "tags": [],
+        "weight": 0.8,
+        "status": "active_archive",
+        "fidelity_status": "valid"
+    });
+
+    let unit: MemoryUnit = serde_json::from_value(raw).expect("read legacy memory unit");
+    assert_eq!(unit.reflection_count, 0);
+    assert!(unit.last_reflected_at.is_none());
+    assert!(unit.last_reflection_operation_id.is_none());
+}
+
+#[test]
+fn reflection_personality_scope_fields_are_additive() {
+    let legacy_state = json!({
+        "schema_version": "reflection_state.v1",
+        "reflection_scope": "owner_scope",
+        "source_session_id": "session_a",
+        "created_at": "2026-07-01T10:00:00Z",
+        "updated_at": "2026-07-01T10:00:00Z",
+        "last_candidate_count": 0
+    });
+    let state: ReflectionState =
+        serde_json::from_value(legacy_state).expect("deserialize legacy reflection state");
+    assert!(state.source_session_ids.is_empty());
+
+    let legacy_candidate = json!({
+        "schema_version": "candidate_belief.v1",
+        "candidate_id": "candidate_legacy",
+        "source_session_id": "session_a",
+        "core_scope": "owner_scope",
+        "created_at": "2026-07-01T10:00:00Z",
+        "updated_at": "2026-07-01T10:00:00Z",
+        "text": "The user has a stable interest in space.",
+        "category": "interests",
+        "status": "ready_for_review",
+        "confidence": 0.8,
+        "supporting_archive_ids": ["archive_a"],
+        "contradicting_archive_ids": [],
+        "contradicted_core_fact_ids": [],
+        "evidence_summary": "Repeated validated evidence.",
+        "promotion_checks": {
+            "min_sources_met": true,
+            "weight_threshold_met": true,
+            "no_recent_contradiction": true,
+            "manual_review_required": true
+        },
+        "source_memory_unit_ids": ["mu_a"],
+        "tags": ["space"],
+        "links": []
+    });
+    let candidate: CandidateBelief =
+        serde_json::from_value(legacy_candidate).expect("deserialize legacy candidate");
+    assert!(candidate.source_session_ids.is_empty());
+    assert!(candidate.reinforcements.is_empty());
+}
+
+#[test]
+fn reflection_actions_contract_is_typed_and_structured() {
+    let actions: ReflectionActionsResult = serde_json::from_value(json!({
+        "schema_version": "reflection_actions_result.v1",
+        "source_session_id": "session_a",
+        "core_scope": "owner_scope",
+        "actions": [{
+            "action": "reinforce_candidate",
+            "candidate_id": "candidate_a",
+            "confidence": 0.84,
+            "evidence_summary": "Later evidence repeats the pattern.",
+            "source_memory_unit_ids": ["mu_b"],
+            "supporting_archive_ids": ["archive_b"],
+            "tags": ["recurring"]
+        }]
+    }))
+    .expect("deserialize typed reflection action");
+    assert!(matches!(
+        actions.actions[0],
+        ReflectionActionDraft::ReinforceCandidate { .. }
+    ));
+
+    let no_insight: ReflectionActionsResult = serde_json::from_value(json!({
+        "schema_version": "reflection_actions_result.v1",
+        "source_session_id": "session_a",
+        "actions": [],
+        "no_insight": {
+            "reason": "temporary_state",
+            "explanation": "One event is not a stable pattern."
+        }
+    }))
+    .expect("deserialize structured no insight");
+    assert_eq!(
+        no_insight.no_insight.expect("no insight").reason,
+        ReflectionNoInsightReason::TemporaryState
+    );
+}
 
 #[test]
 fn core_context_package_adds_associative_memory_compatibly() {
@@ -263,6 +378,7 @@ fn pending_task_uses_model_role_not_provider() {
         inputs: json!({ "session_id": "2026-05-17_005" }),
         attempts: vec![],
         last_error: None,
+        outcome: None,
     };
 
     let value = serde_json::to_value(task).unwrap();
@@ -270,6 +386,48 @@ fn pending_task_uses_model_role_not_provider() {
     assert_eq!(value["role_hint"], "balanced");
     assert!(value.get("provider").is_none());
     assert!(value.get("model").is_none());
+    assert!(value.get("outcome").is_none());
+}
+
+#[test]
+fn reflection_outcome_and_journal_operation_types_are_additive() {
+    let outcome = ReflectionOutcome {
+        schema_version: REFLECTION_OUTCOME_SCHEMA_VERSION.to_string(),
+        operation_id: "reflection_apply_task_01".to_string(),
+        result_digest: "a".repeat(64),
+        completed_at: "2026-08-01T12:00:00.000Z".to_string(),
+        new_candidate_ids: vec!["candidate_01".to_string()],
+        reinforced_candidate_ids: Vec::new(),
+        no_insight_reason: None,
+    };
+    let outcome_value = serde_json::to_value(&outcome).expect("serialize reflection outcome");
+    assert_eq!(outcome_value["schema_version"], "reflection_outcome.v1");
+    assert!(outcome_value.get("text").is_none());
+    assert!(outcome_value.get("explanation").is_none());
+
+    for op_type in [
+        JournalOperationType::ReflectionApply,
+        JournalOperationType::CandidateReview,
+    ] {
+        let operation = JournalOperation {
+            schema_version: JOURNAL_OPERATION_SCHEMA_VERSION.to_string(),
+            op_id: "operation_01".to_string(),
+            op_type,
+            state: JournalState::Started,
+            created_at: "2026-08-01T12:00:00.000Z".to_string(),
+            updated_at: "2026-08-01T12:00:00.000Z".to_string(),
+            target_files: Vec::new(),
+            intent: json!({"schema_version": "reflection_operation.v1"}),
+            recovery_policy: RecoveryPolicy::RetryOrManualReview,
+            completed_at: None,
+            error: None,
+        };
+        let round_trip: JournalOperation = serde_json::from_value(
+            serde_json::to_value(operation).expect("serialize reflection journal"),
+        )
+        .expect("deserialize reflection journal");
+        assert_eq!(round_trip.op_type, op_type);
+    }
 }
 
 #[test]

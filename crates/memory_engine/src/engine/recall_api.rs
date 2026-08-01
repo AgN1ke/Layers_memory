@@ -522,6 +522,7 @@ pub(super) fn default_manifest(now: &str) -> Manifest {
             core_fact: CORE_FACT_SCHEMA_VERSION.to_string(),
             candidate_belief: CANDIDATE_BELIEF_SCHEMA_VERSION.to_string(),
             pending_task: PENDING_TASK_SCHEMA_VERSION.to_string(),
+            reflection_state: REFLECTION_STATE_SCHEMA_VERSION.to_string(),
             journal_operation: JOURNAL_OPERATION_SCHEMA_VERSION.to_string(),
         },
         active_embedding_model_id: None,

@@ -29,7 +29,9 @@ use ::memory_engine::event::IngestEvent;
 use ::memory_engine::forgetting::ForgetReviewResult;
 use ::memory_engine::llm::{LlmResponse, SleepRun};
 use ::memory_engine::recall::RecallQuery;
-use ::memory_engine::reflection::ReflectionAnalyzeResult;
+use ::memory_engine::reflection::{
+    ReflectionActionsResult, ReflectionAnalyzeResult, ReflectionOpportunity,
+};
 use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::storage::Storage;
 use ::memory_engine::vector::{
@@ -50,14 +52,34 @@ impl PyMemoryEngine {
         host_id="unknown",
         stage2_candidate_limit=40,
         stage2_vector_weight=0.5,
-        associative_memory_min_similarity=None
+        associative_memory_min_similarity=None,
+        reflection_salience_threshold=2.5,
+        reflection_critical_unit_weight=0.95,
+        reflection_max_interval_days=7.0,
+        reflection_scheduled_min_units=2,
+        reflection_max_trigger_units=40,
+        reflection_max_related_units=20,
+        reflection_min_related_score=2,
+        reflection_max_existing_candidates=20
     ))]
+    // PyO3 exposes these as optional keyword configuration on one stable
+    // constructor; grouping them into a Rust-only options object would make
+    // the Python boundary less explicit and break the additive API shape.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         memory_dir: &str,
         host_id: &str,
         stage2_candidate_limit: usize,
         stage2_vector_weight: f32,
         associative_memory_min_similarity: Option<f32>,
+        reflection_salience_threshold: f64,
+        reflection_critical_unit_weight: f64,
+        reflection_max_interval_days: f64,
+        reflection_scheduled_min_units: usize,
+        reflection_max_trigger_units: usize,
+        reflection_max_related_units: usize,
+        reflection_min_related_score: usize,
+        reflection_max_existing_candidates: usize,
     ) -> PyResult<Self> {
         if stage2_candidate_limit == 0 {
             return Err(PyValueError::new_err(
@@ -79,6 +101,33 @@ impl PyMemoryEngine {
                 "associative_memory_min_similarity must be finite, greater than 0.0, and at most 1.0",
             ));
         }
+        if !reflection_salience_threshold.is_finite() || reflection_salience_threshold <= 0.0 {
+            return Err(PyValueError::new_err(
+                "reflection_salience_threshold must be finite and greater than zero",
+            ));
+        }
+        if !reflection_critical_unit_weight.is_finite()
+            || !(0.0..=1.0).contains(&reflection_critical_unit_weight)
+        {
+            return Err(PyValueError::new_err(
+                "reflection_critical_unit_weight must be finite and between 0.0 and 1.0",
+            ));
+        }
+        if !reflection_max_interval_days.is_finite() || reflection_max_interval_days <= 0.0 {
+            return Err(PyValueError::new_err(
+                "reflection_max_interval_days must be finite and greater than zero",
+            ));
+        }
+        if reflection_scheduled_min_units == 0
+            || reflection_max_trigger_units == 0
+            || reflection_max_related_units == 0
+            || reflection_min_related_score == 0
+            || reflection_max_existing_candidates == 0
+        {
+            return Err(PyValueError::new_err(
+                "reflection unit limits must be greater than zero",
+            ));
+        }
         let path = PathBuf::from(memory_dir);
         let storage = FileStorage::with_host_id(&path, host_id);
         storage.ensure_layout().map_err(map_err)?;
@@ -86,6 +135,14 @@ impl PyMemoryEngine {
         options.vectors.stage2_candidate_limit = stage2_candidate_limit;
         options.vectors.stage2_vector_weight = stage2_vector_weight;
         options.vectors.contextual_expansion_min_sim = associative_memory_min_similarity;
+        options.reflection.salience_threshold = reflection_salience_threshold;
+        options.reflection.critical_unit_weight = reflection_critical_unit_weight;
+        options.reflection.max_interval_days = reflection_max_interval_days;
+        options.reflection.scheduled_min_units = reflection_scheduled_min_units;
+        options.reflection.max_trigger_units = reflection_max_trigger_units;
+        options.reflection.max_related_units = reflection_max_related_units;
+        options.reflection.min_related_score = reflection_min_related_score;
+        options.reflection.max_existing_candidates = reflection_max_existing_candidates;
         Ok(Self {
             inner: CoreEngine::with_options(storage, options),
         })
@@ -236,6 +293,51 @@ impl PyMemoryEngine {
         dump_json(&start, "reflection pass")
     }
 
+    #[pyo3(signature = (session_id, core_scope=None))]
+    fn bind_reflection_session(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        core_scope: Option<String>,
+    ) -> PyResult<String> {
+        let state = run_without_gil(py, || {
+            self.inner.bind_reflection_session(session_id, core_scope)
+        })?;
+        dump_json(&state, "reflection state")
+    }
+
+    #[pyo3(signature = (session_id, core_scope=None, opportunity="after_sleep"))]
+    fn reflection_status(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        core_scope: Option<String>,
+        opportunity: &str,
+    ) -> PyResult<String> {
+        let opportunity = parse_reflection_opportunity(opportunity)?;
+        let status = run_without_gil(py, || {
+            self.inner
+                .reflection_status(session_id, core_scope, opportunity)
+        })?;
+        dump_json(&status, "reflection trigger status")
+    }
+
+    #[pyo3(signature = (session_id, core_scope=None, opportunity="after_sleep"))]
+    fn begin_reflection_if_due(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        core_scope: Option<String>,
+        opportunity: &str,
+    ) -> PyResult<String> {
+        let opportunity = parse_reflection_opportunity(opportunity)?;
+        let start = run_without_gil(py, || {
+            self.inner
+                .begin_reflection_if_due(session_id, core_scope, opportunity)
+        })?;
+        dump_json(&start, "automatic reflection start")
+    }
+
     fn submit_reflection_response(
         &self,
         py: Python<'_>,
@@ -262,6 +364,18 @@ impl PyMemoryEngine {
         dump_json(&candidates, "reflection candidates")
     }
 
+    fn resume_reflection_actions(
+        &self,
+        py: Python<'_>,
+        task_id: &str,
+        result_json: &str,
+    ) -> PyResult<String> {
+        let result: ReflectionActionsResult = parse_json(result_json, "reflection actions result")?;
+        let candidates =
+            run_without_gil(py, || self.inner.resume_reflection_actions(task_id, result))?;
+        dump_json(&candidates, "reflection action results")
+    }
+
     fn list_candidates(&self, py: Python<'_>) -> PyResult<String> {
         let candidates = run_without_gil(py, || self.inner.list_candidates())?;
         dump_json(&candidates, "candidate beliefs")
@@ -271,6 +385,10 @@ impl PyMemoryEngine {
         let input: CandidateReviewInput = parse_json(review_json, "candidate review input")?;
         let result = run_without_gil(py, || self.inner.review_candidate(input))?;
         dump_json(&result, "candidate review result")
+    }
+
+    fn recover_pending_memory_operations(&self, py: Python<'_>) -> PyResult<usize> {
+        run_without_gil(py, || self.inner.recover_pending_memory_operations())
     }
 
     fn resume_memory_fidelity_pass(
@@ -439,6 +557,16 @@ fn parse_json<T: DeserializeOwned>(raw: &str, what: &str) -> PyResult<T> {
 fn dump_json<T: Serialize>(value: &T, what: &str) -> PyResult<String> {
     serde_json::to_string(value)
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to serialize {what}: {err}")))
+}
+
+fn parse_reflection_opportunity(raw: &str) -> PyResult<ReflectionOpportunity> {
+    match raw.trim() {
+        "after_sleep" => Ok(ReflectionOpportunity::AfterSleep),
+        "scheduled_maintenance" => Ok(ReflectionOpportunity::ScheduledMaintenance),
+        other => Err(PyValueError::new_err(format!(
+            "invalid reflection opportunity: {other}"
+        ))),
+    }
 }
 
 fn map_err(err: MemoryEngineError) -> PyErr {

@@ -25,6 +25,14 @@ def test_constructor_accepts_vector_tuning(tmp_path: Path):
         stage2_candidate_limit=7,
         stage2_vector_weight=0.25,
         associative_memory_min_similarity=0.52,
+        reflection_salience_threshold=3.0,
+        reflection_critical_unit_weight=0.98,
+        reflection_max_interval_days=14.0,
+        reflection_scheduled_min_units=3,
+        reflection_max_trigger_units=20,
+        reflection_max_related_units=10,
+        reflection_min_related_score=3,
+        reflection_max_existing_candidates=5,
     )
     state = json.loads(configured.vector_state("scope"))
     assert state["status"] == "disabled"
@@ -46,6 +54,76 @@ def test_constructor_rejects_invalid_stage2_tuning(tmp_path: Path):
             str(tmp_path / "bad_associative_threshold"),
             associative_memory_min_similarity=0.0,
         )
+    with pytest.raises(ValueError, match="reflection_salience_threshold"):
+        memory_engine.MemoryEngine(
+            str(tmp_path / "bad_reflection_salience"),
+            reflection_salience_threshold=0.0,
+        )
+    with pytest.raises(ValueError, match="reflection_critical_unit_weight"):
+        memory_engine.MemoryEngine(
+            str(tmp_path / "bad_reflection_critical"),
+            reflection_critical_unit_weight=1.5,
+        )
+    with pytest.raises(ValueError, match="reflection unit limits"):
+        memory_engine.MemoryEngine(
+            str(tmp_path / "bad_reflection_related_limit"),
+            reflection_max_related_units=0,
+        )
+
+
+def test_autonomous_reflection_abstains_without_validated_memory(
+    engine: memory_engine.MemoryEngine,
+):
+    state = json.loads(
+        engine.bind_reflection_session("empty_session", "owner_scope")
+    )
+    assert state["reflection_scope"] == "owner_scope"
+    assert state["source_session_ids"] == ["empty_session"]
+
+    status = json.loads(
+        engine.reflection_status("empty_session", "owner_scope", "after_sleep")
+    )
+    assert status["due"] is False
+    assert status["reason"] == "no_eligible_memory"
+
+    automatic = json.loads(
+        engine.begin_reflection_if_due(
+            "empty_session",
+            "owner_scope",
+            "scheduled_maintenance",
+        )
+    )
+    assert automatic["status"]["reason"] == "no_eligible_memory"
+    assert "reflection" not in automatic
+
+    manual = json.loads(
+        engine.begin_reflection_analysis("empty_session", "owner_scope")
+    )
+    assert (
+        manual["pending_task"]["expected_output_schema"]
+        == "reflection_actions_result.v1"
+    )
+    applied = json.loads(
+        engine.resume_reflection_actions(
+            manual["pending_task"]["task_id"],
+            json.dumps(
+                {
+                    "schema_version": "reflection_actions_result.v1",
+                    "source_session_id": "empty_session",
+                    "core_scope": "owner_scope",
+                    "actions": [],
+                    "no_insight": {
+                        "reason": "no_stable_pattern",
+                        "explanation": "There is no validated evidence to interpret.",
+                    },
+                }
+            ),
+        )
+    )
+    assert applied["no_insight"]["reason"] == "no_stable_pattern"
+    assert applied["operation_id"].startswith("reflection_apply_")
+    assert len(applied["result_digest"]) == 64
+    assert engine.recover_pending_memory_operations() == 0
 
 
 def _ingest(engine: memory_engine.MemoryEngine, session_id: str, text: str, **overrides) -> dict:

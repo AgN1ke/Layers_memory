@@ -517,6 +517,7 @@ impl<S: Storage> MemoryEngine<S> {
                 inputs: serde_json::to_value(&inputs)?,
                 attempts: Vec::new(),
                 last_error: None,
+                outcome: None,
             };
             self.storage.save_task(&task)?;
             requests.push(llm_request_from_task(

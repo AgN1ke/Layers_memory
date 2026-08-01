@@ -46,6 +46,248 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — v0.5 reflection integrity gate is implemented
+
+Context. The Phase C information-flow audit found three release-integrity
+defects: reflection/review could stop between separately atomic files without
+a replay plan, absent scope could expose named-scope Core facts, and review or
+delayed apply could act on a mutable scope or stale evidence.
+
+**What changed:**
+- `journal_operation.v1` additively accepts `reflection_apply` and
+  `candidate_review`. Both store versioned frozen intent and idempotent desired
+  effects; started operations are recoverable without another LLM call.
+- Reflection application revalidates cited unit/archive/candidate/Core records
+  before the first write. New task snapshots carry additive record revisions;
+  saved tasks without them remain compatible.
+- `MemoryUnit.last_reflection_operation_id`, optional
+  `ReflectionCandidatesResult.operation_id/result_digest`, and optional
+  `PendingTask.outcome=reflection_outcome.v1` make checkpoint and terminal
+  outcome replayable without persisting memory text in the task outcome.
+- Missing `core_scope` now means only the unscoped namespace. Candidate review
+  cannot replace scope, cannot revisit a terminal candidate, and validates
+  evidence again before approval.
+- Rust, Python and Godot expose explicit recovery; `pending_tasks()` performs
+  it before returning provider work.
+
+**What is retracted:**
+- The immediately preceding statement that Phase C.1 is still an unimplemented
+  release blocker is now historical. Its deterministic integrity gate is
+  closed; live product acceptance is not.
+
+**What is still true:**
+- Core changes only through explicit review; autonomous reflection still
+  cannot promote itself.
+- Session, Archive and Core remain the only memory layers. Journal and task
+  outcomes are processing/audit state, and vectors remain optional derived
+  data.
+- Flat candidate retrieval still cannot guarantee semantic continuity at
+  scale; hierarchical hypotheses remain the next minor-line design.
+
+**What we are doing:**
+- Run multi-cycle live Chibigochi acceptance without tuning defaults mid-test.
+- Only after live PASS synchronize manifests for `v0.5.0` under the documented
+  SemVer policy.
+- Start the v0.6 hypothesis graph as a separate schema/migration phase.
+
+**Reproducibility anchor:** `crates/memory_engine/tests/engine_reflection.rs`
+contains restart-boundary, reinforcement replay, review recovery, stale
+evidence and scope-isolation fixtures; `cargo test -p memory_engine` passes on
+the working tree dated 2026-08-01. Live acceptance is explicitly not claimed.
+
+## 2026-08-01 — v0.5 reflection acceptance is reopened before hypothesis-graph work
+
+Context. A full information-flow audit after Phase C found that the functional
+typed-action path is not yet a complete integrity guarantee. Candidate and
+reinforcement writes, unit/archive checkpoints, reflection state, task
+completion, owner review and Core transitions span separate files without a
+reflection-specific recovery operation. The same audit reproduced a Core-fact
+scope leak when reflection is started without `core_scope`, and found that
+review can accept a caller-supplied scope or revisit a terminal candidate.
+
+The owner also corrected the flat-dedup direction: a narrow claim such as
+interest in colonizing Mars, a broader claim about other planets, and a still
+broader interest in space may all be valid hypotheses with different support.
+They must not be collapsed merely because their wording is related.
+
+**What is retracted:**
+- The unqualified claim that deterministic happy-path tests make Phase C ready
+  for live acceptance. Phase C remains functionally implemented, but v0.5
+  acceptance now requires the Phase C.1 integrity/recovery gate.
+- The claim that repeated evidence is already guaranteed to strengthen one
+  traceable hypothesis. The current bounded recent-candidate context guarantees
+  this only when the intended candidate is visible and selected.
+- The implication that a scope lock and final checkpoint alone protect every
+  mid-apply restart boundary.
+
+**What is still true:**
+- Typed new-candidate, reinforcement, Core-challenge and no-insight actions are
+  implemented and validated against task-visible IDs.
+- Reflection cannot write Core without explicit review.
+- Personality membership is explicit; text similarity is not allowed to link
+  identities.
+- Non-vector reflection remains complete, and optional vectors remain a local
+  derived sidecar rather than memory truth.
+
+**What we are doing:**
+- Close v0.5 with immutable scope, terminal-state guards, pre-commit evidence
+  revalidation and journal-backed idempotent apply/review operations.
+- After that release boundary, migrate flat candidates into an auditable graph
+  of hypotheses, evidence links and generalization/contradiction relations.
+- Treat confidence as explainable support rather than a claimed probability of
+  truth; broad hypotheses require independent evidence branches.
+- Add contradiction/time revision before any opt-in native clarification path.
+
+**Documentation authority:**
+- `wiki/pages/planning/autonomous-reflection-v0.5.md` for the reopened v0.5
+  integrity gate;
+- `wiki/pages/planning/reflective-belief-system.md` for the phased v0.5–v0.7
+  direction;
+- `wiki/pages/research/generative-agents-memory-stream-2026-07-06.md` for the
+  external durable/sleep-time memory comparison.
+
+No runtime behavior or persisted schema changed in this documentation
+decision.
+
+## 2026-08-01 — Reflection outcomes become typed and cumulative
+
+Context. Autonomous reflection could see existing candidates but could only
+return new candidate drafts. Repeated evidence therefore had no durable way to
+mature one hypothesis, and abstention or Core contradiction had no explicit
+result semantics.
+
+**What changed:**
+- New reflection tasks request prompt version 3 and
+  `reflection_actions_result.v1`, with typed new-candidate, reinforcement,
+  Core-challenge, and structured no-insight outcomes.
+- Applied typed actions return `reflection_apply_result.v1`; the LLM output
+  contract and the core application result are no longer conflated.
+- `CandidateBelief` additively stores reinforcement records and merged
+  cross-session evidence provenance. Reinforcement requires at least one task
+  unit not already attached to that candidate and never lowers confidence.
+- A Core challenge creates a reviewable tagged candidate. Core remains
+  unchanged until the existing explicit approval path contests the cited fact
+  and promotes the replacement.
+- Typed application fails closed for out-of-task IDs, reused-only evidence,
+  duplicate candidates/actions, malformed no-insight, and Core challenges
+  without a visible conflicting fact. Failed application does not advance the
+  reflection checkpoint.
+- Python and Godot expose `resume_reflection_actions`. The generic submit path
+  accepts both the new schema and legacy `reflection_result.v1`, so saved tasks
+  and older hosts remain resumable.
+
+**What is retracted:**
+- The preceding Phase B entry says candidate reinforcement is not implemented.
+  That statement is now historical; Phase C implements it.
+
+**What is still true:**
+- Reflection cannot write Core directly, vectors are not required, and
+  Session/Archive/Core remain the only persisted memory layers.
+- Deterministic implementation is not live product acceptance.
+
+**What we are doing:**
+- Run full workspace/adapters quality gates, then perform live Chibigochi
+  acceptance across repeated evidence, temporary state, and a real Core
+  contradiction before the v0.5 release decision.
+
+**Reproducibility anchor:** deterministic tests on the eventual implementation
+commit; live acceptance not yet claimed.
+
+## 2026-08-01 — Reflection evidence becomes personality-scoped
+
+Context. The first autonomous-reflection implementation stored its trigger
+state under `core_scope`, but counted and supplied memory only from the current
+source session. A stable pattern spread across several conversations therefore
+could not become one reflection event.
+
+**What changed:**
+- `reflection_state.v1` additively records every source session explicitly
+  bound to the reflection scope. Legacy state falls back to its singular
+  `source_session_id`.
+- `bind_reflection_session` lets a host register current or historical
+  sessions without evaluating a trigger or spending an LLM call;
+  `begin_reflection_if_due` binds idempotently as a safe default.
+- Trigger eligibility now accumulates new validated units across those bound
+  sessions. Sessions are never joined by text similarity or storage proximity.
+- Automatic input separates new trigger evidence from bounded, already
+  reflected related history. The non-vector selector uses exact structural
+  overlap with explicit weights: link `4`, theme `3`, topic/subtopic `2`, tag
+  `1`; the default acceptance score is `2`, so one weak tag is insufficient.
+- In-scope draft/ready candidates are included for duplicate prevention.
+  Related history and candidate context have explicit configurable limits.
+- `CandidateBelief.source_session_ids` records the sessions behind accepted
+  evidence, while the singular field remains compatible as the triggering
+  session.
+- `reflection_analyze` prompt version `2` distinguishes current trigger
+  evidence from older context and forbids duplicate candidates.
+
+**What is still true:**
+- Reflection uses only fidelity-valid active Archive units and cannot write
+  Core directly.
+- Vectors are not required for personality-scope reflection and do not define
+  identity membership.
+- Reinforcement of an existing candidate is not implemented yet; it remains
+  the typed-result lifecycle work of Phase C.
+
+**What we are doing:**
+- Run live multi-session Chibigochi acceptance for scope isolation, related
+  history quality, and prompt behavior.
+- Then implement typed new/reinforce/contradict/no-insight outcomes without
+  relaxing manual Core review.
+
+**Reproducibility anchor:** deterministic Rust/Python/workspace gates on the
+eventual implementation commit; live acceptance not yet claimed.
+
+## 2026-08-01 — Reflection gains a durable core-owned trigger cycle
+
+Context. Reflection could already turn validated memory units into reviewable
+Core candidates, but only after an explicit manual call. That left a gap in the
+living-memory lifecycle: the engine could preserve experience yet could not
+decide when enough new experience existed to justify interpretation.
+
+**What changed:**
+- `ReflectionConfig` makes accumulated salience, critical-unit weight, maximum
+  interval, minimum scheduled evidence, and automatic batch size explicit.
+- `reflection_status` explains whether reflection is due, and
+  `begin_reflection_if_due` creates a reasoning task only for
+  `critical_memory`, `accumulated_salience`, or `scheduled_interval`.
+- Only new `ActiveArchive` + fidelity-valid memory units contribute. Automatic
+  input is bounded and its archive summaries are limited to parent archives of
+  those units.
+- `reflection_state.v1` persists the per-scope checkpoint under
+  `runs/reflection/`; `MemoryUnit` adds compatible `reflection_count` and
+  `last_reflected_at` metadata.
+- Successful zero-candidate analysis consumes its input; failed analysis does
+  not. Per-scope locking and active-task checks prevent duplicate automatic
+  reflection tasks.
+- Python and Godot expose the core methods. The Telegram demo can execute the
+  after-sleep path with `MEMORY_BOT_AUTO_REFLECTION=1`; it is opt-in because it
+  may add a reasoning-model call.
+
+**What is retracted:**
+- The roadmap description of reflection as manual-only is no longer true for
+  the Phase A library capability. Automatic execution is still opt-in and live
+  acceptance is not yet claimed.
+
+**What is still true:**
+- Reflection cannot write Core. It only creates `CandidateBelief` records for
+  review.
+- Session, Archive, and Core remain the only persisted memory layers.
+  Reflection state is orchestration metadata, and vectors remain optional.
+- At the Phase A cutoff the automatic evidence set was source-session-backed.
+  The Phase B entry above records its resolution; typed candidate reinforcement
+  remains open.
+
+**What we are doing:**
+- Run Chibigochi acceptance over several sleep cycles and calibrate the initial
+  defaults.
+- Then add bounded personality-scope historical evidence and reinforcement of
+  an existing candidate instead of duplicate candidate creation.
+
+**Reproducibility anchor:** `cargo test --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`, Python adapter tests,
+host syntax checks, and wiki link checks on the eventual implementation commit.
+
 ## 2026-08-01 — Associative recall learns to abstain at the live model boundary
 
 Context. The live Chibigochi acceptance of `3c5aa74` proved that the separate

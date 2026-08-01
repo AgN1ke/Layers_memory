@@ -14,6 +14,31 @@ Memory mirrors how people remember, across three layers:
 
 Experience moves upward only when it earns its place: it is validated against its source, promoted through review rather than written blindly, and forgotten gently and reversibly when it stops mattering.
 
+The v0.5 direction adds an autonomous rhythm of reflection. The core can notice
+when new validated experience reaches critical mass, or when slow accumulation
+has waited long enough for a sleep/maintenance check, and then request a
+bounded reasoning pass. Reflection may propose reviewable beliefs or conclude
+that nothing durable changed; it still cannot write Core directly.
+
+Reflection also remembers its own unfinished understanding. The current v0.5
+path can reinforce a visible existing candidate, open an explicit reviewable
+challenge, or return structured no-insight instead of turning every episode
+into a trait. Apply and owner review are now scope-safe, journal-backed, and
+recoverable across multi-file writes; v0.5 release acceptance remains open for
+live Chibigochi calibration rather than for this integrity gap.
+
+The post-v0.5 direction is a hierarchy of reviewable hypotheses rather than
+one flat deduplicated text. A specific interest can strongly support a narrow
+hypothesis and weakly support broader ones; independent later evidence matures
+each level separately. This internal hypothesis graph remains part of the slow
+Archive-to-Core transition, not a fourth prompt-visible memory layer.
+
+Reflection is personality-scoped rather than conversation-scoped. A host binds
+several source sessions through one explicit `core_scope`; the core can then
+accumulate their new validated units and add a bounded, explainable slice of
+structurally related older history. Similar text never links identities, and
+the non-vector path remains complete.
+
 Optional vectors do not create another persisted memory layer. They form a
 local, rebuildable sidecar index over atomic memory units. During a live turn,
 the Rust core may use that index to build a small ephemeral
@@ -45,6 +70,8 @@ Rust memory core, PyO3 Python adapter, and runnable host examples.
 - [`wiki/pages/integration/local-development.md`](wiki/pages/integration/local-development.md) - local Windows/Rust setup, installed tools, paths, and verification commands.
 - [`wiki/pages/governance/licensing.md`](wiki/pages/governance/licensing.md) - Memory Engine non-commercial public license.
 - [`wiki/pages/governance/versioning.md`](wiki/pages/governance/versioning.md) - normative SemVer, schema-version, and release-tag policy.
+- [`wiki/pages/planning/autonomous-reflection-v0.5.md`](wiki/pages/planning/autonomous-reflection-v0.5.md) - strategic design and phased acceptance for salience/time-driven reflection.
+- [`wiki/pages/planning/reflective-belief-system.md`](wiki/pages/planning/reflective-belief-system.md) - phased plan from reliable reflection to an evidence-backed hypothesis graph, contradiction handling, and native clarification.
 - [`LICENSE.md`](LICENSE.md) - root license file for GitHub publication.
 
 ## Versioning

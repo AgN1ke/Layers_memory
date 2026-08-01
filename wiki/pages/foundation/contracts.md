@@ -10,6 +10,8 @@
 - [LLM integration resources](../integration/llm-integration-resources.md) -
   provider/model resources that execute LLM tasks outside the core.
 - [Roadmap](../planning/roadmap.md) - current and planned schema-impacting work.
+- [Reflective Belief System](../planning/reflective-belief-system.md) - phased
+  source for future reflection-operation and hypothesis-graph contracts.
 
 ## Для чого існує цей документ
 
@@ -947,12 +949,22 @@ Canonical prompt view рендерить прийняті hits окремим
 
 CandidateBelief - кандидат на стабільний висновок у Core Store.
 
+`candidate_belief.v1` є чинною плоскою формою v0.5. Запланований граф гіпотез
+не додає полів до цього контракту на папері: нові node/evidence/relation schemas
+з'являться лише разом із кодом і міграцією у фазі, визначеній
+[Reflective Belief System](../planning/reflective-belief-system.md). До того
+ширше й вужче твердження зберігаються як окремі candidates без формального
+relation contract.
+
 Файл: `memory/core/candidates/<candidate_id>.json`.
 
 ```json
 {
   "schema_version": "candidate_belief.v1",
   "candidate_id": "candidate_01J00000000000000000000001",
+  "source_session_id": "session_2026_08_01",
+  "source_session_ids": ["session_2026_07_20", "session_2026_08_01"],
+  "core_scope": "owner_scope",
   "created_at": "2026-05-17T17:18:00.000Z",
   "updated_at": "2026-05-17T17:18:00.000Z",
   "text": "Користувач живе в Берліні.",
@@ -969,6 +981,18 @@ CandidateBelief - кандидат на стабільний висновок у
     "manual_review_required": true
   },
   "review": null,
+  "reinforcements": [
+    {
+      "reinforcement_id": "reinforcement_01J...",
+      "created_at": "2026-06-01T12:00:00.000Z",
+      "source_session_ids": ["session_2026_06_01"],
+      "source_memory_unit_ids": ["mu_01J..."],
+      "supporting_archive_ids": ["archive_01J..."],
+      "evidence_summary": "Пізніший валідований досвід повторив той самий патерн.",
+      "confidence": 0.88,
+      "tags": ["recurring"]
+    }
+  ],
   "links": [
     {
       "kind": "source",
@@ -987,7 +1011,166 @@ CandidateBelief - кандидат на стабільний висновок у
 - `promoted`;
 - `superseded`.
 
-На v0.1 candidate може бути створений вручну або через майбутній reflection-контракт, але автоматичний reflection не реалізується.
+Ручний reflection реалізований у v0.2; автоматичний trigger/checkpoint lifecycle
+починається у v0.5. Обидва шляхи створюють тільки reviewable candidates.
+
+### 7.1 Autonomous reflection processing state (v0.5)
+
+Autonomous reflection не додає persisted memory layer. Він додає durable
+processing metadata у `memory/runs/reflection/<scope>.json`:
+
+```json
+{
+  "schema_version": "reflection_state.v1",
+  "reflection_scope": "owner_scope",
+  "source_session_ids": ["session_2026_07_20", "session_2026_08_01"],
+  "source_session_id": "session_...",
+  "created_at": "2026-08-01T10:00:00Z",
+  "updated_at": "2026-08-01T10:05:00Z",
+  "last_completed_at": "2026-08-01T10:05:00Z",
+  "last_task_id": "task_...",
+  "last_trigger_reason": "accumulated_salience",
+  "last_candidate_count": 1
+}
+```
+
+`MemoryUnit` отримує три additive backward-compatible поля у
+`memory_unit.v1`:
+
+- `reflection_count` — скільки успішних reflection passes використали unit як
+  новий trigger material;
+- `last_reflected_at` — час останнього такого успішного проходу;
+- `last_reflection_operation_id` — deterministic journal operation, яка
+  застосувала останній checkpoint і захищає replay від другого increment.
+
+Відсутні поля старого запису читаються як `0`, `null` і `null`. Failed task не
+змінює їх. Успішний zero-candidate result змінює: осмислення відбулося, навіть
+якщо стійкого висновку не знайдено.
+
+`reflection_status(session_id, core_scope, opportunity)` повертає
+`reflection_trigger_status.v1`: scope, opportunity, eligible unit count,
+повний `source_session_ids` membership, накопичену вагу, thresholds, oldest
+eligible time, last completion, optional active task id, `due` і
+machine-readable `reason`.
+
+`reason` має значення `no_eligible_memory`, `not_due`, `already_pending`,
+`critical_memory`, `accumulated_salience` або `scheduled_interval`.
+
+`bind_reflection_session(session_id, core_scope)` додає session до durable
+membership без trigger evaluation, PendingTask або LLM-виклику. Це шлях для
+host session lifecycle і контрольованого backfill історичних сесій.
+
+`begin_reflection_if_due(...)` повертає той самий status і optional
+`ReflectionPassStart`. Відсутнє або `null` поле `reflection` є нормальним
+abstention result, а не помилкою. Перевірка і створення task виконуються під
+одним per-scope lock. Метод також idempotently bind-ить поточну session, тому
+простий host не зобовʼязаний робити окремий bind.
+
+Автоматичний `reflection_analyze` task додає в `inputs`:
+
+- `reflection_scope`;
+- `source_session_ids` — тільки sessions, представлені фактично відібраними
+  units; повний host-bound membership лишається у reflection state/status;
+- `personality_session_count` — розмір повного membership без роздування
+  reasoning input довгим списком;
+- `trigger_reason`;
+- `new_memory_unit_ids`;
+- `related_memory_unit_ids`;
+- bounded `memory_units`, де `evidence_role` дорівнює `trigger` або
+  `related_history`;
+- summaries тільки parent archives фактично включених units;
+- bounded `existing_candidates` зі статусом `draft`/`ready_for_review` того ж
+  `core_scope`.
+
+Legacy candidate без `core_scope` може входити лише тоді, коли його singular
+або plural source-session provenance належить explicit bound membership.
+Candidate з іншим непорожнім scope не підмішується навіть за спільної session.
+
+`trigger` означає новий validated unit, що входить у checkpoint після
+успішного submit. `related_history` означає раніше осмислений unit, який ядро
+додало як контекст через exact structural overlap. Він не checkpoint-иться
+повторно. Selector не потребує vectors і використовує явні ваги: спільний
+link `4`, archive theme `3`, topic/subtopic `2`, unit/archive tag `1`.
+`relation_score` і `relation_reasons` пояснюють відбір, але не є доказом
+стабільного висновку. Default `min_related_score=2`, тому один слабкий
+спільний tag із вагою `1` сам по собі не підмішує давній спогад.
+
+`ReflectionPassStart` окремо показує `new_memory_unit_count`,
+`related_memory_unit_count` та `existing_candidate_count`. Початкові limits:
+`ReflectionConfig.max_related_units=20`, `min_related_score=2` і
+`max_existing_candidates=20`.
+
+`CandidateBelief.source_session_ids` є additive provenance усіх sessions, з
+яких походять прийняті `source_memory_unit_ids`. Legacy singular
+`source_session_id` залишається triggering session.
+
+### 7.2 Typed reflection outcome (v0.5 Phase C)
+
+Нові `reflection_analyze` tasks мають prompt version `3` і
+`expected_output_schema=reflection_actions_result.v1`. Результат містить
+ідентичність source/scope та рівно один із двох варіантів: непорожній `actions`
+або `no_insight`.
+
+```json
+{
+  "schema_version": "reflection_actions_result.v1",
+  "source_session_id": "session_2026_08_01",
+  "core_scope": "owner_scope",
+  "actions": [
+    {
+      "action": "reinforce_candidate",
+      "candidate_id": "candidate_01J...",
+      "confidence": 0.88,
+      "evidence_summary": "Новий валідований unit повторює патерн.",
+      "source_memory_unit_ids": ["mu_01J..."],
+      "supporting_archive_ids": ["archive_01J..."],
+      "tags": ["recurring"]
+    }
+  ]
+}
+```
+
+Допустимі actions:
+
+- `new_candidate { candidate }` — нова reviewable гіпотеза, якої немає у Core
+  або `existing_candidates`;
+- `reinforce_candidate` — додає нові task-visible evidence до того самого
+  draft/ready candidate, записує `CandidateReinforcement`, обʼєднує
+  unit/archive/session provenance і може лише підвищити confidence;
+- `challenge_core_fact { candidate }` — вимагає task-visible
+  `contradicted_core_fact_ids`, додає tag `core_challenge`, але не змінює Core;
+  contested transition відбувається тільки через звичайний owner approval;
+- `no_insight` — окремий обʼєкт з `reason` і непорожнім `explanation`.
+
+`no_insight.reason` є одним із `insufficient_repetition`,
+`already_represented`, `temporary_state`, `conflicting_evidence` або
+`no_stable_pattern`. Він є успішним осмисленням і пересуває checkpoint.
+
+Typed apply є fail-closed: candidate має бути видимим у task, reinforcement
+мусить цитувати хоча б один новий для кандидата task unit, challenge мусить
+цитувати видимий Core fact, а new/challenge не можуть дублювати видимий
+candidate. Семантична помилка не checkpoint-ить trigger units. Saved tasks і
+старі hosts можуть і далі повернути `reflection_result.v1`; цей legacy contract
+читається сумісно, але нові tasks його не запитують.
+
+**Integrity closure 2026-08-01.** Typed apply і owner review тепер є
+journal-backed ідемпотентними операціями з frozen intent. До першого side
+effect apply повторно читає cited MemoryUnit/archive/candidate/Core evidence;
+змінений, forgotten або cross-scope матеріал зупиняє операцію без checkpoint.
+Відсутній `core_scope` означає тільки unscoped namespace. Review бере scope з
+candidate, відхиляє інший caller scope і приймає лише `draft` або
+`ready_for_review`. Restart recovery не викликає LLM повторно й не дублює
+candidate, reinforcement, unit checkpoint або Core transition.
+
+Після typed apply ядро повертає `reflection_apply_result.v1`:
+`ReflectionCandidatesResult.candidates` містить нові та challenge candidates,
+`reinforced_candidates` — оновлені наявні records, а optional `no_insight` —
+структуроване утримання від зміни довготривалого розуміння. Additive
+`operation_id` та `result_digest` звʼязують відповідь із durable apply. Legacy
+apply зберігає старий `reflection_result.v1` output для сумісності.
+
+Тексти не входять у постійну trigger telemetry. Повний LLM input залишається у
+звичайному auditable PendingTask, як і для ручного reflection.
 
 ---
 
@@ -1159,7 +1342,24 @@ PendingTask - спосіб, яким ядро системи просить хо
     }
   },
   "attempts": [],
-  "last_error": null
+  "last_error": null,
+  "outcome": null
+}
+```
+
+`outcome` є optional terminal core-owned result. Старі task-файли без нього
+лишаються валідними. Для completed `reflection_analyze` це
+`reflection_outcome.v1`; він навмисно text-free:
+
+```json
+{
+  "schema_version": "reflection_outcome.v1",
+  "operation_id": "reflection_apply_task_01J...",
+  "result_digest": "64-hex-sha256",
+  "completed_at": "2026-08-01T12:00:00.000Z",
+  "new_candidate_ids": ["candidate_01J..."],
+  "reinforced_candidate_ids": [],
+  "no_insight_reason": null
 }
 ```
 
@@ -1500,6 +1700,7 @@ embeddings.
     "core_fact": "core_fact.v1",
     "candidate_belief": "candidate_belief.v1",
     "pending_task": "pending_task.v1",
+    "reflection_state": "reflection_state.v1",
     "evidence_pack": "evidence_pack.v1",
     "fidelity_review": "fidelity_review.v1",
     "vector_index": "vector_index.v1",
@@ -1529,7 +1730,10 @@ embeddings.
 
 ## 14. JournalOperation
 
-JournalOperation описує мульти-файлову операцію, яку потрібно або завершити, або безпечно розібрати після обриву. На v0.2 це зарезервований storage primitive: схема і FileStorage-операції існують, але runtime sleep/recovery поки не використовують journal як transaction layer.
+JournalOperation описує мульти-файлову операцію, яку потрібно завершити або
+видимо передати на ручний розбір після обриву. Runtime sleep і далі
+відновлюється через `SleepRun`, але v0.5 reflection apply та candidate review є
+першими активними journal-backed runtime flows.
 
 Файл: `memory/journal/<op_id>.json`.
 
@@ -1555,11 +1759,27 @@ JournalOperation описує мульти-файлову операцію, як
 }
 ```
 
-`op_type` v0.1:
+`op_type`:
 
 - `sleep`;
 - `migration`;
-- `core_promotion`.
+- `core_promotion`;
+- `reflection_apply`;
+- `candidate_review`.
+
+`reflection_apply` має deterministic ID `reflection_apply_<task_id>`. Його
+`intent` версії `reflection_operation.v1` містить digest початкового typed
+result, frozen prepared actions, text-bearing domain outcome та progress
+markers. Journal є приватним auditable storage, тому intent може містити повну
+гіпотезу; постійна telemetry і `PendingTask.outcome` лишаються text-free.
+
+`candidate_review` freezing-ує exact desired candidate і Core-category
+effects, а також previous `updated_at` для optimistic conflict detection.
+Операція не перечитує вільний review input після restart. Public
+`recover_pending_memory_operations()` продовжує всі `started` reflection
+operations. Окремо перший звичайний API-виклик на новому engine instance
+виконує цей recovery один раз до читання або зміни memory; тому host не мусить
+знати, який саме метод має бути першим після restart.
 
 `state`:
 
@@ -1613,6 +1833,8 @@ memory/
 - `<category>.json` - правда для Core Store;
 - `<candidate_id>.json` - правда для candidate belief;
 - `<task_id>.json` - правда для PendingTask;
+- `<op_id>.json` у `journal/` - правда для frozen intent і progress
+  незавершеної multi-file operation; це processing truth, не memory layer;
 - `manifest.json` - правда для версій сховища;
 - Markdown-файли - людський вигляд, не машинна правда.
 
@@ -1647,6 +1869,8 @@ memory/
 8. Оновити той самий `ArchiveEntry`.
 9. Повернути `RecallResult` за `RecallQuery` через stage1 recall.
 10. Повернути `CoreContextPackage` за `CoreContextRequest`.
-11. Тримати `manifest.json` для версій; `journal/` існує як зарезервований storage primitive для майбутніх migration/recovery-heavy операцій, а поточний runtime sleep покладається на durable `SleepRun` checkpoints та ідемпотентні coverage rules.
+11. Тримати `manifest.json` для версій; `journal/` відновлює
+    reflection apply/review, тоді як runtime sleep окремо покладається на
+    durable `SleepRun` checkpoints та ідемпотентні coverage rules.
 
 Це достатній контракт для старту Rust-коду без розпливання архітектури.

@@ -926,6 +926,9 @@ fn create_archive_with_units_named_at(
             fidelity_status: FidelityStatus::Valid,
             fidelity_review: None,
             forget_review: None,
+            reflection_count: 0,
+            last_reflected_at: None,
+            last_reflection_operation_id: None,
         })
         .collect::<Vec<_>>();
     let archive = ArchiveEntry {

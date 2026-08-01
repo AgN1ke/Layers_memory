@@ -16,7 +16,9 @@ use memory_engine::event::IngestEvent;
 use memory_engine::forgetting::ForgetReviewResult;
 use memory_engine::llm::{LlmResponse, SleepRun};
 use memory_engine::recall::RecallQuery;
-use memory_engine::reflection::ReflectionAnalyzeResult;
+use memory_engine::reflection::{
+    ReflectionActionsResult, ReflectionAnalyzeResult, ReflectionOpportunity,
+};
 use memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine};
 use serde::de::DeserializeOwned;
@@ -207,6 +209,56 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn bind_reflection_session(&self, session_id: GString, core_scope: GString) -> GString {
+        self.with_engine(|engine| {
+            let state = engine
+                .bind_reflection_session(&session_id.to_string(), optional_gstring(core_scope))
+                .map_err(|err| err.to_string())?;
+            dump_json(&state, "reflection state")
+        })
+    }
+
+    #[func]
+    fn reflection_status(
+        &self,
+        session_id: GString,
+        core_scope: GString,
+        opportunity: GString,
+    ) -> GString {
+        self.with_engine(|engine| {
+            let opportunity = parse_reflection_opportunity(&opportunity.to_string())?;
+            let status = engine
+                .reflection_status(
+                    &session_id.to_string(),
+                    optional_gstring(core_scope),
+                    opportunity,
+                )
+                .map_err(|err| err.to_string())?;
+            dump_json(&status, "reflection trigger status")
+        })
+    }
+
+    #[func]
+    fn begin_reflection_if_due(
+        &self,
+        session_id: GString,
+        core_scope: GString,
+        opportunity: GString,
+    ) -> GString {
+        self.with_engine(|engine| {
+            let opportunity = parse_reflection_opportunity(&opportunity.to_string())?;
+            let start = engine
+                .begin_reflection_if_due(
+                    &session_id.to_string(),
+                    optional_gstring(core_scope),
+                    opportunity,
+                )
+                .map_err(|err| err.to_string())?;
+            dump_json(&start, "automatic reflection start")
+        })
+    }
+
+    #[func]
     fn submit_reflection_response(&self, task_id: GString, response_json: GString) -> GString {
         self.with_engine(|engine| {
             let response: LlmResponse = parse_json(&response_json.to_string(), "LLM response")?;
@@ -230,6 +282,18 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn resume_reflection_actions(&self, task_id: GString, result_json: GString) -> GString {
+        self.with_engine(|engine| {
+            let result: ReflectionActionsResult =
+                parse_json(&result_json.to_string(), "reflection actions result")?;
+            let candidates = engine
+                .resume_reflection_actions(&task_id.to_string(), result)
+                .map_err(|err| err.to_string())?;
+            dump_json(&candidates, "reflection action results")
+        })
+    }
+
+    #[func]
     fn list_candidates(&self) -> GString {
         self.with_engine(|engine| {
             let candidates = engine.list_candidates().map_err(|err| err.to_string())?;
@@ -246,6 +310,16 @@ impl MemoryEngineGodot {
                 .review_candidate(input)
                 .map_err(|err| err.to_string())?;
             dump_json(&result, "candidate review result")
+        })
+    }
+
+    #[func]
+    fn recover_pending_memory_operations(&self) -> GString {
+        self.with_engine(|engine| {
+            let count = engine
+                .recover_pending_memory_operations()
+                .map_err(|err| err.to_string())?;
+            dump_json(&count, "recovered memory operation count")
         })
     }
 
@@ -354,6 +428,14 @@ fn optional_gstring(value: GString) -> Option<String> {
         None
     } else {
         Some(value)
+    }
+}
+
+fn parse_reflection_opportunity(raw: &str) -> Result<ReflectionOpportunity, String> {
+    match raw.trim() {
+        "after_sleep" => Ok(ReflectionOpportunity::AfterSleep),
+        "scheduled_maintenance" => Ok(ReflectionOpportunity::ScheduledMaintenance),
+        other => Err(format!("invalid reflection opportunity: {other}")),
     }
 }
 

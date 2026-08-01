@@ -13,11 +13,12 @@ use crate::archive::{
     ForgetReviewRecord, MemoryUnit, MemoryUnitStatus,
 };
 use crate::core_store::{
-    AssociativeMemoryActivation, AssociativeMemoryItem, CandidateBelief, CandidateReviewInput,
-    CandidateReviewResult, CandidateStatus, CoreContextBudgetReport, CoreContextEvent,
-    CoreContextFact, CoreContextPackage, CoreContextRequest, CoreContextTokenBudget, CoreFact,
-    CoreFactInput, CoreFactPatchInput, CoreFactPatchResult, CoreFactStatus, CoreFactUpsertResult,
-    PromotionChecks, ReviewDecision, ReviewRecord,
+    AssociativeMemoryActivation, AssociativeMemoryItem, CandidateBelief, CandidateReinforcement,
+    CandidateReviewInput, CandidateReviewResult, CandidateStatus, CoreContextBudgetReport,
+    CoreContextEvent, CoreContextFact, CoreContextPackage, CoreContextRequest,
+    CoreContextTokenBudget, CoreFact, CoreFactInput, CoreFactPatchInput, CoreFactPatchResult,
+    CoreFactStatus, CoreFactUpsertResult, CoreStoreCategory, PromotionChecks, ReviewDecision,
+    ReviewRecord,
 };
 use crate::event::{IngestEvent, StoredEvent};
 use crate::fidelity::{EvidenceEvent, EvidenceEventRole, EvidencePack, MemoryFidelityPassStart};
@@ -25,6 +26,7 @@ use crate::forgetting::{
     ForgetRecommendation, ForgetReviewApplyResult, ForgetReviewCandidate, ForgetReviewInputs,
     ForgetReviewResult, ForgetReviewStart, ForgottenMemoryUnits,
 };
+use crate::journal::{JournalOperation, JournalOperationType, JournalState, RecoveryPolicy};
 use crate::llm::{
     CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmErrorKind, LlmRequest, LlmResponse,
     SleepOutcome, SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
@@ -41,8 +43,10 @@ use crate::recall::{
     RecallVectorStageDebug, RecallVectorStageStatus,
 };
 use crate::reflection::{
+    AutomaticReflectionStart, ReflectionActionDraft, ReflectionActionsResult,
     ReflectionAnalyzeResult, ReflectionCandidateDraft, ReflectionCandidatesResult,
-    ReflectionPassStart,
+    ReflectionNoInsight, ReflectionOpportunity, ReflectionOutcome, ReflectionPassStart,
+    ReflectionState, ReflectionTriggerReason, ReflectionTriggerStatus,
 };
 use crate::session::SessionRecord;
 use crate::sleep::{MemoryUnitPassResult, SleepCompressionResult};
@@ -61,8 +65,11 @@ use crate::types::{
     FORGET_REVIEW_RESULT_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION,
     JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION,
     MEMORY_UNIT_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
-    RECALL_RESULT_SCHEMA_VERSION, REFLECTION_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
-    SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
+    RECALL_RESULT_SCHEMA_VERSION, REFLECTION_ACTIONS_RESULT_SCHEMA_VERSION,
+    REFLECTION_APPLY_RESULT_SCHEMA_VERSION, REFLECTION_OPERATION_SCHEMA_VERSION,
+    REFLECTION_OUTCOME_SCHEMA_VERSION, REFLECTION_RESULT_SCHEMA_VERSION,
+    REFLECTION_STATE_SCHEMA_VERSION, REFLECTION_TRIGGER_STATUS_SCHEMA_VERSION,
+    SESSION_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
 use crate::vector::{
     default_vector_manifest, memory_unit_is_vector_eligible, normalize_vector, thesis_hash,
@@ -92,7 +99,8 @@ use context_budget::*;
 use options::ForgetApplyAction;
 pub use options::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, FidelityConfig, ForgetConfig,
-    IngestResult, RecallStage1Config, SleepStage1Config, SleepStage1Result, VectorConfig,
+    IngestResult, RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result,
+    VectorConfig,
 };
 use recall_api::*;
 use recall_stage1::*;
@@ -111,6 +119,7 @@ pub struct MemoryEngine<S> {
     storage: S,
     options: EngineOptions,
     manifest_initialized: AtomicBool,
+    memory_operations_recovered: AtomicBool,
     locks: LockRegistry,
     recall_stats: Mutex<HashMap<String, RecallStatDelta>>,
     recall_stats_flush_lock: Mutex<()>,
@@ -150,6 +159,7 @@ impl<S> MemoryEngine<S> {
             storage,
             options,
             manifest_initialized: AtomicBool::new(false),
+            memory_operations_recovered: AtomicBool::new(false),
             locks: LockRegistry::default(),
             recall_stats: Mutex::new(HashMap::new()),
             recall_stats_flush_lock: Mutex::new(()),

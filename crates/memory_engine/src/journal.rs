@@ -9,6 +9,8 @@ pub enum JournalOperationType {
     Sleep,
     Migration,
     CorePromotion,
+    ReflectionApply,
+    CandidateReview,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

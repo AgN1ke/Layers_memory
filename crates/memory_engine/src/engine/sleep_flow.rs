@@ -981,6 +981,9 @@ impl<S: Storage> MemoryEngine<S> {
                 fidelity_status: FidelityStatus::Unchecked,
                 fidelity_review: None,
                 forget_review: None,
+                reflection_count: 0,
+                last_reflected_at: None,
+                last_reflection_operation_id: None,
             });
         }
 
@@ -1053,6 +1056,9 @@ fn push_repair_memory_unit(
         fidelity_status: FidelityStatus::Unchecked,
         fidelity_review: None,
         forget_review: None,
+        reflection_count: 0,
+        last_reflected_at: None,
+        last_reflection_operation_id: None,
     });
     Ok(())
 }

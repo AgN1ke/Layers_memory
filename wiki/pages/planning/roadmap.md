@@ -13,6 +13,9 @@
   - accepted vector storage plan referenced by this roadmap.
 - [Multi-speaker geometry](../research/multi-speaker-geometry-2026-06-12.md) -
   attribution work referenced by later phases.
+- [Reflective Belief System](reflective-belief-system.md) - phased transition
+  from reliable autonomous reflection to an evidence-backed hypothesis graph,
+  contradiction handling, and native clarification.
 
 Цей документ — **жива дорожня карта** проєкту. Він не дублює стратегію (`wiki/pages/foundation/strategy.md`) чи архітектуру (`wiki/pages/foundation/architecture.md`). Він відповідає на одне питання: **куди ми йдемо і де зараз стоїмо**.
 
@@ -59,11 +62,22 @@ unit-focused prompt projection замість змішаного денного 
 unit-level recall feedback/deep-scoring calibration і лише потім, за живими
 даними, Core-anchored contextual expansion Phase 2.
 
+Окремо від v0.4 closure розпочато v0.5 autonomous reflection. Phase A–C і
+integrity Phase C.1 реалізовані: scope ізольований, apply/review мають frozen
+journal intent, evidence revalidation та restart replay без повторних side
+effects. v0.5 лишається в роботі до живого Chibigochi acceptance і release
+синхронізації. Наступна когнітивна віха після цього — не кращий flat candidate
+dedup, а v0.6 hypothesis graph із рівнями узагальнення.
+
 ## Стан на 2026-06-10
 
 v0.2 закрито як повний цикл живої памʼяті: session → sleep → Archive/MemoryUnit → recall/context → fidelity → reflection candidates → review → Core/contested → forgetting → remember_back. Формальний acceptance-anchor — `crates/memory_engine/tests/living_memory_cycle.rs` і `wiki/pages/releases/v0.2-acceptance.md`; публічний реліз позначено тегом `v0.2.0`.
 
 Після v0.2 короткий audit-cleanup перед v0.3 закрито: A1/A2/A3/A4 step 1/A4 step 3/B3/A5/A7/B4/B2 виконані. Journal/recovery scope (A3) закрито як рішення: journal лишається storage primitive для майбутніх migration/recovery-heavy операцій, runtime sleep спирається на durable `SleepRun` checkpoints. `engine.rs` більше не є монолітом: доменні частини винесені в `crates/memory_engine/src/engine/`.
+
+Update v0.5: це історичне рішення для sleep не скасоване, але journal уже не
+лише reserved primitive — Phase C.1 використовує його для reflection apply та
+candidate review, де справді є recovery-heavy multi-file transition.
 
 v0.3 host-conformance також закрито: direct/local, Telegram-local і Godot-headless проходять однаковий automated scenario; Godot acceptance підтверджено реальним Godot 4.6 stable console. Це доводить, що ядро використовується як reusable library із тонкими adapters, а не як Telegram-specific bot core. Наступне меню після v0.3: Chibigochi/Godot integration, Telegram-live smoke як транспортний regression, reviewer-pass, opt-in vector recall alignment, unit-level recall counters, diagnostics/backup.
 
@@ -226,7 +240,16 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [ ] Вага memory unit / archive memory може зростати при recall hit, участі у candidate belief або повторному підтвердженні в reflection. Конкретні коефіцієнти — конфіг, не прихований хардкод.
 - [x] Stage 1 recall враховує `recall_count` і `last_recalled_at` як м'який rank boost без фізичного переписування `weight`: часто або недавно згадані archive memories трохи краще переживають decay. — 2026-05-30, `RecallStage1Config.recall_count_log_bonus`, `recent_recall_bonus`, `max_recall_boost_factor`.
 - [ ] `recall_deep` (vector deep recall) не має еквівалента цього bonus-а на рівні memory unit: `recency` рахується тільки від `created_at`, `recall_count`/`last_recalled_at` не читаються взагалі. Потребує unit-level recall лічильників — досі відкладений пункт (див. "unit-level recall counters" у переліку меню після v0.3 вище). Знахідка з зовнішнього review 2026-07-06.
-- [ ] **Reflection auto-trigger за накопиченою вагою:** зараз `/reflect` тільки ручний, на відміну від sleep, який має продуктові тригери (token/context budget pressure, nightly idle). Підсумовувати `weight` нових `ActiveArchive` + `fidelity_status=valid` memory units із моменту останнього reflection; за порогом (конфіг) ставити `begin_reflection_analysis` у той самий фоновий шлях, що й sleep-тригери. Контракт reflection не змінюється: агенти й далі тільки пропонують candidate beliefs, Core росте лише через ручний review. Знахідка з зовнішнього review 2026-07-06: [Generative Agents Memory Stream review](../research/generative-agents-memory-stream-2026-07-06.md).
+- [~] **Reflection auto-trigger за накопиченою вагою:** Phase A і Phase B
+  реалізовано 2026-08-01. Rust core рахує тільки нові `ActiveArchive` +
+  `fidelity_status=valid` units, розрізняє critical memory, accumulated salience
+  і scheduled interval, тримає per-scope checkpoint, не дублює active task і
+  не списує input при failure. Python/Godot мають thin API; Telegram
+  after-sleep executor opt-in через `MEMORY_BOT_AUTO_REFLECTION=1`. До `[x]`
+  бракує typed reinforcement замість duplicate candidates і живого Chibigochi
+  acceptance. Cross-session personality evidence, bounded related history і
+  existing-candidate context уже закриті Phase B. Повний план:
+  [Autonomous Reflection v0.5](autonomous-reflection-v0.5.md).
 - [ ] Link bonus у recall scoring: спогади, що мають звʼязок із поточною темою, Core candidate або свіжими подіями, отримують підсилення score.
 - [x] Decay/freshness не має фізично видаляти спогади. Низька актуальність знижує rank і робить unit кандидатом на forgetting review. — 2026-05-30, effective freshness у Stage 1 recall з configurable half-life; повне `forget_review_pass` лишається окремим пунктом нижче.
 - [x] Захист критичних спогадів: high-weight, emotionally validated або Core-linked units не мають потрапляти в forgetting без окремого reviewer warning. — 2026-06-01, `feature/forgetting` додає hard-gate: protected unit не забувається навіть якщо LLM рекомендує `forget`, protection re-check виконується на submit.
@@ -412,6 +435,107 @@ acceptance за єдиною SemVer-політикою.
 counters, зміна deep-recall weights, persisted active-topic state,
 Core-anchored contextual expansion Phase 2 і Recall Stage 3. Це наступні окремо
 калібровані зміни, а не умови чесного per-request associative layer.
+
+---
+
+## v0.5 — Autonomous reflection
+
+Мета: памʼять сама визначає, коли накопичений перевірений досвід варто
+осмислити, але не отримує права самостійно переписувати Core.
+
+- [x] Phase A: explicit `ReflectionConfig`, structured trigger status,
+  `begin_reflection_if_due`, critical-mass/time gates і bounded automatic input.
+- [x] Durable per-scope reflection state та per-unit checkpoint markers;
+  zero-candidate success споживає input, failed task — ні.
+- [x] Per-scope active-task deduplication і відновлення через звичайний
+  PendingTask lifecycle.
+- [x] Thin Python/Godot adapter methods; Telegram after-sleep execution є
+  явним opt-in, а не прихованою новою витратою.
+- [x] Phase B: reflection evidence boundary по explicit `core_scope` через
+  кілька source sessions, bounded related historical units, explainable
+  non-vector structural selector, explicit no-LLM session binding/backfill та
+  cross-session provenance. — 2026-08-01.
+- [x] Phase C: prompt v3 і `reflection_actions_result.v1` функціонально
+  розрізняють новий
+  candidate, reinforcement наявного, reviewable Core challenge та structured
+  no-insight. Reinforcement додає нові evidence/provenance до того самого
+  candidate ID; Core challenge не змінює Core до owner review; legacy
+  `reflection_result.v1` лишається сумісним для старих pending tasks. —
+  2026-08-01. Functional path plus C.1 integrity gate are deterministic-green.
+- [x] Phase C.1: зробити `core_scope` immutable identity boundary; missing scope
+  означає лише isolated unscoped namespace; review відхиляє terminal candidate
+  і scope override. — 2026-08-01.
+- [x] Journal-backed idempotent reflection apply та owner review із frozen
+  intent, deterministic operation/action IDs, evidence revalidation, restart
+  recovery і text-free durable outcome. — 2026-08-01.
+- [x] Fault-boundary replay після кожного логічного side effect, repeated
+  reinforcement/review,
+  cross-scope fixtures і stale-evidence scenarios. Лише цей gate закриває
+  Phase C як deterministic release contract. — 2026-08-01.
+- [ ] Live-calibration початкових
+  `2.5 / 0.95 / 7 days / 2 units / 40 new / 20 related / related score 2 / 20 candidates`
+  defaults на кількох sleep cycles Chibigochi.
+- [ ] Створити `v0.5.0-acceptance.md`, синхронно підняти manifests за SemVer і
+  тегувати тільки після deterministic + live PASS.
+
+Нормативний дизайн: [Autonomous Reflection v0.5](autonomous-reflection-v0.5.md).
+
+---
+
+## v0.6 — Hierarchical hypothesis graph
+
+Мета: reflection формує не плоский список схожих текстів, а пояснювану мережу
+вузьких і широких гіпотез із прямими evidence links. Це внутрішній простір між
+Archive і Core, не четвертий prompt-visible memory layer.
+
+- [ ] Версіоновані hypothesis node, evidence link і relation contracts;
+  journaled migration `candidate_belief.v1` без вигаданих semantic relations.
+- [ ] Human-readable graph export: кожний вузол простежується до validated
+  MemoryUnit, reinforcement, session і archive provenance.
+- [ ] Trigger-related candidate subgraph замість recency-only останніх N:
+  structural baseline плюс optional local-vector enrichment у глибокому шарі;
+  non-vector fallback повний, vectors не визначають scope або truth.
+- [ ] Typed hierarchical actions: narrow hypothesis, reinforcement,
+  generalization/specialization proposal, possible equivalence і no-insight.
+- [ ] Core-owned confidence components: directness, independent sources,
+  diversity, user confirmation, generalization distance, recency і
+  contradiction pressure. Score використовується як support, не публічна
+  probability of truth.
+- [ ] Evidence propagation не double-count-ить один source unit; широкі
+  гіпотези дозрівають лише через незалежні гілки.
+- [ ] Acceptance: Mars → planets → space hierarchy, later Venus evidence,
+  понад candidate limit, paraphrase duplicate, semantic non-equivalent control,
+  migration/replay і non-vector mode.
+
+Нормативний план:
+[Reflective Belief System, Phases 2–3](reflective-belief-system.md#phase-2--hypothesis-graph-storage-v06-foundation).
+
+---
+
+## v0.7 — Contradiction, temporal revision and clarification
+
+Мета: памʼять не лише накопичує підтримку, а й уміє визнати надмірне
+узагальнення, зміну людини з часом або потребу обережно уточнити власне
+розуміння.
+
+- [ ] Structured dispute lifecycle поверх hypothesis graph: support і
+  contradiction існують одночасно до осмисленого revision/review.
+- [ ] Reflection outcomes для narrow, split, time-bound, confidence decrease,
+  contested/retract recommendation і clarification-needed.
+- [ ] Пряме актуальне user denial має вищий авторитет за виведене
+  generalization, але не стирає історичну правду та source evidence.
+- [ ] Core challenge використовує той самий dispute/recovery lifecycle і не
+  обходить owner review.
+- [ ] Opt-in `ClarificationOpportunity`: core-owned relevance gate, cooldown і
+  question budget; prompt hint зʼявляється лише під час природного повернення
+  до теми й зникає після topic switch.
+- [ ] Відповідь на уточнення проходить звичайний Session → sleep → fidelity →
+  reflection шлях, а не патчить hypothesis напряму.
+- [ ] Live acceptance на реальних суперечностях і зміні інтересу; окремо
+  виміряти доречність, повтори та небажані питання.
+
+Нормативний план:
+[Reflective Belief System, Phases 4–5](reflective-belief-system.md#phase-4--contradiction-time-and-revision-v07).
 
 ---
 

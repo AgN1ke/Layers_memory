@@ -26,7 +26,13 @@ pub struct SchemaVersions {
     pub core_fact: String,
     pub candidate_belief: String,
     pub pending_task: String,
+    #[serde(default = "default_reflection_state_schema_version")]
+    pub reflection_state: String,
     pub journal_operation: String,
+}
+
+fn default_reflection_state_schema_version() -> String {
+    crate::types::REFLECTION_STATE_SCHEMA_VERSION.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -6,6 +6,9 @@
 - [Contextual memory expansion](contextual-memory-expansion-2026-07-05.md) - the plan this note's fixes should ride along with.
 - [Roadmap](../planning/roadmap.md) - where the resulting action items live.
 - [Architecture](../foundation/architecture.md) - Core/Session/Archive layering this pattern is compared against.
+- [Reflective Belief System](../planning/reflective-belief-system.md) - accepted
+  phased plan that combines this research with durable execution and the
+  hierarchical-hypothesis decision.
 
 ## Purpose
 
@@ -116,6 +119,77 @@ configurable threshold.
 This is additive and does not change the reflection contract itself (agents
 still only propose `CandidateBelief`s, Core still changes only through
 manual review).
+
+**Implementation update 2026-08-01.** This finding became
+[Autonomous Reflection v0.5](../planning/autonomous-reflection-v0.5.md). Phase A
+implements the durable trigger/checkpoint cycle over new validated units. The
+external flat memory-stream architecture is still rejected; only the
+accumulated-salience trigger principle was adopted.
+
+Phase B keeps that rejection intact while adopting the useful cross-time
+insight: reflection can span several explicitly bound source sessions of one
+personality. New trigger evidence remains distinct from bounded related
+history, and the mandatory selector is structural/non-vector rather than one
+flat recency/importance/relevance stream.
+
+## Research update 2026-08-01 — from reflection trigger to durable belief formation
+
+The original review answered when reflection should run, but not how a
+reflection result survives failure or how several levels of understanding
+should coexist. A second research pass compared four adjacent implementation
+patterns.
+
+[Letta sleep-time compute](https://www.letta.com/blog/sleep-time-compute/)
+validates the separation between the conversational agent and asynchronous
+memory work. Their primary agent talks to the user while a sleep-time agent
+reorganizes learned context. Memory Engine keeps the same separation of
+responsibility without adopting Letta's editable shared memory blocks: the
+host executes a bounded reflection task, while Rust owns the memory lifecycle
+and Core remains review-gated.
+
+[LangGraph durable execution](https://github.com/langchain-ai/langgraph) and
+its [interrupt/idempotency rules](https://docs.langchain.com/oss/python/langgraph/interrupts)
+show the production pattern missing from our Phase C happy path: persisted
+checkpoints are not sufficient if replay repeats non-idempotent side effects.
+Operations that may run again need stable IDs and idempotent writes.
+
+[Temporal's architecture](https://github.com/temporalio/temporal/blob/main/docs/architecture/README.md)
+uses an append-only event history, deterministic replay and idempotent
+activities to recover long-lived workflows. Memory Engine does not need a
+Temporal dependency or a general workflow runtime, but its small local
+reflection/review operations need the same narrow principle: write intent
+before side effects and resume the same durable operation after a crash.
+
+[Mem0's memory implementation](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py)
+demonstrates the practical pattern of presenting relevant existing memories
+to an LLM before deciding whether new information should add, update or remove
+memory. We adopt the comparison-before-write principle, not an unrestricted
+LLM memory editor: the model proposes a typed action and Rust validates it.
+
+The owner then identified a limitation in the flat "find the same candidate"
+framing. "Interest in colonizing Mars", "interest in colonizing other
+planets", and "interest in space" are not necessarily duplicates. They are
+claims at different levels of generalization and may deserve different support
+strengths. Later independent evidence can strengthen a broader claim without
+changing the narrower one.
+
+Accepted conclusion: after v0.5 integrity closure, reflection evolves toward a
+reviewable hypothesis graph. Validated MemoryUnits attach through explicit
+evidence links; broader hypotheses receive attenuated support while preserving
+the original source identity; relations distinguish generalization,
+specialization, possible equivalence and contradiction. Confidence remains an
+explainable support score, not a claimed probability of truth.
+
+User denial is treated as contradicting evidence and a reason to reconsider
+scope, time or wording, not as permission to erase history. A future
+clarification opportunity may be surfaced to the conversational agent only
+when the topic naturally returns and core-owned relevance/cooldown/budget
+rules allow it.
+
+This research does **not** justify adding a permanent third agent, a fourth
+memory layer, automatic Core promotion, cloud vectors, or full LangGraph /
+Temporal dependencies. The accepted implementation authority is
+[Reflective Belief System](../planning/reflective-belief-system.md).
 
 ### Finding 4 (structural risk, surfaced by re-reading the formula, not from the external source)
 

@@ -60,6 +60,7 @@ DEFAULT_TOKEN_PRESSURE_RATIO = 0.80
 DEFAULT_IDLE_SLEEP_HOUR = 4
 DEFAULT_IDLE_SLEEP_MIN_SECONDS = 1800
 DEV_SLEEP_NOTICES_ENV = "MEMORY_BOT_DEV_SLEEP_NOTICES"
+AUTO_REFLECTION_ENV = "MEMORY_BOT_AUTO_REFLECTION"
 RECENT_CONTEXT_LIMIT = 40
 SESSION_TRACE_EVENT_LIMIT = 120
 
@@ -1158,6 +1159,15 @@ def complete_sleep_result(
         llm_config,
         sleep_run.get("session_id") or updated.get("source_session_id") or "",
     )
+    completed_session_id = (
+        sleep_run.get("session_id") or updated.get("source_session_id") or ""
+    )
+    reflection_summary = run_automatic_reflection_after_sleep(
+        engine,
+        gemini,
+        llm_config,
+        completed_session_id,
+    )
     compact_tokens = estimate_tokens(clean_string(updated.get("compact_memory")))
     log_sleep_compression_metrics(engine, sleep_run, updated)
     log_line(
@@ -1168,6 +1178,7 @@ def complete_sleep_result(
         f"fidelity={format_fidelity_summary_for_log(fidelity_summary)} "
         f"embeddings={format_embedding_summary_for_log(embedding_summary)} "
         f"repairs={format_memory_unit_repair_summary_for_log(repair_summary)} "
+        f"reflection={format_automatic_reflection_summary(reflection_summary)} "
         f"compact_tokens={compact_tokens}"
     )
     return (
@@ -1182,6 +1193,7 @@ def complete_sleep_result(
         f"Fidelity: {format_fidelity_summary_for_user(fidelity_summary)}\n"
         f"Embeddings: {format_embedding_summary_for_user(embedding_summary)}\n"
         f"Memory unit repairs: {format_memory_unit_repair_summary_for_user(repair_summary)}\n"
+        f"Reflection: {format_automatic_reflection_summary(reflection_summary)}\n"
         f"Gist: {updated['gist']}"
     )
 
@@ -1365,6 +1377,95 @@ def run_reflection_analysis(
         "start": start,
         "result": result,
     }
+
+
+def run_automatic_reflection_after_sleep(
+    engine: memory_engine.MemoryEngine,
+    gemini: GeminiClient,
+    llm_config: HostLlmConfig,
+    session_id: str,
+) -> dict[str, Any]:
+    if not automatic_reflection_enabled() or not session_id:
+        return {"enabled": False, "reason": "disabled", "candidates": 0}
+
+    try:
+        automatic = json.loads(
+            engine.begin_reflection_if_due(
+                session_id,
+                core_scope(session_id),
+                "after_sleep",
+            )
+        )
+        status = automatic.get("status", {})
+        start = automatic.get("reflection")
+        summary = {
+            "enabled": True,
+            "reason": clean_string(status.get("reason")) or "unknown",
+            "eligible_units": int_or_zero(status.get("eligible_memory_unit_count")),
+            "source_sessions": len(status.get("source_session_ids") or []),
+            "salience": float(status.get("accumulated_salience") or 0.0),
+            "task_id": None,
+            "new_units": 0,
+            "related_units": 0,
+            "existing_candidates": 0,
+            "candidates": 0,
+            "reinforced_candidates": 0,
+            "no_insight_reason": None,
+        }
+        if not isinstance(start, dict):
+            return summary
+
+        task_id = clean_string(start.get("pending_task", {}).get("task_id"))
+        summary["task_id"] = task_id or None
+        summary["new_units"] = int_or_zero(start.get("new_memory_unit_count"))
+        summary["related_units"] = int_or_zero(start.get("related_memory_unit_count"))
+        summary["existing_candidates"] = int_or_zero(
+            start.get("existing_candidate_count")
+        )
+        response = execute_llm_request(start["request"], gemini, llm_config)
+        result = json.loads(
+            engine.submit_reflection_response(
+                task_id,
+                json.dumps(response, ensure_ascii=False),
+            )
+        )
+        summary["candidates"] = len(result.get("candidates", []))
+        summary["reinforced_candidates"] = len(
+            result.get("reinforced_candidates", [])
+        )
+        no_insight = result.get("no_insight")
+        if isinstance(no_insight, dict):
+            summary["no_insight_reason"] = (
+                clean_string(no_insight.get("reason")) or None
+            )
+        return summary
+    except Exception as err:
+        log_exception("automatic reflection after sleep failed", err)
+        return {
+            "enabled": True,
+            "reason": "failed",
+            "candidates": 0,
+            "error": type(err).__name__,
+        }
+
+
+def format_automatic_reflection_summary(summary: dict[str, Any]) -> str:
+    reason = clean_string(summary.get("reason")) or "unknown"
+    if not summary.get("enabled"):
+        return reason
+    candidates = int_or_zero(summary.get("candidates"))
+    eligible = int_or_zero(summary.get("eligible_units"))
+    sessions = int_or_zero(summary.get("source_sessions"))
+    new_units = int_or_zero(summary.get("new_units"))
+    related = int_or_zero(summary.get("related_units"))
+    existing = int_or_zero(summary.get("existing_candidates"))
+    reinforced = int_or_zero(summary.get("reinforced_candidates"))
+    no_insight = clean_string(summary.get("no_insight_reason")) or "none"
+    return (
+        f"{reason}, sessions={sessions}, eligible={eligible}, new={new_units}, "
+        f"related={related}, existing={existing}, candidates={candidates}, "
+        f"reinforced={reinforced}, no_insight={no_insight}"
+    )
 
 
 def run_forget_review(
@@ -2243,6 +2344,15 @@ def read_idle_sleep_min_seconds() -> int:
 
 def sleep_notices_enabled() -> bool:
     return os.environ.get(DEV_SLEEP_NOTICES_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def automatic_reflection_enabled() -> bool:
+    return os.environ.get(AUTO_REFLECTION_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def send_sleep_notice(

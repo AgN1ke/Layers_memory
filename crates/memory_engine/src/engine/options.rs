@@ -7,6 +7,7 @@ pub struct EngineOptions {
     pub recall: RecallStage1Config,
     pub context: ContextPackageConfig,
     pub fidelity: FidelityConfig,
+    pub reflection: ReflectionConfig,
     pub forgetting: ForgetConfig,
     pub vectors: VectorConfig,
 }
@@ -81,6 +82,28 @@ pub struct FidelityConfig {
     pub auto_validate_after_sleep: bool,
     pub auto_validate_weight_threshold: f64,
     pub auto_validate_tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReflectionConfig {
+    /// Sum of new validated MemoryUnit weights that makes reflection due.
+    pub salience_threshold: f64,
+    /// A single memory at or above this weight may make reflection due.
+    pub critical_unit_weight: f64,
+    /// Slow accumulation may be reflected at a sleep/maintenance opportunity.
+    pub max_interval_days: f64,
+    /// Minimum new validated units required for the interval safety net.
+    pub scheduled_min_units: usize,
+    /// Maximum number of new units included in one automatic reflection pass.
+    pub max_trigger_units: usize,
+    /// Maximum already-reflected units structurally related to the trigger.
+    pub max_related_units: usize,
+    /// Minimum structural relation score required to add older history.
+    pub min_related_score: usize,
+    /// Maximum in-scope draft/ready candidates shown for duplicate prevention.
+    pub max_existing_candidates: usize,
+    pub prompt_id: String,
+    pub prompt_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +195,23 @@ impl Default for FidelityConfig {
             .into_iter()
             .map(str::to_string)
             .collect(),
+        }
+    }
+}
+
+impl Default for ReflectionConfig {
+    fn default() -> Self {
+        Self {
+            salience_threshold: 2.5,
+            critical_unit_weight: 0.95,
+            max_interval_days: 7.0,
+            scheduled_min_units: 2,
+            max_trigger_units: 40,
+            max_related_units: 20,
+            min_related_score: 2,
+            max_existing_candidates: 20,
+            prompt_id: "reflection_analyze".to_string(),
+            prompt_version: 3,
         }
     }
 }

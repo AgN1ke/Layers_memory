@@ -38,7 +38,13 @@ sleep_result = json.loads(engine.sleep(session_id))
 updated = json.loads(engine.resume_sleep_compression(task_id, json.dumps(llm_result)))
 recall_result = json.loads(engine.recall(json.dumps(query_dict)))
 pending = json.loads(engine.pending_tasks())
+recovered_operations = engine.recover_pending_memory_operations()
 ```
+
+`pending_tasks()` already performs reflection-operation recovery before it
+returns host work. The explicit recovery method is available for startup
+diagnostics and returns only the number of `started` journal operations it
+completed; it does not call a provider.
 
 Stage 2 recall tuning is optional and remains Rust-core policy:
 
@@ -49,6 +55,14 @@ engine = memory_engine.MemoryEngine(
     stage2_candidate_limit=40,
     stage2_vector_weight=0.5,
     associative_memory_min_similarity=0.47,
+    reflection_salience_threshold=2.5,
+    reflection_critical_unit_weight=0.95,
+    reflection_max_interval_days=7.0,
+    reflection_scheduled_min_units=2,
+    reflection_max_trigger_units=40,
+    reflection_max_related_units=20,
+    reflection_min_related_score=2,
+    reflection_max_existing_candidates=20,
 )
 ```
 
@@ -67,6 +81,39 @@ forced into the prompt.
 Sleep is an explicit host decision in v0.1. A host calls `engine.sleep(session_id)`
 manually, from token-budget pressure, or from an idle schedule, then executes the
 returned tasks through its own LLM provider.
+
+Autonomous reflection is also an explicit host execution opportunity while
+eligibility remains Rust-core policy:
+
+```python
+state = json.loads(engine.bind_reflection_session(session_id, core_scope))
+status = json.loads(
+    engine.reflection_status(session_id, core_scope, "after_sleep")
+)
+automatic = json.loads(
+    engine.begin_reflection_if_due(session_id, core_scope, "after_sleep")
+)
+if automatic.get("reflection"):
+    request = automatic["reflection"]["request"]
+    # Execute request through the host's reasoning-model mapping, then call
+    # submit_reflection_response as with manual reflection.
+```
+
+The method may omit `reflection`; that is the normal core abstention path.
+`scheduled_maintenance` is the second accepted opportunity value. The
+adapter does not sum memory weights or apply a second relevance rule. Calling
+`begin_reflection_if_due` with the same explicit `core_scope` across several
+sessions durably binds those sessions to one reflection personality scope.
+`bind_reflection_session` performs the same membership update without trigger
+evaluation or an LLM task and is suitable for session lifecycle/backfill.
+Returned task inputs distinguish new `trigger` units from bounded
+`related_history` and include bounded draft/ready candidates of that scope.
+New tasks expect `reflection_actions_result.v1`. Hosts normally pass the LLM
+response through `submit_reflection_response`; deterministic executors may call
+`resume_reflection_actions`. Typed outcomes create a candidate, reinforce one
+with new evidence, propose a reviewable Core challenge, or return structured
+no-insight. The legacy `resume_reflection_analysis` method remains available
+for saved `reflection_result.v1` work.
 
 All payloads follow the JSON contracts in `wiki/pages/foundation/contracts.md` at the
 repository root.
