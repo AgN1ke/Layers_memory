@@ -47,8 +47,8 @@ crate/host README files stay outside the wiki.
   identity/ordered-turn reference, active S2 transactional foundation, and
   planned PostgreSQL, durable worker, migration and launch acceptance phases.
 - [Storage v2 Work-Unit Inventory](pages/planning/storage-v2-work-unit-inventory.md)
-  - complete audit of current storage call chains, implemented work-unit and
-    atomic-ingest reference, logical commit/lost-ack fault proof, remaining
+  - complete audit of current storage call chains, externally accepted S2.A
+    atomic-ingest logical reference, commit/lost-ack fault proof, remaining
     migration waves and S2 exit gate.
 - [Audit 2026-06-10](pages/planning/audit-2026-06-10.md) - post-v0.2 audit,
   cleanup queue, risks, and resolved findings.

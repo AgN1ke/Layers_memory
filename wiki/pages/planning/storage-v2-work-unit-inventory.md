@@ -103,16 +103,17 @@ does not begin until S2’s domain migration gate closes.
 
 ## Migration sequence from here
 
-### S2.A — Foundation and ingest (implemented, acceptance pending)
+### S2.A — Foundation and ingest (logical reference accepted; host adapter pending)
 
 The code boundary and in-memory reference exist. Ten deterministic tests cover
 all logical pre-publish edges, automatic receipt reconciliation after a lost
 commit acknowledgement, idempotent and conflicting replay, frozen-input tamper, concurrent same-session ingest,
 optimistic rollback, operation-targeted failpoints, invalid-edge cleanup,
 versioned serialization and vault isolation. An external source-level
-acceptance independently passed the original foundation claims. Before this
-subphase is called host-ready, the built adapter that will actually call Storage
-v2 must still verify the same public serialization and retry behavior.
+acceptance of `af932a4` independently inspected and passed these assertions.
+This closes the library-level logical reference gate. Before this subphase is
+called host-ready, the built adapter that will actually call Storage v2 must
+still verify the same public serialization and retry behavior.
 
 ### S2.B — Correctness state and small mutations
 

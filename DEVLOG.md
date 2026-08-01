@@ -1,5 +1,19 @@
 # DEVLOG
 
+## Запис 161 — 2026-08-01 — Зовнішній PASS закрив S2.A logical reference gate
+
+Зовнішня перевірка follow-up коміту `af932a4` прочитала assertions, а не лише
+запустила тести. Підтверджено окремо чотири pre-publish edges, automatic receipt
+reconciliation після `AfterPublishBeforeAck`, operation-addressed failpoint і
+безпечне споживання недосяжного `AfterMutation(3)`. Усі десять S2 tests,
+workspace regression і clippy пройшли; живий Chibigochi path не чіпався.
+
+Цим закрито S2.A як library-level logical conformance reference. Це не означає
+host-ready: Python/Godot/server adapter ще не викликає Storage v2. Це також не
+закриває S2 і не переносить фізичні crash/WAL/network guarantees із S3.
+Наступний кодовий крок за інвентарем — S2.B: correctness-affecting recall state,
+Core mutations та task/checkpoint transitions.
+
 ## Запис 160 — 2026-08-01 — Fault proof розширено до lost acknowledgement
 
 **Що виявило зовнішнє приймання `04b0457`:**

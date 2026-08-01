@@ -476,14 +476,16 @@ core як централізований сервіс для тисяч грав
   Compatibility adapter і решта flow ще відкриті. — 2026-08-01.
 - [ ] Зробити correctness-critical state durable; replica-local telemetry не
   може неявно змінювати recall/reflection behavior.
-- [~] Ingest пройшов deterministic fault/concurrency suite: before apply,
+- [x] S2.A ingest logical-reference gate пройшов deterministic
+  fault/concurrency suite: before apply,
   після кожної з двох mutations, receipt-before-publish,
   publish-before-ack із automatic reconciliation через receipt,
-  replay/conflicting replay,
-  same-session contention, multi-record rollback і cross-vault denial. Це
-  logical in-memory proof, не physical crash test. Sleep, reflection/review,
-  forgetting, graph migration і tasks ще мають пройти той самий gate; provider
-  calls лишаються поза transactions.
+  replay/conflicting replay, same-session contention, multi-record rollback і
+  cross-vault denial. Follow-up `af932a4` пройшов зовнішню source-level
+  перевірку всіх assertions. Це logical in-memory proof, не host-adapter або
+  physical crash test. — 2026-08-01.
+- [ ] Sleep, reflection/review, forgetting, graph migration і tasks мають
+  пройти той самий work-unit gate; provider calls лишаються поза transactions.
 
 ### S3 — PostgreSQLVaultStorage + pgvector
 

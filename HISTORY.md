@@ -95,6 +95,14 @@ existing public `MemoryEngineError` enum was deliberately left unchanged. This
 is additive work for a future pre-1.0 minor release. Package versions remain
 unchanged until adapter and release gates pass.
 
+**External acceptance:**
+The `af932a4` follow-up passed source-level review of all ten assertions: four
+distinct pre-publish rollback edges, automatic committed-receipt reconciliation
+after a lost acknowledgement, operation-targeted fault delivery, invalid-edge
+cleanup, replay, concurrency and isolation. This closes the S2.A logical
+reference gate only. No Storage v2 host adapter or physical durability claim is
+included.
+
 ## 2026-08-01 — Hypothesis graph Phase 2 passes a non-degenerate host-path fixture
 
 Context. The first Chibigochi storage-copy migration contained no legacy

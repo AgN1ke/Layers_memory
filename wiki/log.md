@@ -8,6 +8,18 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] acceptance | S2.A logical reference passes external review
+
+Recorded the independent source-level PASS for follow-up `af932a4`. The review
+confirmed the four distinct pre-publish rollback phases, automatic receipt
+reconciliation after publish-before-ack, operation-targeted fault delivery and
+safe cleanup of an unreachable mutation edge, alongside the complete ten-test
+suite and unchanged legacy adapters.
+
+The roadmap and work-unit inventory now close only the S2.A library reference
+gate. Host-adapter conformance, the remaining S2 domain transitions and S3
+physical PostgreSQL/process/network fault testing stay explicitly open.
+
 ## [2026-08-01] correction | Storage v2 fault claim matches its evidence
 
 Recorded the external `04b0457` acceptance as PASS and preserved its useful
