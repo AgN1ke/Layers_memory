@@ -47,6 +47,10 @@ crate/host README files stay outside the wiki.
 
 ## Releases
 
+- [v0.6 Hypothesis Graph Storage Acceptance](pages/releases/v0.6-hypothesis-graph-storage-acceptance.md)
+  - Chibigochi storage-copy migration, exact-scope provenance, idempotence,
+    compatibility, recovery, privacy, and product-regression gates for the
+    Phase 2 graph foundation.
 - [v0.1 Acceptance](pages/releases/v0.1-acceptance.md) - acceptance criteria for
   the first usable memory foundation.
 - [v0.2 Acceptance](pages/releases/v0.2-acceptance.md) - acceptance criteria for

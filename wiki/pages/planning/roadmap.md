@@ -506,8 +506,9 @@ Archive і Core, не четвертий prompt-visible memory layer.
   contradiction, validity і evidence-directness fields не стираються під час
   legacy update. Cross-scope relations fail closed. — 2026-08-01.
 - [ ] Прогнати journaled migration та scope export на копії живого Chibigochi
-  storage; звірити counts, unresolved IDs і provenance вручну. Це acceptance
-  Phase 2, а не передумова для написання її детермінованого коду.
+  storage; звірити counts, unresolved IDs і provenance вручну за
+  [v0.6 Hypothesis Graph Storage Acceptance](../releases/v0.6-hypothesis-graph-storage-acceptance.md).
+  Це acceptance Phase 2, а не передумова для написання її детермінованого коду.
 - [ ] Trigger-related candidate subgraph замість recency-only останніх N:
   structural baseline плюс optional local-vector enrichment у глибокому шарі;
   non-vector fallback повний, vectors не визначають scope або truth.

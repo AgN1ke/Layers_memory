@@ -8,6 +8,19 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] acceptance | Chibigochi graph-storage migration gate
+
+Added the v0.6 Phase 2 acceptance procedure for the implemented hypothesis
+graph storage foundation. The procedure runs migration only on a stopped,
+complete copy of Chibigochi owner storage; audits every legacy candidate and
+MemoryUnit evidence edge; checks exact-scope export, idempotence, compatibility
+projection, deterministic restart recovery, privacy and absence from the chat
+prompt.
+
+The gate deliberately does not test Phase 3 semantic hierarchy quality and
+does not authorize migration of the live source storage, a version bump or a
+release tag. The roadmap now links directly to this acceptance authority.
+
 ## [2026-08-01] architecture | Hypothesis graph Phase 2 storage foundation
 
 Updated strategy-facing project knowledge after implementing the first v0.6

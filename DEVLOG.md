@@ -1,5 +1,33 @@
 # DEVLOG
 
+## Запис 154 — 2026-08-01 — Приймання графового сховища відділено від якості роздумів
+
+**Навіщо окреме ТЗ:**
+Після коміту `c91b002` deterministic tests доводять контракти на fixtures, але
+не доводять, що legacy candidates у реальній памʼяті Chibigochi мають повну й
+читабельну provenance. Водночас тестувати Mars → planets → space ще зарано:
+Phase 2 лише дає носій для цих рівнів, а Phase 3 ще не створює їх агентно.
+
+**Що зафіксовано:**
+- створено `wiki/pages/releases/v0.6-hypothesis-graph-storage-acceptance.md`;
+- перший прогін міграції дозволено лише на повній копії storage, зробленій при
+  зупиненому Chibigochi; live source не є тестовим полігоном;
+- acceptance звіряє кожний legacy candidate, один evidence edge на distinct
+  MemoryUnit, resolved/unresolved provenance, нуль вигаданих relations,
+  exact-scope export та незмінність legacy hashes;
+- повторний прогін доводить idempotence, а наявний `engine_hypothesis` suite —
+  recovery після обриву, projection fallback і cross-scope rejection;
+- окремий Chibigochi smoke перевіряє лише відсутність регресії та graph leakage
+  у prompt; стиль відповіді й hierarchical reasoning не підміняють storage
+  gate;
+- PASS не дозволяє автоматично мігрувати source storage, піднімати версію або
+  ставити tag.
+
+**Наступний крок:**
+Claude виконує ТЗ без hotfix-ів у тому самому прогоні й повертає два окремі
+вердикти: implementation та product regression. Лише після evidence-backed
+PASS закривається Phase 2 live-copy gate і планується Phase 3 behavior.
+
 ## Запис 153 — 2026-08-01 — Плоскі candidates отримали графове сховище без зміни поведінки
 
 **Контекст:**
