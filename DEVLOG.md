@@ -1,5 +1,54 @@
 # DEVLOG
 
+## Запис 166 — 2026-08-02 — Storage v2 Sleep став завершуваним durable workflow
+
+Наступний крок після information-flow audit реалізовано як один state machine,
+а не як три незалежні wrappers над FileStorage. `sleep_start` тепер створює
+сьому атомарну mutation — `sleep_workflow_input.v1`. Це єдиний durable власник
+повної приватної проєкції вибраних events, frozen policy та digest preliminary
+Archive. PendingTasks, persisted LLM requests, mutable SleepRun і immutable
+operation results тримають лише `sleep_input_reference.v1`; повний prompt
+відновлюється у памʼяті перед передачею зовнішньому provider worker.
+
+Додано versioned transactional `submit`, `finalize` і `cancel`. Submit приймає
+provider responses поза транзакцією, freeze-ить digest поточного run, повторно
+звіряє Session reservation, Archive, tasks, input reference і topology
+requests, а потім одним commit оновлює дві tasks, SleepRun та exact replay
+result. Consolidator request ID і task attempts детерміновані, тому optimistic
+retry не породжує іншу історію. Read-only recovery API відновлює наступний
+provider batch лише з durable run та immutable input.
+
+Finalize є єдиним переходом, який робить Archive Complete. Він fail-closed
+перевіряє MemoryUnit provenance проти frozen events, детерміновано створює
+окремі canonical MemoryUnit records, завершує обидві tasks і run, додає тільки
+зарезервовані source IDs у Session coverage та очищає active claim — усе одним
+work unit. Turn, прийнятий після початку Sleep, лишається unarchived і входить
+у наступний Sleep. Cancel переводить preliminary Archive у Superseded,
+скасовує tasks/run і очищає reservation, але не додає coverage, тому source
+events не зникають.
+
+StoredEvent у transactional ingest отримав server-assigned
+`admission_sequence`. Result тепер читається з фактично committed event record,
+тому replay повертає ту саму послідовність, а два конкурентні ingest отримують
+різні 1/2 без залежності від однакового `received_at`. Sleep використовує цю
+послідовність як первинний порядок і лишає старий receive-time/event-ID fallback
+для FileStorage та legacy records.
+
+Вхід і responses мають явні serialized limits: 2 MiB на immutable Sleep input,
+2 MiB на один submit batch і максимум 256 MemoryUnits на finalize. Усі межі
+відмови submit/finalize/cancel, lost acknowledgement, replay, stale worker,
+паралельний submit, rewrite input/archive/task, late live turn, provenance,
+vault isolation та payload limits перевіряються focused suite з 25 тестів.
+Повний workspace і clippy запускаються повторно перед commit.
+
+Це завершує transactional Sleep lifecycle reference, але не весь S2.C:
+server-side Core bridge/derived follow-up, fidelity та forgetting ще мають
+пройти work-unit gate. Python/Godot adapters навмисно не перемикаються, а
+PostgreSQL/WAL/network/multi-process доказ лишається S3.
+`transactional_sleep_post_finalize_state.v1` позначає ці три гілки як pending,
+щоб порожні масиви compatibility `SleepOutcome` не означали неправдиве
+«перевірено — роботи немає».
+
 ## Запис 165 — 2026-08-02 — Наскрізний потік памʼяті отримав одну семантику
 
 Після аудиту я не став латати окремо recall, Sleep чи Godot. Пройдено весь

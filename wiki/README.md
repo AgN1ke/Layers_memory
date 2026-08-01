@@ -70,12 +70,14 @@ durable workers, portable export/restore and whole-turn load/isolation gates.
 This architecture is accepted. S1 reference contracts now cover fail-closed
 vault identity, idempotent ordered turns and a local restart/isolation harness.
 Storage v2 has an externally accepted logical reference for ingest, Core and
-committed-view Stage 1 recall. Its first S2.C durable-workflow slice now starts
-Sleep atomically with one Session claim and immutable replay, while preserving
-the distinction between preliminary work and Complete archive coverage;
-internal acceptance is still pending. Sleep continuation/finalization,
-fidelity, forgetting, reflection/vector workflows, PostgreSQL, the
-authenticated game API and production-scale acceptance remain open.
+committed-view Stage 1 recall. Its S2.C Sleep reference now covers start,
+provider-result submit, restart recovery, finalize and cancel as one durable
+workflow. One bounded immutable input owns private source events; only finalize
+publishes canonical MemoryUnits and Complete coverage, while cancel releases
+the sources unchanged. External acceptance is pending. Post-finalize
+Core/derived routing, fidelity, forgetting, reflection/vector workflows,
+PostgreSQL, the authenticated game API and production-scale acceptance remain
+open.
 
 ## How To Read The Wiki
 

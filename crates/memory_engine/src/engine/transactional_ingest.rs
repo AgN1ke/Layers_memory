@@ -109,21 +109,17 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
             .options
             .event_scoring
             .score_ingest_event(&request.event);
-        let stored_event = StoredEvent::from_ingest(
+        let stored_event_template = StoredEvent::from_ingest(
             request.event.clone(),
             event_id,
             request.received_at.clone(),
             initial_weight,
             weight_reason,
         );
-        stored_event.validate()?;
-        let ingest = IngestResult {
-            schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
-            stored_event: stored_event.clone(),
-        };
-        let result_digest = transactional_support::serializable_digest(&ingest)?;
-        let session_key = RecordKey::new(SESSION_COLLECTION, stored_event.session_id.clone())?;
-        let event_key = RecordKey::new(EVENT_COLLECTION, stored_event.event_id.clone())?;
+        stored_event_template.validate()?;
+        let session_key =
+            RecordKey::new(SESSION_COLLECTION, stored_event_template.session_id.clone())?;
+        let event_key = RecordKey::new(EVENT_COLLECTION, stored_event_template.event_id.clone())?;
         let host_id = request.host_id.clone();
         let committed_at = request.received_at.clone();
         let intent = request.work_unit;
@@ -141,7 +137,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                         record.validate()?;
                         let metadata: SessionMetadata = serde_json::from_value(record.payload)?;
                         metadata.validate()?;
-                        if metadata.session_id != stored_event.session_id {
+                        if metadata.session_id != stored_event_template.session_id {
                             return Err(MemoryEngineError::Storage(
                                 "session record key does not match payload session_id".to_string(),
                             )
@@ -155,13 +151,13 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                             .into());
                         }
                         if metadata.effective_personality_scope_id()
-                            != stored_event.effective_personality_scope_id()
+                            != stored_event_template.effective_personality_scope_id()
                         {
                             return Err(MemoryEngineError::Validation(format!(
                                 "session {} belongs to personality scope {}, not {}",
                                 metadata.session_id,
                                 metadata.effective_personality_scope_id(),
-                                stored_event.effective_personality_scope_id()
+                                stored_event_template.effective_personality_scope_id()
                             ))
                             .into());
                         }
@@ -170,16 +166,18 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                     None => (
                         SessionMetadata {
                             schema_version: SESSION_SCHEMA_VERSION.to_string(),
-                            session_id: stored_event.session_id.clone(),
-                            personality_scope_id: stored_event.personality_scope_id.clone(),
+                            session_id: stored_event_template.session_id.clone(),
+                            personality_scope_id: stored_event_template
+                                .personality_scope_id
+                                .clone(),
                             host_id: host_id.clone(),
                             status: SessionStatus::Active,
-                            created_at: stored_event.received_at.clone(),
-                            updated_at: stored_event.received_at.clone(),
+                            created_at: stored_event_template.received_at.clone(),
+                            updated_at: stored_event_template.received_at.clone(),
                             closed_at: None,
                             event_count: 0,
                             summary: None,
-                            active_theme: stored_event.theme.clone(),
+                            active_theme: stored_event_template.theme.clone(),
                             tags: Vec::new(),
                             archived_to: Vec::new(),
                             archived_event_ids: Vec::new(),
@@ -192,19 +190,28 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                     ),
                 };
 
-                metadata.event_count = metadata.event_count.checked_add(1).ok_or_else(|| {
+                let admission_sequence = metadata.event_count.checked_add(1).ok_or_else(|| {
                     MemoryEngineError::Storage("session event_count overflow".to_string())
                 })?;
-                metadata.updated_at = stored_event.received_at.clone();
+                metadata.event_count = admission_sequence;
+                metadata.updated_at = stored_event_template.received_at.clone();
                 if metadata.active_theme.is_none() {
-                    metadata.active_theme = stored_event.theme.clone();
+                    metadata.active_theme = stored_event_template.theme.clone();
                 }
-                for tag in &stored_event.tags {
+                for tag in &stored_event_template.tags {
                     if !metadata.tags.contains(tag) {
                         metadata.tags.push(tag.clone());
                     }
                 }
                 metadata.validate()?;
+                let mut stored_event = stored_event_template.clone();
+                stored_event.admission_sequence = Some(admission_sequence);
+                stored_event.validate()?;
+                let ingest = IngestResult {
+                    schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
+                    stored_event: stored_event.clone(),
+                };
+                let result_digest = transactional_support::serializable_digest(&ingest)?;
 
                 work_unit.put(
                     event_key.clone(),
@@ -221,15 +228,47 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                 Ok(WorkUnitCommit {
                     committed_at: committed_at.clone(),
                     result_reference: result_reference.clone(),
-                    result_digest: result_digest.clone(),
+                    result_digest,
                 })
             },
         )
         .map_err(MemoryEngineError::from)?;
 
-        if receipt.result_reference != result_reference || receipt.result_digest != result_digest {
+        if receipt.result_reference != result_reference {
             return Err(MemoryEngineError::Storage(
                 "committed ingest receipt does not match deterministic result".to_string(),
+            ));
+        }
+        let event_record = self
+            .storage
+            .read_record(context, &event_key)
+            .map_err(MemoryEngineError::from)?
+            .ok_or_else(|| {
+                MemoryEngineError::Storage(
+                    "committed transactional ingest event is missing".to_string(),
+                )
+            })?;
+        event_record.validate()?;
+        if event_record.revision != 1 {
+            return Err(MemoryEngineError::Storage(
+                "committed transactional event must remain append-only at revision 1".to_string(),
+            ));
+        }
+        if event_record.payload_schema_version != EVENT_SCHEMA_VERSION {
+            return Err(MemoryEngineError::IncompatibleSchema {
+                expected: EVENT_SCHEMA_VERSION.to_string(),
+                actual: event_record.payload_schema_version,
+            });
+        }
+        let stored_event: StoredEvent = serde_json::from_value(event_record.payload)?;
+        stored_event.validate()?;
+        let ingest = IngestResult {
+            schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
+            stored_event,
+        };
+        if receipt.result_digest != transactional_support::serializable_digest(&ingest)? {
+            return Err(MemoryEngineError::Storage(
+                "committed ingest event does not match receipt digest".to_string(),
             ));
         }
         Ok(TransactionalIngestResult {

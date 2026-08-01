@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::archive::ArchiveEntry;
+use crate::sleep::SleepInputReference;
 use crate::types::{Id, ModelRole};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,6 +70,10 @@ pub struct SleepRun {
     pub session_id: Id,
     pub archive_id: Id,
     pub sleep_task_id: Id,
+    /// Storage v2 owns the frozen event payload in one immutable record.
+    /// FileStorage runs keep this absent and retain their legacy inline input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_reference: Option<SleepInputReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_unit_task_id: Option<Id>,
     pub stage: SleepRunStage,

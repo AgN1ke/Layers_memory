@@ -550,7 +550,7 @@ Sleep — процес консолідації сесії у архівний �
 3. Виконати scoring (детермінований за подіями, або з використанням `score_event` PendingTask'у, якщо ввімкнено).
 4. Відібрати події для стискання тільки серед тих подій сесії, які ще не покриті Complete archive entry. Preliminary entry є станом незавершеного workflow, а не coverage.
 5. Якщо unarchived window достатньо великий (`partial_sleep_min_events`, default `10`), залишити найсвіжіший active tail незаархівованим. Default `active_tail_ratio` — `0.30`: при sleep старша частина переходить в archive, а найсвіжіша частина лишається в `session_recent` / `session_trace`.
-6. Серед compactable-подій застосувати `sleep.max_events` (default `80`). Якщо compactable-подій більше за `sleep.max_events`, пріоритет мають вища вага і пізніший engine-owned `received_at` при рівній вазі. Client event `timestamp` зберігає domain time, але не керує truncation або порядком prompt input. Це не замінює майбутній агентивний salience scoring, але не дозволяє раннім рівноважним повідомленням витіснити пізніші особисто значущі частини діалогу.
+6. Серед compactable-подій застосувати `sleep.max_events` (default `80`). Якщо compactable-подій більше за `sleep.max_events`, пріоритет мають вища вага і пізніший server `admission_sequence` при рівній вазі; legacy/FileStorage fallback — engine-owned `received_at`, потім event ID. Client event `timestamp` зберігає domain time, але не керує truncation або порядком prompt input. Це не замінює майбутній агентивний salience scoring, але не дозволяє раннім рівноважним повідомленням витіснити пізніші особисто значущі частини діалогу.
 7. Зберегти детермінований порядок відібраних подій і вивести з них theme,
    time range, tags та preliminary facts без другого host-side відбору.
 8. Сформувати **попередній архівний спогад** із базовим summary, повним списком тегів, фактами і вагою. Він зберігається одразу як recovery checkpoint, але не входить у звичайний recall до Complete finalize; відібрані raw events доти лишаються живою Session memory.
@@ -562,8 +562,9 @@ Sleep — процес консолідації сесії у архівний �
 
 Паралельно хост виконує `memory_unit_pass` над тим самим raw sleep input. Агент повертає змінну кількість атомарних тез із source provenance, ядро валідує `MemoryUnit` і детерміновано рендерить із них `ArchiveEntry.compact_memory`. Одна тема може дати один unit, кілька різних епізодів — кілька, рутина може не дати окремого. Legacy `compact_memory_pass` лишається compatibility API, але основний sleep-run не створює його як Stage 1 task.
 
-Хост повертає typed responses через sleep-run driver (`submit_sleep_batch`;
-legacy direct resume methods лишаються compatibility API). Ядро системи
+Хост повертає typed responses через sleep-run driver (`submit_sleep_batch` для
+FileStorage; `submit_sleep_batch_transactional` для Storage v2; legacy direct
+resume methods лишаються compatibility API). Ядро системи
 **оновлює** архівний спогад, що його створено у стадії 1: записує memory units і
 `compact_memory`, замінює базовий summary на повний наратив, додає цитати,
 оновлює вагу і теги. Сам ідентифікатор спогаду зберігається, тому будь-які
@@ -595,8 +596,11 @@ Complete finalize, а retry/resume продовжує той самий workflow
 2. викликає FileStorage `engine.sleep(session_id)` або Storage v2 `begin_sleep_run_transactional(request)`, коли один із продуктових тригерів спрацював;
 3. забирає extraction/consolidation batches із sleep-run driver і виконує
    `memory_unit_pass` та спеціалізовані requests через свій LLM-провайдер;
-4. повертає typed responses через `submit_sleep_batch`, а після готовності
-   викликає `finish_sleep_run`.
+4. повертає typed responses через відповідний submit; після готовності викликає
+   `finish_sleep_run` або `finalize_sleep_run_transactional`. Після worker
+   restart Storage v2 відновлює batch через `resume_sleep_run_transactional`;
+   abandoned workflow закривається тільки `cancel_sleep_run_transactional`, а
+   не локальним timeout-прапорцем.
 
 Прямі `resume_compact_memory_pass` / `resume_sleep_compression` лишаються
 compatibility API для старих host flows, не основною оркестрацією.
@@ -888,7 +892,11 @@ Manifest читається при кожному запуску ядра сис
 
 ## 11. Версіонування і сумісність
 
-Усі версії — semver-подібні (`MAJOR.MINOR.PATCH`), але без жорсткого semver-контракту, поки проєкт у pre-1.0.
+Library та adapter releases дотримуються єдиного SemVer-контракту
+(`MAJOR.MINOR.PATCH`) і до, і після `1.0.0`. У pre-1.0 сумісна нова
+можливість піднімає `MINOR`; навмисна несумісність теж піднімає `MINOR`, але
+обов'язково позначається як `BREAKING` і має migration note. Точні правила та
+release gate визначає [Versioning Policy](../governance/versioning.md).
 
 **engine_version** — версія Rust-крейту ядра системи. Змінюється при будь-якій зміні публічного API або поведінки.
 
@@ -998,29 +1006,34 @@ In-memory collection scan є conformance-механізмом; PostgreSQL реа
 використовувати vault-bound indexes. Stage 2 на цьому шляху буде додано разом
 із vector storage, а до того explicit embedding request fail-closed.
 
-Наступний перенесений зріз — S2.C transactional Sleep start. Він не дублює
+Наступний перенесений зріз — S2.C transactional Sleep lifecycle. Він не дублює
 FileStorage-памʼять: обидва шляхи викликають одну Stage 1 policy для active-tail
 window, selection, preliminary Archive і task projection. Server work unit
-атомарно комітить шість record mutations: Session pending reservation,
+атомарно комітить сім record mutations: Session pending reservation,
 preliminary Archive, `sleep_compression` task, `memory_unit_pass` task,
-початковий `SleepRun` та immutable operation-result snapshot. Preliminary не
+один bounded immutable workflow input, початковий `SleepRun` та immutable
+operation-result snapshot. Preliminary не
 входить у recall і не змінює `archived_to`/`archived_event_ids`; ці поля
 означають тільки Complete coverage. Окрема pending reservation потрібна, щоб
 дві репліки не почали два sleep workflow над тією самою Session.
 
 Sleep-start request freeze-ить довірений runtime `SleepStage1Config`, а всі
-створювані ID детерміновані всередині vault/operation. Receipt посилається на
-immutable snapshot початкового run, тому replay не змінюється, коли робочий
-`SleepRun` пізніше просувається. Reference backend перед active-tail partition
-відновлює append order server events за `received_at` та `event_id`; shared
-selection використовує той самий receive order для equal-weight truncation і
-фінального task input. `event_id` є лише детермінованим tie-break, а не доказом
-реального порядку однакових receive timestamps; до host cutover потрібен
-monotonic per-Session admission sequence. Full collection scan є лише
-conformance proof, а PostgreSQL path потребує session-bound index/snapshot.
-Provider call лишається поза transaction. Transactional submit,
-finalize/Complete coverage і cancel/очищення reservation — наступні зрізи
-S2.C; адаптери на цей foundation ще не перемикаються.
+створювані ID детерміновані всередині vault/operation. Raw selected events
+живуть лише у `sleep_workflow_input.v1`; tasks/run/results тримають digest
+reference і rehydrate-ять prompt тільки на worker boundary. Receipt посилається
+на immutable snapshot початкового run, тому replay не змінюється, коли робочий
+`SleepRun` пізніше просувається. Transactional ingest присвоює справжній
+per-Session `admission_sequence`; receive-time/event-ID лишається fallback для
+legacy/FileStorage.
+
+Provider call завжди поза transaction. Submit звіряє frozen run, input,
+preliminary Archive і tasks та атомарно просуває workflow. Finalize один має
+право зробити Archive Complete, створити deterministic standalone MemoryUnits,
+завершити tasks/run і додати Session coverage. Cancel переводить preliminary
+Archive у Superseded та очищає claim без coverage. Turn, прийнятий після start,
+не губиться. Full collection scan є лише conformance proof, а PostgreSQL path
+потребує session-bound index/snapshot. Post-finalize Core/derived work,
+fidelity/forgetting та адаптери ще не перенесені.
 
 S1 уже матеріалізує цю межу як Rust contracts, не як network service.
 `VaultContext` виникає лише з matching authenticated principal та active

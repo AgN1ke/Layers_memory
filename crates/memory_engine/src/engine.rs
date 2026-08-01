@@ -55,9 +55,11 @@ use crate::reflection::{
     ReflectionState, ReflectionTriggerReason, ReflectionTriggerStatus,
 };
 use crate::session::SessionRecord;
-use crate::sleep::{MemoryUnitPassResult, SleepCompressionResult, SleepInputEvent};
+use crate::sleep::{
+    MemoryUnitPassResult, SleepCompressionResult, SleepInputEvent, SleepInputReference,
+};
 use crate::storage::{Storage, StorageReadWarning};
-use crate::tasks::{PendingTask, TaskState, TaskType};
+use crate::tasks::{AttemptStatus, PendingTask, TaskAttempt, TaskState, TaskType};
 use crate::types::{
     ImportanceHint, Link, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
     ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION,
@@ -127,7 +129,14 @@ pub use transactional_core::{
 };
 pub use transactional_ingest::{TransactionalIngestRequest, TransactionalIngestResult};
 pub use transactional_recall::{TransactionalRecallRequest, TransactionalRecallResult};
-pub use transactional_sleep::{TransactionalSleepStartRequest, TransactionalSleepStartResult};
+pub use transactional_sleep::{
+    SleepWorkflowInput, TransactionalSleepCancelRequest, TransactionalSleepCancelResult,
+    TransactionalSleepFinalizeRequest, TransactionalSleepFinalizeResult,
+    TransactionalSleepPostFinalizeState, TransactionalSleepStartRequest,
+    TransactionalSleepStartResult, TransactionalSleepSubmitRequest, TransactionalSleepSubmitResult,
+    MAX_SLEEP_MEMORY_UNITS_PER_RUN, MAX_SLEEP_SUBMIT_RESPONSE_BYTES,
+    MAX_SLEEP_WORKFLOW_INPUT_BYTES,
+};
 use validation::*;
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SLEEP_RUN_SCHEMA_VERSION: &str = "sleep_run.v1";

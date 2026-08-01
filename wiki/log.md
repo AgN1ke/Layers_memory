@@ -8,6 +8,22 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-02] implementation | Transactional Sleep lifecycle closes its information path
+
+Updated the architecture, contracts, information-flow plan, roadmap,
+server-runtime plan, work-unit inventory, wiki home/index, root README, HISTORY
+and DEVLOG after implementing Storage v2 Sleep submit, recovery, finalize and
+cancel. The documentation now treats Sleep as one restartable workflow: one
+bounded immutable record owns frozen private events; provider work stays
+outside transactions; finalize alone publishes canonical MemoryUnits and
+Complete coverage; cancel releases sources without hiding them.
+
+Recorded exact replay, deterministic continuation IDs, semantic dependency
+revalidation, monotonic per-Session event admission sequence and serialized
+limits. The status remains deliberately narrower than production readiness:
+external acceptance, post-finalize Core/derived routing, fidelity/forgetting,
+S2.D vectors/reflection, PostgreSQL and host cutover remain open.
+
 ## [2026-08-02] architecture | One event-to-prompt information authority
 
 Added [Information Flow Integrity](pages/planning/information-flow-integrity.md)

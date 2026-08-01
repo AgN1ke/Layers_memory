@@ -9,6 +9,37 @@ use crate::types::{
 };
 
 pub const SLEEP_INPUT_EVENT_SCHEMA_VERSION: &str = "sleep_input_event.v1";
+pub const SLEEP_INPUT_REFERENCE_SCHEMA_VERSION: &str = "sleep_input_reference.v1";
+
+/// Durable pointer used by tasks and SleepRun. The private event projection is
+/// owned by one immutable workflow-input record instead of being copied into
+/// every task and LLM request stored by the server runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SleepInputReference {
+    pub schema_version: String,
+    pub record_id: Id,
+    pub content_digest: String,
+}
+
+impl SleepInputReference {
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.schema_version != SLEEP_INPUT_REFERENCE_SCHEMA_VERSION {
+            return Err(crate::MemoryEngineError::IncompatibleSchema {
+                expected: SLEEP_INPUT_REFERENCE_SCHEMA_VERSION.to_string(),
+                actual: self.schema_version.clone(),
+            });
+        }
+        if self.record_id.trim().is_empty()
+            || !self.content_digest.starts_with("sha256:")
+            || self.content_digest.len() != "sha256:".len() + 64
+        {
+            return Err(crate::MemoryEngineError::Validation(
+                "sleep input reference requires record_id and sha256 digest".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Immutable cognitive projection of one raw event. Sleep tasks use this
 /// shared shape instead of maintaining several lossy, hand-written JSON maps.
@@ -21,6 +52,8 @@ pub struct SleepInputEvent {
     pub source: String,
     pub timestamp: Timestamp,
     pub received_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_sequence: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personality_scope_id: Option<Id>,
     pub session_id: Id,
@@ -52,6 +85,7 @@ impl From<&StoredEvent> for SleepInputEvent {
             source: event.source.clone(),
             timestamp: event.timestamp.clone(),
             received_at: event.received_at.clone(),
+            admission_sequence: event.admission_sequence,
             personality_scope_id: event.personality_scope_id.clone(),
             session_id: event.session_id.clone(),
             memory_text: event.memory_text.clone(),

@@ -75,16 +75,19 @@ foundation adds an additive vault-bound work-unit contract. Event and Session
 metadata commit together; Core upsert/patch uses exact category revisions and
 durable replay results; transactional Stage 1 recall ranks one committed
 Archive snapshot and atomically records its correctness-affecting feedback.
-Transactional sleep start now reuses the same Rust Stage 1 policy and commits
-one coherent reservation: Session `SleepPending`, a preliminary Archive, two
-durable tasks, the initial mutable `SleepRun`, and an immutable replay result.
-Provider work stays outside the transaction, the live tail follows trusted
-receive order, and only future successful finalization may mark events as
-covered by a Complete archive. These paths have optimistic retry, phantom
-protection and idempotent replay. They are still a conformance reference, not
-the production server backend: sleep submit/finalize/cancel, remaining
-workflows and vector recall, indexed PostgreSQL storage, the authenticated game
-API and durable workers are open. The phased plan and launch gates are
+Transactional Sleep now runs as one durable Storage v2 state machine. Start
+publishes the Session reservation, preliminary Archive, two tasks, mutable
+`SleepRun`, one bounded immutable input record and exact replay result. Workers
+rehydrate provider prompts outside transactions; submit atomically advances
+run/tasks, finalize alone publishes deterministic canonical MemoryUnits and
+Complete coverage, and cancel releases the same events without hiding them.
+Transactional events have a monotonic per-Session admission sequence, with the
+old receive-order rule retained for legacy/FileStorage data. These paths have
+optimistic retry, frozen semantic contracts, payload limits and idempotent
+replay. They are still a conformance reference, not the production server
+backend: post-finalize Core/derived work, fidelity/forgetting, vector recall,
+indexed PostgreSQL storage, the authenticated game API and durable workers are
+open. The phased plan and launch gates are
 documented in the
 [Server-scale Memory Runtime](wiki/pages/planning/server-scale-memory-runtime.md).
 

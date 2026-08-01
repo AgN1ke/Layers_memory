@@ -16,7 +16,7 @@
 ## Status and purpose
 
 Status: **accepted strategic plan; S1 reference contracts implemented; S2.A
-and S2.B externally accepted; S2.C Sleep-start implemented with internal
+and S2.B externally accepted; S2.C transactional Sleep lifecycle implemented with external
 acceptance pending**.
 
 This document is the implementation authority for taking Memory Engine from a
@@ -297,37 +297,35 @@ were inspected alongside workspace, clippy, documentation and adapter
 regression gates. This closes S2.B as a logical in-memory reference, not as a
 host or production backend.
 
-The first S2.C slice now implements the durable Sleep start. One work unit
-freezes the shared Stage 1 policy and selected event sources, uses
-server-controlled receive time for the active-tail boundary and equal-weight
-selection, claims the Session for exactly one active sleep, and publishes six
-mutations together: Session metadata,
-preliminary Archive, compression and MemoryUnit PendingTasks, initial SleepRun
-and immutable operation result. Replay returns the original run. The Session
-stores pending source IDs separately; a preliminary Archive does not advance
-Complete coverage or remove events from the live session. Eleven focused tests
-cover that boundary, including fail-closed incomplete coverage state,
-rejection of rewritten append-only target events, and isolation from malformed
-events in unrelated Sessions, but internal acceptance is still pending.
+The S2.C reference now implements the durable Sleep lifecycle. Start freezes
+the shared Stage 1 policy and selected event sources, claims the Session and
+publishes seven mutations together: Session metadata, preliminary Archive,
+compression and MemoryUnit PendingTasks, one immutable workflow input, initial
+SleepRun and immutable operation result. Raw private events live only in that
+input; tasks/run/results retain typed digest references. Transactional ingest
+assigns monotonic Session admission sequence, which controls active-tail and
+equal-weight ordering ahead of the legacy receive-time fallback.
 
 Storage v2 domain reads no longer require an untyped whole-collection contract.
 `SessionEvents` and `Archives` snapshot queries carry the same scope shape that
 PostgreSQL composite indexes must implement while retaining exact
 revision/membership phantom detection in the reference backend.
 
-This is only the workflow start. Provider execution remains outside the work
-unit, and transactional submit, finalize and cancel/recovery must still
-revalidate frozen inputs, advance tasks/run/archive/units together and clear the
-Session claim. Fidelity, forgetting, vector state, PostgreSQL and host adapters
-remain open; therefore neither S2 nor production readiness is claimed.
+Provider execution remains outside the work unit. Submit revalidates the
+frozen run/input/Archive/task topology and advances run/tasks with exact replay.
+Finalize alone publishes deterministic canonical MemoryUnits and Complete
+coverage; cancel clears the claim without hiding its events. Recovery can
+rehydrate the current provider batch from durable records. Inputs/responses are
+bounded and all logical mutation edges have rollback/lost-ack tests. External
+acceptance, post-finalize Core/derived work, fidelity, forgetting, vector state,
+PostgreSQL and host adapters remain open; therefore neither S2 nor production
+readiness is claimed.
 
-Two server-schema gates are explicit before S3. First, the conformance model
-currently repeats raw event prompt inputs across tasks, the mutable run and the
-immutable replay result; PostgreSQL must receive one bounded immutable input
-record plus typed references/digests, not that expanded shape. Second,
-`received_at + event_id` is deterministic for equal timestamps but is not a
-true turn order. The authenticated turn path must persist a monotonic
-per-Session admission sequence and Sleep queries must use it.
+The two former server-schema gates are closed in the logical reference: one
+bounded immutable input owns raw prompt material, and transactional events have
+monotonic per-Session admission order. S3 must map these exact contracts to
+physical rows, indexes, WAL and retention policy rather than re-expanding the
+payload or replacing sequence semantics.
 
 ### S3 — PostgreSQLVaultStorage and pgvector
 

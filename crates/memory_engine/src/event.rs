@@ -97,6 +97,10 @@ pub struct StoredEvent {
     pub schema_version: String,
     pub event_id: Id,
     pub received_at: Timestamp,
+    /// Server-assigned order inside one Session. FileStorage/legacy events may
+    /// omit it and retain append/receive-order compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_sequence: Option<u64>,
     #[serde(rename = "type")]
     pub event_type: String,
     pub source: String,
@@ -167,6 +171,11 @@ impl StoredEvent {
                 "stored event memory_text must not be empty when provided".to_string(),
             ));
         }
+        if self.admission_sequence == Some(0) {
+            return Err(MemoryEngineError::Validation(
+                "stored event admission_sequence must be at least 1".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -181,6 +190,7 @@ impl StoredEvent {
             schema_version: event.schema_version,
             event_id: event_id.into(),
             received_at: received_at.into(),
+            admission_sequence: None,
             event_type: event.event_type,
             source: event.source,
             timestamp: event.timestamp,

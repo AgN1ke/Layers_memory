@@ -26,7 +26,7 @@
 
 Документ оновлюється у двох випадках: коли пункт стає зробленим (відмітка `[x]` + дата + посилання на коміт або файл), і коли з'являється нова велика мета, яку треба зафіксувати раніше реалізації. Дрібні правки і робочий процес живуть у `DEVLOG.md`, не тут.
 
-Версія документа: 2026-08-01.
+Версія документа: 2026-08-02.
 
 ---
 
@@ -89,7 +89,8 @@ PostgreSQL/pgvector. Архітектурне S0 зафіксовано, provisi
 має числа й відкриті owner decisions, а S1 reference contracts уже реалізують
 fail-closed vault identity та ordered/idempotent turn ledger. S2.A ingest і
 S2.B Core/committed-view recall пройшли зовнішнє logical-reference приймання;
-S2.C вже має реалізований Sleep-start із внутрішнім acceptance pending.
+S2.C вже має завершений transactional Sleep lifecycle reference із зовнішнім
+acceptance pending.
 PostgreSQL, game API, workers і S7 ще не починались, а решта durable workflows
 не перенесена. Локальні/Chibigochi
 acceptance попередніх версій залишаються правдивими, але не є доказом
@@ -484,8 +485,8 @@ core як централізований сервіс для тисяч грав
   category revision, durable operation result і shared Core policy, а recall
   комітить ranking result і correctness feedback в одному view. S2.A/S2.B
   externally accepted; чинний Storage/FileStorage API не зламано. S2.C
-  Sleep-start реалізований, але continuation та compatibility adapter ще
-  відкриті. — 2026-08-01.
+  transactional Sleep lifecycle реалізований; зовнішнє приймання,
+  post-finalize cognition і compatibility adapter ще відкриті. — 2026-08-02.
 - [x] Correctness-critical recall state класифіковано й перенесено в S2.B
   reference: `recall_transactional` читає один Archive snapshot, ранжує shared
   Stage 1 policy та одним work unit зберігає selected feedback і exact result.
@@ -512,26 +513,30 @@ core як централізований сервіс для тисяч грав
   cross-vault denial. Follow-up `af932a4` пройшов зовнішню source-level
   перевірку всіх assertions. Це logical in-memory proof, не host-adapter або
   physical crash test. — 2026-08-01.
-- [~] S2.C Sleep-start реалізовано як один durable-workflow claim: server
+- [x] S2.C transactional Sleep lifecycle реалізовано як один durable workflow:
+  server
   receive-order визначає active-tail boundary і equal-weight tie-break, а
   shared Stage 1 policy вибирає source events, після чого
   Session claim, preliminary Archive, два PendingTasks, initial SleepRun та
-  immutable operation result публікуються шістьма атомарними mutations.
+  immutable input та operation result публікуються сімома атомарними mutations.
   Preliminary не означає Complete coverage; pending event IDs живуть окремо.
   Дванадцять focused tests додано, включно з fail-closed incomplete coverage,
   fail-closed rewritten-event rejection і доказом, що пошкоджена подія іншої
-  Session не блокує target Sleep; внутрішнє приймання ще не завершене. —
-  2026-08-02, `server_sleep_stage1_storage_v2.rs`.
-- [ ] Завершити S2.C: transactional sleep pass submit, finalize і
-  cancel/recovery мають revalidate frozen state, атомарно оновити
-  task/run/archive/MemoryUnit/Session та звільнити active claim; потім перенести
-  fidelity і forgetting. Provider calls лишаються поза transactions.
-- [ ] До S3 нормалізувати Sleep payload: один bounded immutable input record
-  замість повторення raw events у tasks/run/replay result; додати serialized
-  payload/work-unit limits. До host cutover додати monotonic per-Session
-  admission sequence, бо однакові `received_at` зараз мають лише deterministic
-  ID tie-break. Continuation IDs мають бути frozen/deterministic, не `new_id`
-  усередині retry closure.
+  Session не блокує target Sleep. Submit/finalize/cancel freeze current run,
+  revalidate input/Archive/task topology, мають deterministic IDs, exact replay
+  і повні logical failpoints. Лише finalize атомарно створює canonical
+  MemoryUnits та Complete coverage; cancel не приховує events. Зовнішнє
+  приймання ще не завершене. — 2026-08-02,
+  `server_sleep_stage1_storage_v2.rs`.
+- [x] Sleep payload нормалізовано у один `sleep_workflow_input.v1`; tasks/run/
+  replay results тримають typed digest reference, а provider batch
+  rehydrate-иться на worker boundary. Limits: 2 MiB input, 2 MiB submit batch,
+  256 MemoryUnits. Transactional ingest присвоює monotonic per-Session
+  `admission_sequence`, який Sleep використовує перед legacy fallback. —
+  2026-08-02.
+- [ ] Продовжити S2.C: перенести post-finalize Core/derived routing, fidelity і
+  forgetting через той самий work-unit gate. Provider calls лишаються поза
+  transactions.
 - [ ] S2.D reflection/review, hypothesis graph migration, vector state і решта
   task transitions мають пройти той самий work-unit gate.
 

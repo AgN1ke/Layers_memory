@@ -46,6 +46,53 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-02 — Server Sleep no longer stops at a durable reservation
+
+Context. Storage v2 could atomically reserve a Session and publish preliminary
+work, but it could not safely accept provider results, publish canonical
+memory, or release an abandoned claim. Raw private event projections were also
+copied into several durable records, and equal receive timestamps had no true
+server order.
+
+**What changed:**
+- `sleep_workflow_input.v1` is the sole immutable owner of frozen Sleep events,
+  policy and preliminary-Archive digest. Tasks and SleepRun use
+  `sleep_input_reference.v1`; provider batches are rehydrated only at the
+  worker boundary.
+- versioned transactional submit/finalize/cancel operations freeze request and
+  run digests, return durable replay results and revalidate Session, Archive,
+  task, run and input contracts before an atomic commit;
+- finalize deterministically publishes canonical MemoryUnits and Complete
+  Session coverage together. Cancel clears the claim without claiming coverage
+  and leaves source events eligible for another Sleep;
+- transactional StoredEvents receive a monotonic per-Session
+  `admission_sequence`; legacy/FileStorage events retain the previous fallback;
+- bounded contracts reject Sleep inputs or response batches above 2 MiB and
+  final results above 256 MemoryUnits.
+- finalize persists `transactional_sleep_post_finalize_state.v1`, so the
+  not-yet-ported Core/fidelity/embedding branches remain explicit pending work
+  rather than looking like evaluated empty results.
+
+**What is retracted:**
+- successful transactional Sleep start was not a usable server Sleep lifecycle;
+  no host should have treated a pending reservation as eventual memory without
+  a durable continuation worker.
+- `received_at + event_id` was deterministic, but it was not proof of actual
+  admission order for equal-time concurrent turns.
+
+**What is still true:**
+- provider execution remains outside storage transactions;
+- vectors remain optional derived state, and only Complete Archives with
+  canonical eligible MemoryUnits may enter prompt-facing recall;
+- Storage v2 remains an in-memory logical reference. Existing FileStorage and
+  Python/Godot host paths are unchanged and PostgreSQL production readiness is
+  not claimed.
+
+**What we are doing:**
+- externally accept the transactional Sleep lifecycle, then port the
+  post-finalize Core/derived work, fidelity and forgetting through the same
+  work-unit boundary before S2.D and PostgreSQL.
+
 ## 2026-08-02 — Memory meaning and personality scope remain intact from event to prompt
 
 Context. The end-to-end audit found several individually reasonable APIs whose

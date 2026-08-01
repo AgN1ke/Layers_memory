@@ -3,7 +3,8 @@
 ## Purpose
 
 Status: **S2 inventory complete; S2.A and S2.B externally accepted; S2.C
-Sleep-start implemented with internal acceptance pending; S2 exit gate open**.
+transactional Sleep lifecycle implemented with external acceptance pending; S2
+exit gate open**.
 
 This page is the migration ledger between the method-by-method local `Storage`
 trait and the vault-bound transactional storage required by the server runtime.
@@ -50,8 +51,8 @@ engine or another workflow orchestrator.
 | Recall usage statistics | Replica-local deltas followed by Archive read/modify/write | Correctness-affecting mutation disguised as telemetry | Either durable atomic counters or explicitly lossy metrics removed from scoring; replica-local state may not alter ranking |
 | Ingest | Event append, Session metadata and local Markdown projection | Transactional mutation | Event record and Session metadata commit together; human-readable projections are derived outside the source-of-truth commit |
 | Core upsert/patch | Core category read/modify/write | Transactional mutation | Exact revision check and one category replacement in one work unit |
-| Sleep Stage 1 | Session workflow claim, preliminary Archive, compression/unit tasks, initial SleepRun and immutable operation result | Durable workflow start | Frozen policy and selected source IDs, one active Session claim and all five workflow records commit as six atomic mutations; preliminary selection is not Complete archive coverage |
-| Sleep pass submit/finish | SleepRun, PendingTask, Archive, MemoryUnits and Session coverage | Durable workflow continuation | Provider call outside storage; each submit revalidates the run/task/input revisions and atomically advances all affected records |
+| Sleep Stage 1 | Session workflow claim, preliminary Archive, compression/unit tasks, immutable workflow input, initial SleepRun and immutable operation result | Durable workflow start | Frozen policy/source projection/Archive digest, one active Session claim and seven atomic mutations; preliminary selection is not Complete archive coverage |
+| Sleep pass submit/finish | SleepRun, PendingTask, immutable input, Archive, MemoryUnits and Session coverage | Durable workflow continuation | Implemented reference: provider call outside storage; submit revalidates frozen topology; finalize atomically publishes deterministic units and Complete coverage; cancel releases sources without coverage |
 | Fidelity review | PendingTask, MemoryUnit and Archive fidelity projection | Durable workflow | Begin commits task/input identity; submit atomically applies review and terminal task state |
 | Forgetting and remember-back | Review task, units, Archive projection and vector tombstone/rebuild intent | Durable workflow | Decision and domain state commit together; vector work remains derived and replayable |
 | Reflection analyze/apply/review | Reflection state, task, operation journal, candidates/nodes/evidence, units, archives and optional Core promotion | Durable workflow | Existing frozen intent/recovery semantics become transactional commit steps; no partial candidate/Core/review transition |
@@ -115,21 +116,20 @@ recall slices passed independent source-level acceptance at `2bdc0ae` and
 `7314833`, including concurrency, replay, vault isolation, phantom protection
 and Storage v1/adapters regression checks.
 
-S2.C has now started with transactional Sleep Stage 1. It reuses the existing
+S2.C now contains the full transactional Sleep lifecycle reference. It reuses the existing
 deterministic Stage 1 selection policy, uses server-controlled `received_at`
 for the active-tail boundary and equal-weight selection, freezes the policy and
 selected sources, and atomically commits the Session sleep claim, preliminary
 Archive, two PendingTasks, initial
-SleepRun and immutable operation result. Only one workflow may claim a Session
+SleepRun, immutable workflow input and operation result. Only one workflow may claim a Session
 at a time. The preliminary Archive reserves work but does **not** add its
 sources to Complete archive coverage; those events remain live until a future
-finalize transaction validates provider output and commits completion. Eleven
-focused tests cover selection/active-tail parity, hostile client timestamps,
-coherent replay, one-active-claim concurrency, concurrent ingest, every one of
-the six mutation edges, frozen-input tamper, operation reuse and vault
-isolation, plus fail-closed incomplete coverage state and rejection of a
-rewritten append-only event. Internal acceptance is still pending, so this is
-not an accepted S2.C slice yet.
+finalize transaction validates provider output and commits completion. The
+focused suite now covers the complete workflow, all mutation edges, lost ack,
+replay, stale/concurrent workers, immutable dependency rewrites, source
+provenance, late live turns, limits and cancellation. External acceptance is
+still pending, so this is an implemented logical reference rather than an
+accepted S2.C closure.
 
 This is a reference and conformance surface, not the production backend.
 `FileStorage` and `MemoryEngine::ingest` remain unchanged for existing local,
@@ -192,10 +192,11 @@ isolated manifest or coverage write.
 
 ### S2.C — Sleep, fidelity and forgetting
 
-**Sleep-start implementation exists; internal acceptance pending.** Its short
-begin transaction makes six changes visible together: Session workflow claim,
-preliminary Archive, compression task, MemoryUnit task, initial SleepRun and
-immutable replay result. It shares Stage 1 selection with Storage v1 and uses
+**Transactional Sleep lifecycle reference exists; external acceptance
+pending.** Its short begin transaction makes seven changes visible together:
+Session workflow claim, preliminary Archive, compression task, MemoryUnit task,
+immutable workflow input, initial SleepRun and immutable replay result. It
+shares Stage 1 selection with Storage v1 and uses
 server receive order for the active-tail partition and equal-weight truncation,
 so untrusted client timestamps cannot move new turns or win a selection tie.
 The Session keeps a separate pending-event reservation;
@@ -208,28 +209,28 @@ personality scope, receive provenance and policy fields. A typed SessionEvents
 snapshot means a malformed/revised event in another Session cannot poison the
 target workflow; a malformed target event still fails closed.
 
-Next implement transactional pass submit, finalize and cancel/recovery. Each
-continuation must revalidate the frozen workflow and record revisions, apply
-task/run/archive/MemoryUnit/Session changes as one commit, clear the active
-claim on every terminal path, and keep provider calls outside work units.
-Fidelity and forgetting follow only after that complete sleep lifecycle passes
-the same fault/retry suite. Their start and submit transitions must use the same
-durable-workflow pattern rather than adding a manifest-only checkpoint path.
+Submit, finalize and cancel/recovery are now implemented without wrapping the
+sequential Storage v1 helpers. Provider responses and current run digest are
+frozen in the operation; consolidator/attempt/MemoryUnit IDs are deterministic;
+every continuation revalidates immutable input, preliminary Archive digest,
+task contract, run topology and Session reservation. Finalize is the only path
+that writes Complete coverage; cancel marks preliminary work Superseded and
+leaves events available.
 
-Before S2.C can hand a physical schema to S3, normalize the repeated inline raw
-event inputs. The current reference copies them through two PendingTasks,
-multiple `SleepRun` requests and the immutable replay result; that is useful for
-logical conformance but not an approved database/retention shape. One bounded
-immutable sleep-input record should own the payload, while tasks/run/results
-carry typed references and digests. Also persist a monotonic per-Session
-admission sequence: `received_at + event_id` is deterministic but cannot prove
-the real order of equal-time turns.
+The repeated raw payload is normalized into one revision-1
+`sleep_workflow_input.v1`; tasks/run/results carry
+`sleep_input_reference.v1`. Provider requests are expanded ephemerally at the
+worker boundary. Input and submit payloads are capped at 2 MiB, with at most
+256 MemoryUnits per finalize. Transactional ingest assigns a monotonic
+per-Session admission sequence; receive-time/event-ID ordering remains only a
+legacy compatibility fallback.
 
-Transactional continuation must not wrap current Storage v1 helpers blindly.
-Those helpers create random request/MemoryUnit IDs and perform sequential
-writes. Submit/finalize/cancel need IDs frozen before retry (or derived from the
-operation), provider responses in the request digest, and one explicit atomic
-mutation set for every affected task/run/archive/unit/Session record.
+Next within S2.C, port post-finalize Core/derived routing, fidelity and
+forgetting through the same durable-workflow pattern rather than adding a
+manifest-only checkpoint path. Until then
+`transactional_sleep_post_finalize_state.v1` preserves these branches as
+explicit pending work instead of letting empty compatibility outcome fields
+silently terminate them.
 
 ### S2.D — Reflection, review, hypothesis migration and vectors
 
@@ -271,7 +272,6 @@ through serde defaults, but source-breaking for downstream Rust code that uses
 eventual published change as pre-1.0 minor; the implementation branch does not
 silently relabel it as a patch.
 
-The reference Sleep-start deliberately prioritizes correctness proof over
-storage density. Its repeated prompt payloads have no production-size claim;
-S2.C input normalization and explicit serialized payload/work-unit limits are
-hard gates before PostgreSQL schema acceptance.
+The reference Sleep lifecycle now has bounded normalized prompt input, but it
+still proves logical semantics rather than PostgreSQL storage density or query
+plans. Physical row/WAL/network behavior remains a hard S3 gate.

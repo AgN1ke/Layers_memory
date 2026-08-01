@@ -31,11 +31,15 @@ pub mod vector;
 
 pub use engine::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult, MemoryEngine,
-    RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result,
+    RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result, SleepWorkflowInput,
     TransactionalCorePatchRequest, TransactionalCorePatchResult, TransactionalCoreUpsertRequest,
     TransactionalCoreUpsertResult, TransactionalIngestRequest, TransactionalIngestResult,
-    TransactionalRecallRequest, TransactionalRecallResult, TransactionalSleepStartRequest,
-    TransactionalSleepStartResult,
+    TransactionalRecallRequest, TransactionalRecallResult, TransactionalSleepCancelRequest,
+    TransactionalSleepCancelResult, TransactionalSleepFinalizeRequest,
+    TransactionalSleepFinalizeResult, TransactionalSleepPostFinalizeState,
+    TransactionalSleepStartRequest, TransactionalSleepStartResult, TransactionalSleepSubmitRequest,
+    TransactionalSleepSubmitResult, MAX_SLEEP_MEMORY_UNITS_PER_RUN,
+    MAX_SLEEP_SUBMIT_RESPONSE_BYTES, MAX_SLEEP_WORKFLOW_INPUT_BYTES,
 };
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;

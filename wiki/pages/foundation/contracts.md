@@ -275,6 +275,7 @@ Markdown-файли існують для людини. Вони не замін
   "schema_version": "event.v1",
   "event_id": "event_01J00000000000000000000001",
   "received_at": "2026-05-17T16:32:12.003Z",
+  "admission_sequence": 42,
   "type": "user_message",
   "source": "telegram_user_42",
   "timestamp": "2026-05-17T16:32:11.420Z",
@@ -300,6 +301,9 @@ Markdown-файли існують для людини. Вони не замін
 
 - `event_id` - генерує ядро;
 - `received_at` - час прийому ядром;
+- `admission_sequence` - optional server-assigned monotonic order усередині
+  Session. Transactional ingest завжди задає `>= 1`; FileStorage і legacy
+  records можуть не мати поля;
 - `initial_weight` - попередня вага `0.0..1.0`;
 - `weight_reason` - коротке пояснення для debug і людського аудиту.
 
@@ -1584,11 +1588,12 @@ PendingTask - спосіб, яким ядро системи просить хо
 ```
 
 `sleep_input_event.v1` є повною frozen reasoning projection `StoredEvent`, а
-не скороченим host-specific JSON. Sleep-compression і MemoryUnit tasks одного
-workflow отримують ідентичний масив. Submit відхиляє `source_event_id`, якого
-немає у цьому масиві; ядро не виправляє чужий archive ID або provenance
-мовчки. До S3 ці повторені inline inputs мають бути нормалізовані в один
-bounded immutable record із typed references, не викидаючи жодного поля.
+не скороченим host-specific JSON; для server events вона включає також
+`admission_sequence`. FileStorage tasks зберігають цю проєкцію inline для
+сумісності. Storage v2 нормалізує її в один bounded revision-1
+`sleep_workflow_input.v1`, а обидві tasks і SleepRun містять однаковий typed
+reference. Submit/finalize відхиляють `source_event_id`, якого немає у frozen
+масиві; ядро не виправляє чужий archive ID або provenance мовчки.
 
 `outcome` є optional terminal core-owned result. Старі task-файли без нього
 лишаються валідними. Для completed `reflection_analyze` це
@@ -2229,7 +2234,14 @@ flow inventory і migration order зафіксовані у
 - `transactional_sleep_start_request.v1` /
   `transactional_sleep_start_result.v1` — атомарний старт одного sleep workflow
   для Session. Його immutable replay target має внутрішню persisted schema
-  `sleep_start_operation_result.v1`.
+  `sleep_start_operation_result.v1`;
+- `transactional_sleep_submit_request.v1` /
+  `transactional_sleep_submit_result.v1` — provider responses плюс digest
+  exact SleepRun, який worker реально виконав;
+- `transactional_sleep_finalize_request.v1` /
+  `transactional_sleep_finalize_result.v1` — єдиний Complete-coverage commit;
+- `transactional_sleep_cancel_request.v1` /
+  `transactional_sleep_cancel_result.v1` — terminal release без coverage.
 
 Core operation result зберігається атомарно окремим versioned record і
 перевіряється через receipt digest. Це дає exact replay навіть якщо category
@@ -2275,7 +2287,7 @@ frozen policy з поточними options: replay після конфігур�
 Stage 1 policy для compactable window, selection, preliminary Archive та task
 projection — server path не має другої когнітивної реалізації.
 
-Один успішний `sleep_start` комітить рівно шість mutations в одному vault-bound
+Один успішний `sleep_start` комітить рівно сім mutations в одному vault-bound
 work unit:
 
 1. Session переходить у `sleep_pending` і отримує `active_sleep_task_id` та
@@ -2284,7 +2296,8 @@ work unit:
 3. створюється `sleep_compression` PendingTask;
 4. створюється `memory_unit_pass` PendingTask;
 5. створюється початковий durable `SleepRun`;
-6. створюється immutable `sleep_start_operation_result.v1` snapshot.
+6. створюється immutable `sleep_workflow_input.v1`;
+7. створюється immutable `sleep_start_operation_result.v1` snapshot.
 
 Archive/task/run/request IDs детерміновані з bound `vault_id`, operation ID,
 frozen request digest і внутрішньої label. Receipt посилається на immutable
@@ -2293,22 +2306,48 @@ run навіть після того, як worker просуне живий run 
 operation/input не створює нових records; той самий operation ID з іншим input
 відхиляється.
 
+`sleep_workflow_input.v1` є єдиним durable власником повних
+`sleep_input_event.v1`, frozen `SleepStage1Config` і digest preliminary
+Archive. `PendingTask.inputs`, persisted `LlmRequest.prompt_inputs`, SleepRun і
+operation result містять лише `sleep_input_reference.v1` з record ID та content
+digest. Runtime відновлює повний provider batch у памʼяті через
+`resume_sleep_run_transactional`; приватний prompt payload не дублюється по
+workflow records. Максимальний serialized input — 2 MiB, один submit response
+batch — 2 MiB, finalize — не більше 256 MemoryUnits.
+
 Reference implementation читає exact Session і committed snapshot
 `session_events`, фільтрує тільки цю Session та відновлює server-controlled
-порядок надходження за `received_at`, потім `event_id`. Shared policy застосовує
-цей порядок і до active-tail partition, і до equal-weight truncation/final task
-order; client event `timestamp` лишається domain provenance, а не керує
-selection. Однаковий `received_at` поки має детермінований ID tie-break, але до
-host cutover server contract має додати monotonic per-Session admission
-sequence. Full-vault collection scan існує лише як in-memory conformance proof;
+порядок надходження за server-assigned `admission_sequence`. Transactional
+ingest атомарно присвоює його разом з increment Session `event_count` і на
+replay читає фактично committed event, тому конкурентні events однієї Session
+отримують різні послідовності. Legacy/FileStorage records без sequence
+використовують `received_at`, потім `event_id`. Client `timestamp` лишається
+domain provenance, а не керує selection. Full-vault collection scan існує лише як in-memory conformance proof;
 production S3 adapter має дати еквівалентний vault/session-bound indexed query
 з тією самою snapshot/phantom семантикою.
 
-Жодного LLM/provider call усередині start transaction немає: атомарний commit
-лише публікує durable intent і workflow state. Transactional submit,
-finalize/Complete coverage та cancel/clear-reservation ще не реалізовані у
-Storage v2. До їх появи S2.C є перевіреною основою старту, а не завершеним
-server Sleep flow і не підставою перемикати Python/Godot adapters.
+Жодного LLM/provider call усередині work unit немає. Start лише публікує intent
+і workflow state. Submit freeze-ить provider responses та current-run digest,
+revalidate-ить immutable input, Archive digest, task attempts/request topology і
+Session claim, після чого атомарно просуває tasks/run та exact result.
+Consolidator request і всі MemoryUnit IDs deterministic, тому retry не змінює
+історію. Read-only recovery відновлює поточний batch після restart.
+
+Finalize дозволений лише з `ready_to_finish`: одним commit він робить Archive
+Complete, створює standalone canonical MemoryUnits, завершує tasks/run, додає
+зарезервовані event/archive IDs у Session coverage та очищає claim. Нові turns,
+прийняті після start, не входять у coverage. Cancel робить preliminary Archive
+Superseded, скасовує active tasks/run і очищає claim без coverage; ті самі
+events можна обробити наступним Sleep. Кожна operation має exact replay,
+conflicting reuse rejection, logical failpoint rollback і lost-ack
+reconciliation.
+
+Це завершений transactional Sleep lifecycle reference, але не повний S2.C або
+host cutover: post-finalize Core/derived routing, fidelity і forgetting ще не
+перенесені. `transactional_sleep_post_finalize_state.v1` явно позначає Core
+bridge, fidelity routing та embedding backfill як pending; порожні compatibility
+поля `SleepOutcome` не можна трактувати як «гілку виконано, роботи немає».
+Python/Godot лишаються на сумісному FileStorage API.
 
 PostgreSQL row-level security, composite `(vault_id, id)` references і
 non-owner runtime role є defense in depth поверх bound storage handle. Вони не

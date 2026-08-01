@@ -293,6 +293,12 @@ fn concurrent_session_ingests_preserve_both_events_and_metadata_count() {
         results[0].ingest.stored_event.event_id,
         results[1].ingest.stored_event.event_id
     );
+    let mut sequences = results
+        .iter()
+        .map(|result| result.ingest.stored_event.admission_sequence.unwrap())
+        .collect::<Vec<_>>();
+    sequences.sort_unstable();
+    assert_eq!(sequences, vec![1, 2]);
     assert_eq!(storage.record_count(&context).unwrap(), 3);
     let session = storage
         .read_record(

@@ -138,19 +138,28 @@ revisions for the exact query, retaining phantom protection without requiring
 a full-vault hot-path scan. Production PostgreSQL must map these contracts to
 bounded composite indexes and prove query plans.
 
-### Phase IV — Finish the transactional Sleep lifecycle (next)
+### Phase IV — Finish the transactional Sleep lifecycle (implemented in the
+in-memory reference; external acceptance pending)
 
-Transactional start is not enough. Submit, finalize, and cancel/recovery must
-revalidate the frozen run/task/input revisions and atomically advance every
-affected task, run, Archive, MemoryUnit, and Session coverage record. Provider
-calls stay outside transactions. A successful finalize is the only transition
-that may mark pending events as Complete-archive coverage; cancel must clear
-the reservation without hiding those events.
+Sleep is now one restartable state machine rather than a start transaction
+followed by best-effort local writes. `sleep_workflow_input.v1` owns the only
+durable copy of the selected private events, frozen policy and preliminary
+Archive digest. Tasks and SleepRun persist typed references; the provider batch
+is rehydrated only when a worker asks for it. Submit freezes the current run,
+records task attempts, advances extraction/consolidation and stores an exact
+replay result in one commit. Provider execution remains outside transactions.
 
-Before PostgreSQL handoff, duplicated inline Sleep inputs become one bounded
-immutable input record referenced by tasks and runs, and Session admission
-gets a monotonic server sequence. These are schema design steps, not emergency
-hotfixes.
+Finalize is the sole transition allowed to publish a Complete Archive,
+deterministic canonical MemoryUnits and Session coverage. A live turn admitted
+after Sleep started is preserved for the next cycle. Cancel marks preliminary
+work Superseded and clears the Session reservation without hiding any source
+event. Every terminal or continuation operation revalidates the immutable
+input, Archive digest, task contract and run topology.
+
+Transactional ingest also assigns a monotonic per-Session
+`admission_sequence`; Sleep uses it before the legacy receive-time/event-ID
+fallback. Serialized input/response limits and a MemoryUnit-count cap bound the
+reference work unit before PostgreSQL handoff.
 
 ### Phase V — Port the remaining cognition and derived indexes
 
@@ -184,7 +193,9 @@ private memory text.
 
 The compatible Python/Godot APIs still use FileStorage; the new fields are
 already populated by repository hosts, but there is no Storage v2 host cutover.
-Transactional Sleep continuation/finalization/cancel, bounded shared Sleep
-input storage, monotonic admission ordering, Storage v2 vector workflows, and
-PostgreSQL remain open. These are planned architectural phases. They are not
-hidden behind a claim that the current reference is production-ready.
+External acceptance of transactional Sleep, post-finalize Core/derived work,
+fidelity/forgetting, Storage v2 vector workflows, and PostgreSQL remain open.
+Finalize зберігає versioned `post_finalize` pending-state, тому ці гілки не
+губляться за порожнім compatibility outcome.
+These are planned architectural phases. They are not hidden behind a claim
+that the current reference is production-ready.

@@ -58,6 +58,15 @@ pub(super) fn compare_sleep_receive_order(
     left: &StoredEvent,
     right: &StoredEvent,
 ) -> std::cmp::Ordering {
+    if left.session_id == right.session_id {
+        if let (Some(left_sequence), Some(right_sequence)) =
+            (left.admission_sequence, right.admission_sequence)
+        {
+            return left_sequence
+                .cmp(&right_sequence)
+                .then_with(|| left.event_id.cmp(&right.event_id));
+        }
+    }
     match (
         parse_rfc3339(&left.received_at),
         parse_rfc3339(&right.received_at),
@@ -574,6 +583,7 @@ pub(super) fn sleep_run_from_stage1_with_request_ids(
         session_id: stage1.archive_entry.source_session_id.clone(),
         archive_id: stage1.archive_entry.archive_id,
         sleep_task_id: sleep_task.task_id,
+        input_reference: None,
         memory_unit_task_id: stage1.memory_unit_task.map(|task| task.task_id),
         stage: SleepRunStage::Extraction,
         max_pass_attempts: DEFAULT_SLEEP_PASS_MAX_ATTEMPTS,
@@ -681,6 +691,15 @@ pub(super) fn advance_sleep_run_stage(run: &mut SleepRun) -> Result<()> {
 }
 
 pub(super) fn ensure_consolidator_request(run: &mut SleepRun) -> Result<()> {
+    ensure_consolidator_request_with_id(run, new_id("llm_req")?)
+}
+
+/// Transactional workflows freeze the request ID before a retryable commit.
+/// FileStorage keeps using the random-ID wrapper above.
+pub(super) fn ensure_consolidator_request_with_id(
+    run: &mut SleepRun,
+    request_id: String,
+) -> Result<()> {
     if run
         .requests
         .iter()
@@ -693,7 +712,7 @@ pub(super) fn ensure_consolidator_request(run: &mut SleepRun) -> Result<()> {
     run.requests.push(SleepRequestState {
         track: SleepTrack::Consolidator,
         request: LlmRequest {
-            request_id: new_id("llm_req")?,
+            request_id,
             task_id: run.sleep_task_id.clone(),
             role_hint: ModelRole::Balanced,
             prompt_id: "sleep_consolidator".to_string(),
