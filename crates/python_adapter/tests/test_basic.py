@@ -71,6 +71,28 @@ def test_constructor_rejects_invalid_stage2_tuning(tmp_path: Path):
         )
 
 
+def test_hypothesis_graph_admin_api_is_versioned_and_scope_exact(
+    engine: memory_engine.MemoryEngine,
+):
+    migration = json.loads(engine.migrate_hypothesis_graph())
+    assert migration["schema_version"] == "hypothesis_graph_migration_result.v1"
+    assert migration["relations_created"] == 0
+
+    export = json.loads(
+        engine.export_hypothesis_graph(
+            json.dumps(
+                {
+                    "schema_version": "hypothesis_graph_export_request.v1",
+                    "core_scope": None,
+                }
+            )
+        )
+    )
+    assert export["schema_version"] == "hypothesis_graph_export.v1"
+    assert export.get("core_scope") is None
+    assert export.get("nodes", []) == []
+
+
 def test_autonomous_reflection_abstains_without_validated_memory(
     engine: memory_engine.MemoryEngine,
 ):

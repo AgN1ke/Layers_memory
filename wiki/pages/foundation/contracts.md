@@ -949,12 +949,12 @@ Canonical prompt view рендерить прийняті hits окремим
 
 CandidateBelief - кандидат на стабільний висновок у Core Store.
 
-`candidate_belief.v1` є чинною плоскою формою v0.5. Запланований граф гіпотез
-не додає полів до цього контракту на папері: нові node/evidence/relation schemas
-з'являться лише разом із кодом і міграцією у фазі, визначеній
-[Reflective Belief System](../planning/reflective-belief-system.md). До того
-ширше й вужче твердження зберігаються як окремі candidates без формального
-relation contract.
+`candidate_belief.v1` є чинною плоскою compatibility-формою v0.5. Phase 2
+графа не додає до неї полів: node/evidence/relation мають окремі versioned
+schemas, описані в секції 7.3. Чинний reflection/review може далі читати й
+писати CandidateBelief через graph projection; ширше/вужче reasoning і relation
+proposals починаються лише у Phase 3 за планом
+[Reflective Belief System](../planning/reflective-belief-system.md).
 
 Файл: `memory/core/candidates/<candidate_id>.json`.
 
@@ -1171,6 +1171,133 @@ apply зберігає старий `reflection_result.v1` output для сум�
 
 Тексти не входять у постійну trigger telemetry. Повний LLM input залишається у
 звичайному auditable PendingTask, як і для ручного reflection.
+
+### 7.3 Hypothesis graph storage (v0.6 Phase 2)
+
+Phase 2 додає три окремі persisted contracts, не змінюючи
+`candidate_belief.v1` і не додаючи graph до chat prompt:
+
+- `memory/core/hypotheses/nodes/<hypothesis_id>.json` —
+  `hypothesis_node.v1`;
+- `memory/core/hypotheses/evidence/<evidence_link_id>.json` —
+  `hypothesis_evidence_link.v1`;
+- `memory/core/hypotheses/relations/<relation_id>.json` —
+  `hypothesis_relation.v1`.
+
+Скорочений node:
+
+```json
+{
+  "schema_version": "hypothesis_node.v1",
+  "hypothesis_id": "candidate_01J...",
+  "legacy_candidate_id": "candidate_01J...",
+  "source_session_ids": ["session_a", "session_b"],
+  "core_scope": "owner_scope",
+  "created_at": "2026-08-01T10:00:00Z",
+  "updated_at": "2026-08-02T10:00:00Z",
+  "statement": "Користувача стабільно цікавить колонізація Марса.",
+  "category": "interests",
+  "abstraction_level": null,
+  "status": "ready_for_review",
+  "support_score": 0.84,
+  "contradiction_score": null,
+  "validity": null,
+  "evidence_summary": "Дві валідовані розмови підтримують вузький інтерес.",
+  "promotion_checks": {
+    "min_sources_met": true,
+    "weight_threshold_met": true,
+    "no_recent_contradiction": true,
+    "manual_review_required": true
+  },
+  "supporting_archive_ids": ["archive_a", "archive_b"],
+  "source_memory_unit_ids": ["mu_a", "mu_b"],
+  "tags": ["mars", "colonization"],
+  "reinforcements": []
+}
+```
+
+`support_score` є пояснюваною support-оцінкою, а не probability of truth.
+`contradiction_score` зберігається окремо. Для migrated flat candidate
+`abstraction_level`, `contradiction_score` і `validity` дорівнюють `null`, бо
+старий record не містить достатньої інформації й migration не має права її
+вигадати. Node зберігає candidate lifecycle/review/provenance fields, щоб
+compatibility projection у `CandidateBelief` була lossless.
+
+Evidence link:
+
+```json
+{
+  "schema_version": "hypothesis_evidence_link.v1",
+  "evidence_link_id": "hypothesis_evidence_4a1f...",
+  "hypothesis_id": "candidate_01J...",
+  "memory_unit_id": "mu_a",
+  "archive_id": "archive_a",
+  "source_session_id": "session_a",
+  "polarity": "supports",
+  "directness": "legacy_unspecified",
+  "generalization_distance": null,
+  "resolution": "resolved",
+  "created_at": "2026-08-01T10:00:00Z",
+  "updated_at": "2026-08-02T10:00:00Z",
+  "origins": [
+    {
+      "kind": "candidate",
+      "origin_id": "candidate_01J...",
+      "created_at": "2026-08-01T10:00:00Z",
+      "summary": "Прямий validated memory unit.",
+      "strength": 0.84,
+      "tags": ["mars"]
+    }
+  ]
+}
+```
+
+ID evidence link детерміновано залежить від `hypothesis_id + memory_unit_id +
+polarity`. Тому кілька legacy reinforcement records, що цитують той самий
+unit, стають кількома `origins` одного ребра, а не кількома незалежними
+доказами. Якщо unit ID збережено в candidate, але сам unit неможливо прочитати,
+link має `resolution: unresolved` і не отримує вигаданих archive/session IDs.
+Archive-only contradiction без exact MemoryUnit лишається у
+`HypothesisNode.contradicting_archive_ids`; migration не створює для нього
+ребро навмання.
+
+Relation має `source_hypothesis_id`, `target_hypothesis_id`, `kind`
+(`generalizes`, `specializes`, `possible_equivalent`, `contradicts`), `status`
+(`proposed`, `confirmed`, `rejected`, `superseded`), optional `score`,
+`explanation` і `proposed_by`. Self-relations та cross-scope relations
+відхиляються. Phase 2 migration завжди повертає `relations_created: 0`; лише
+наступна typed reflection phase може запропонувати semantic relation.
+
+Адміністративний `migrate_hypothesis_graph()` повертає
+`hypothesis_graph_migration_result.v1` із created/updated/unchanged counts,
+`unresolved_memory_unit_ids`, warnings і нульовим relation count. Frozen
+`hypothesis_graph_migration_operation.v1` зберігається як
+`JournalOperationType::Migration`; restart повторює desired node/evidence
+effects і відмовляється перезаписувати graph record, що змінився після
+підготовки operation.
+Migration сканує тільки persisted `core/candidates/*.json`, а не graph nodes,
+спроєктовані як candidates для compatibility; тому повторний запуск не
+перетворить майбутню graph-native hypothesis назад на legacy record.
+
+`export_hypothesis_graph(request)` приймає:
+
+```json
+{
+  "schema_version": "hypothesis_graph_export_request.v1",
+  "core_scope": "owner_scope"
+}
+```
+
+і повертає `hypothesis_graph_export.v1` з `nodes`, `evidence_links`,
+`relations` та text-safe storage warnings. Scope порівнюється точно;
+`core_scope: null` означає лише isolated unscoped namespace, ніколи wildcard.
+Python і Godot adapters лише передають ці JSON contracts у Rust core.
+
+Під час compatibility period кожний `write_candidate_belief` ідемпотентно
+оновлює node/evidence projection, а candidate read віддає graph projection,
+якщо node існує. Оновлення flat candidate не стирає graph-only
+`abstraction_level`, `contradiction_score`, `validity`, evidence directness або
+generalization distance. Це storage compatibility, не hierarchical reasoning.
 
 ---
 
@@ -1699,6 +1826,9 @@ embeddings.
     "core_store": "core_store.v1",
     "core_fact": "core_fact.v1",
     "candidate_belief": "candidate_belief.v1",
+    "hypothesis_node": "hypothesis_node.v1",
+    "hypothesis_evidence_link": "hypothesis_evidence_link.v1",
+    "hypothesis_relation": "hypothesis_relation.v1",
     "pending_task": "pending_task.v1",
     "reflection_state": "reflection_state.v1",
     "evidence_pack": "evidence_pack.v1",
@@ -1775,11 +1905,19 @@ markers. Journal є приватним auditable storage, тому intent мож
 
 `candidate_review` freezing-ує exact desired candidate і Core-category
 effects, а також previous `updated_at` для optimistic conflict detection.
-Операція не перечитує вільний review input після restart. Public
-`recover_pending_memory_operations()` продовжує всі `started` reflection
-operations. Окремо перший звичайний API-виклик на новому engine instance
-виконує цей recovery один раз до читання або зміни memory; тому host не мусить
-знати, який саме метод має бути першим після restart.
+Операція не перечитує вільний review input після restart.
+
+Phase 2 `migration` використовує intent
+`hypothesis_graph_migration_operation.v1`: frozen desired nodes/evidence,
+previous graph records для optimistic conflict detection, per-candidate
+progress, frozen result і manifest marker. Recovery повторює кожний desired
+effect навіть якщо progress уже був записаний, але не перезаписує graph record,
+який після підготовки змінився на третє значення.
+
+Public `recover_pending_memory_operations()` продовжує всі підтримувані
+`started` memory operations. Окремо перший звичайний API-виклик на новому
+engine instance виконує цей recovery один раз до читання або зміни memory;
+тому host не мусить знати, який саме метод має бути першим після restart.
 
 `state`:
 

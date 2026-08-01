@@ -8,6 +8,7 @@ use memory_engine::file_storage::FileStorage;
 use memory_engine::journal::{
     JournalOperation, JournalOperationType, JournalState, RecoveryPolicy,
 };
+use memory_engine::manifest::Manifest;
 use memory_engine::recall::{RecallCandidateDebug, RecallItem};
 use memory_engine::reflection::{
     ReflectionActionDraft, ReflectionActionsResult, ReflectionNoInsightReason, ReflectionOutcome,
@@ -91,6 +92,50 @@ fn reflection_personality_scope_fields_are_additive() {
         serde_json::from_value(legacy_candidate).expect("deserialize legacy candidate");
     assert!(candidate.source_session_ids.is_empty());
     assert!(candidate.reinforcements.is_empty());
+}
+
+#[test]
+fn legacy_manifest_defaults_hypothesis_graph_schema_versions() {
+    let manifest: Manifest = serde_json::from_value(json!({
+        "schema_version": "manifest.v1",
+        "engine_version": "0.5.0",
+        "storage_id": "legacy",
+        "created_at": "2026-07-01T10:00:00Z",
+        "updated_at": "2026-07-01T10:00:00Z",
+        "schema_versions": {
+            "event": "event.v1",
+            "session": "session.v1",
+            "archive_entry": "archive_entry.v1",
+            "core_store": "core_store.v1",
+            "core_fact": "core_fact.v1",
+            "candidate_belief": "candidate_belief.v1",
+            "pending_task": "pending_task.v1",
+            "reflection_state": "reflection_state.v1",
+            "journal_operation": "journal_operation.v1"
+        },
+        "active_embedding_model_id": null,
+        "last_migration_at": null,
+        "features": {
+            "recall_stage": "stage1",
+            "embeddings_enabled": false,
+            "llm_recall_rerank_enabled": false,
+            "reflection_enabled": true
+        }
+    }))
+    .expect("deserialize pre-graph manifest");
+
+    assert_eq!(
+        manifest.schema_versions.hypothesis_node,
+        "hypothesis_node.v1"
+    );
+    assert_eq!(
+        manifest.schema_versions.hypothesis_evidence_link,
+        "hypothesis_evidence_link.v1"
+    );
+    assert_eq!(
+        manifest.schema_versions.hypothesis_relation,
+        "hypothesis_relation.v1"
+    );
 }
 
 #[test]

@@ -10,6 +10,10 @@ use serde::Serialize;
 use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
 use crate::event::StoredEvent;
+use crate::hypothesis::{
+    evidence_links_from_candidate, validate_hypothesis_storage_id, HypothesisEvidenceLink,
+    HypothesisNode, HypothesisRelation, ResolvedHypothesisEvidenceSource,
+};
 use crate::journal::{JournalOperation, JournalState};
 use crate::llm::SleepRun;
 use crate::manifest::Manifest;
@@ -61,6 +65,9 @@ impl FileStorage {
         fs::create_dir_all(self.root.join("archive").join("vectors"))?;
         fs::create_dir_all(self.root.join("core").join("store"))?;
         fs::create_dir_all(self.root.join("core").join("candidates"))?;
+        fs::create_dir_all(self.root.join("core").join("hypotheses").join("nodes"))?;
+        fs::create_dir_all(self.root.join("core").join("hypotheses").join("evidence"))?;
+        fs::create_dir_all(self.root.join("core").join("hypotheses").join("relations"))?;
         fs::create_dir_all(self.root.join("tasks"))?;
         fs::create_dir_all(self.root.join("tasks").join("completed"))?;
         fs::create_dir_all(self.root.join("runs").join("sleep"))?;
@@ -147,6 +154,30 @@ impl FileStorage {
             .join("core")
             .join("candidates")
             .join(format!("{candidate_id}.json"))
+    }
+
+    fn hypothesis_node_path(&self, hypothesis_id: &str) -> PathBuf {
+        self.root
+            .join("core")
+            .join("hypotheses")
+            .join("nodes")
+            .join(format!("{hypothesis_id}.json"))
+    }
+
+    fn hypothesis_evidence_path(&self, evidence_link_id: &str) -> PathBuf {
+        self.root
+            .join("core")
+            .join("hypotheses")
+            .join("evidence")
+            .join(format!("{evidence_link_id}.json"))
+    }
+
+    fn hypothesis_relation_path(&self, relation_id: &str) -> PathBuf {
+        self.root
+            .join("core")
+            .join("hypotheses")
+            .join("relations")
+            .join(format!("{relation_id}.json"))
     }
 
     fn task_path(&self, task_id: &str) -> PathBuf {
@@ -505,11 +536,43 @@ impl Storage for FileStorage {
 
     fn write_candidate_belief(&self, candidate: &CandidateBelief) -> Result<()> {
         self.ensure_layout()?;
+        let node_path = self.hypothesis_node_path(&candidate.candidate_id);
+        let mut node = if node_path.exists() {
+            read_json::<HypothesisNode>(&node_path)?
+        } else {
+            HypothesisNode::from_candidate(candidate)
+        };
+        node.merge_candidate_projection(candidate);
+        node.validate_basic()?;
+        atomic_write_json(&node_path, &node)?;
+        for mut link in evidence_links_from_candidate(candidate, |memory_unit_id| {
+            read_json::<MemoryUnit>(&self.memory_unit_path(memory_unit_id))
+                .ok()
+                .map(|unit| ResolvedHypothesisEvidenceSource {
+                    archive_id: unit.archive_id,
+                    source_session_id: unit.source_session_id,
+                })
+        }) {
+            let link_path = self.hypothesis_evidence_path(&link.evidence_link_id);
+            if link_path.exists() {
+                let existing = read_json::<HypothesisEvidenceLink>(&link_path)?;
+                link.merge_existing_graph_fields(existing);
+            }
+            link.validate_basic()?;
+            atomic_write_json(&link_path, &link)?;
+        }
         atomic_write_json(&self.candidate_path(&candidate.candidate_id), candidate)
     }
 
     fn read_candidate_belief(&self, candidate_id: &str) -> Result<CandidateBelief> {
         self.ensure_layout()?;
+        validate_hypothesis_storage_id("candidate_id", candidate_id)?;
+        let node_path = self.hypothesis_node_path(candidate_id);
+        if node_path.exists() {
+            let node: HypothesisNode = read_json(&node_path)?;
+            node.validate_basic()?;
+            return Ok(node.to_candidate());
+        }
         let path = self.candidate_path(candidate_id);
         if !path.exists() {
             return Err(MemoryEngineError::Storage(format!(
@@ -524,6 +587,13 @@ impl Storage for FileStorage {
         candidate_id: &str,
     ) -> Result<Option<CandidateBelief>> {
         self.ensure_layout()?;
+        validate_hypothesis_storage_id("candidate_id", candidate_id)?;
+        let node_path = self.hypothesis_node_path(candidate_id);
+        if node_path.exists() {
+            let node: HypothesisNode = read_json(&node_path)?;
+            node.validate_basic()?;
+            return Ok(Some(node.to_candidate()));
+        }
         let path = self.candidate_path(candidate_id);
         if !path.exists() {
             return Ok(None);
@@ -531,11 +601,10 @@ impl Storage for FileStorage {
         Ok(Some(read_json(&path)?))
     }
 
-    fn read_candidate_beliefs(&self) -> Result<StorageCollection<CandidateBelief>> {
+    fn read_legacy_candidate_beliefs(&self) -> Result<StorageCollection<CandidateBelief>> {
         self.ensure_layout()?;
         let mut files = Vec::new();
         collect_json_files(&self.root.join("core").join("candidates"), &mut files)?;
-
         let mut candidates = Vec::new();
         let mut warnings = Vec::new();
         for path in files {
@@ -556,6 +625,231 @@ impl Storage for FileStorage {
         });
         Ok(StorageCollection {
             items: candidates,
+            warnings,
+        })
+    }
+
+    fn read_candidate_beliefs(&self) -> Result<StorageCollection<CandidateBelief>> {
+        self.ensure_layout()?;
+        let node_collection = self.read_hypothesis_nodes()?;
+        let mut candidates: Vec<CandidateBelief> = node_collection
+            .items
+            .into_iter()
+            .map(|node| node.to_candidate())
+            .collect();
+        let mut seen: HashSet<String> = candidates
+            .iter()
+            .map(|candidate| candidate.candidate_id.clone())
+            .collect();
+        let mut warnings = node_collection.warnings;
+        let legacy_collection = self.read_legacy_candidate_beliefs()?;
+        warnings.extend(legacy_collection.warnings);
+        for candidate in legacy_collection.items {
+            if seen.insert(candidate.candidate_id.clone()) {
+                candidates.push(candidate);
+            }
+        }
+        candidates.sort_by(|left: &CandidateBelief, right: &CandidateBelief| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.candidate_id.cmp(&right.candidate_id))
+        });
+        Ok(StorageCollection {
+            items: candidates,
+            warnings,
+        })
+    }
+
+    fn write_hypothesis_node(&self, node: &HypothesisNode) -> Result<()> {
+        self.ensure_layout()?;
+        node.validate_basic()?;
+        atomic_write_json(&self.hypothesis_node_path(&node.hypothesis_id), node)
+    }
+
+    fn read_hypothesis_node(&self, hypothesis_id: &str) -> Result<HypothesisNode> {
+        self.ensure_layout()?;
+        validate_hypothesis_storage_id("hypothesis_id", hypothesis_id)?;
+        let path = self.hypothesis_node_path(hypothesis_id);
+        if !path.exists() {
+            return Err(MemoryEngineError::Storage(format!(
+                "hypothesis node not found: {hypothesis_id}"
+            )));
+        }
+        let node: HypothesisNode = read_json(&path)?;
+        node.validate_basic()?;
+        Ok(node)
+    }
+
+    fn read_hypothesis_node_optional(&self, hypothesis_id: &str) -> Result<Option<HypothesisNode>> {
+        self.ensure_layout()?;
+        validate_hypothesis_storage_id("hypothesis_id", hypothesis_id)?;
+        let path = self.hypothesis_node_path(hypothesis_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let node: HypothesisNode = read_json(&path)?;
+        node.validate_basic()?;
+        Ok(Some(node))
+    }
+
+    fn read_hypothesis_nodes(&self) -> Result<StorageCollection<HypothesisNode>> {
+        self.ensure_layout()?;
+        let mut files = Vec::new();
+        collect_json_files_shallow(
+            &self.root.join("core").join("hypotheses").join("nodes"),
+            &mut files,
+        )?;
+        let mut nodes = Vec::new();
+        let mut warnings = Vec::new();
+        for path in files {
+            if let Some(node) = read_json_from_collection::<HypothesisNode>(
+                self,
+                &path,
+                "hypothesis node",
+                &mut warnings,
+            )? {
+                if let Err(err) = node.validate_basic() {
+                    warnings.push(StorageReadWarning {
+                        collection: "hypothesis node".to_string(),
+                        path: self.relative_path(&path),
+                        error: err.to_string(),
+                    });
+                } else {
+                    nodes.push(node);
+                }
+            }
+        }
+        nodes.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.hypothesis_id.cmp(&right.hypothesis_id))
+        });
+        Ok(StorageCollection {
+            items: nodes,
+            warnings,
+        })
+    }
+
+    fn write_hypothesis_evidence_link(&self, link: &HypothesisEvidenceLink) -> Result<()> {
+        self.ensure_layout()?;
+        link.validate_basic()?;
+        self.read_hypothesis_node(&link.hypothesis_id)?;
+        atomic_write_json(&self.hypothesis_evidence_path(&link.evidence_link_id), link)
+    }
+
+    fn read_hypothesis_evidence_link_optional(
+        &self,
+        evidence_link_id: &str,
+    ) -> Result<Option<HypothesisEvidenceLink>> {
+        self.ensure_layout()?;
+        validate_hypothesis_storage_id("evidence_link_id", evidence_link_id)?;
+        let path = self.hypothesis_evidence_path(evidence_link_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let link: HypothesisEvidenceLink = read_json(&path)?;
+        link.validate_basic()?;
+        Ok(Some(link))
+    }
+
+    fn read_hypothesis_evidence_links(&self) -> Result<StorageCollection<HypothesisEvidenceLink>> {
+        self.ensure_layout()?;
+        let mut files = Vec::new();
+        collect_json_files_shallow(
+            &self.root.join("core").join("hypotheses").join("evidence"),
+            &mut files,
+        )?;
+        let mut links = Vec::new();
+        let mut warnings = Vec::new();
+        for path in files {
+            if let Some(link) = read_json_from_collection::<HypothesisEvidenceLink>(
+                self,
+                &path,
+                "hypothesis evidence link",
+                &mut warnings,
+            )? {
+                if let Err(err) = link.validate_basic() {
+                    warnings.push(StorageReadWarning {
+                        collection: "hypothesis evidence link".to_string(),
+                        path: self.relative_path(&path),
+                        error: err.to_string(),
+                    });
+                } else {
+                    links.push(link);
+                }
+            }
+        }
+        links.sort_by(|left, right| left.evidence_link_id.cmp(&right.evidence_link_id));
+        Ok(StorageCollection {
+            items: links,
+            warnings,
+        })
+    }
+
+    fn write_hypothesis_relation(&self, relation: &HypothesisRelation) -> Result<()> {
+        self.ensure_layout()?;
+        relation.validate_basic()?;
+        let source = self.read_hypothesis_node(&relation.source_hypothesis_id)?;
+        let target = self.read_hypothesis_node(&relation.target_hypothesis_id)?;
+        if source.core_scope != target.core_scope {
+            return Err(MemoryEngineError::Validation(format!(
+                "hypothesis relation cannot cross personality scopes: {} -> {}",
+                relation.source_hypothesis_id, relation.target_hypothesis_id
+            )));
+        }
+        atomic_write_json(
+            &self.hypothesis_relation_path(&relation.relation_id),
+            relation,
+        )
+    }
+
+    fn read_hypothesis_relation_optional(
+        &self,
+        relation_id: &str,
+    ) -> Result<Option<HypothesisRelation>> {
+        self.ensure_layout()?;
+        validate_hypothesis_storage_id("relation_id", relation_id)?;
+        let path = self.hypothesis_relation_path(relation_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let relation: HypothesisRelation = read_json(&path)?;
+        relation.validate_basic()?;
+        Ok(Some(relation))
+    }
+
+    fn read_hypothesis_relations(&self) -> Result<StorageCollection<HypothesisRelation>> {
+        self.ensure_layout()?;
+        let mut files = Vec::new();
+        collect_json_files_shallow(
+            &self.root.join("core").join("hypotheses").join("relations"),
+            &mut files,
+        )?;
+        let mut relations = Vec::new();
+        let mut warnings = Vec::new();
+        for path in files {
+            if let Some(relation) = read_json_from_collection::<HypothesisRelation>(
+                self,
+                &path,
+                "hypothesis relation",
+                &mut warnings,
+            )? {
+                if let Err(err) = relation.validate_basic() {
+                    warnings.push(StorageReadWarning {
+                        collection: "hypothesis relation".to_string(),
+                        path: self.relative_path(&path),
+                        error: err.to_string(),
+                    });
+                } else {
+                    relations.push(relation);
+                }
+            }
+        }
+        relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
+        Ok(StorageCollection {
+            items: relations,
             warnings,
         })
     }

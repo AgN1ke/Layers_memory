@@ -26,6 +26,11 @@ use crate::forgetting::{
     ForgetRecommendation, ForgetReviewApplyResult, ForgetReviewCandidate, ForgetReviewInputs,
     ForgetReviewResult, ForgetReviewStart, ForgottenMemoryUnits,
 };
+use crate::hypothesis::{
+    evidence_links_from_candidate, HypothesisEvidenceResolution, HypothesisGraphExport,
+    HypothesisGraphExportRequest, HypothesisGraphMigrationResult, HypothesisNode,
+    ResolvedHypothesisEvidenceSource,
+};
 use crate::journal::{JournalOperation, JournalOperationType, JournalState, RecoveryPolicy};
 use crate::llm::{
     CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmErrorKind, LlmRequest, LlmResponse,
@@ -62,7 +67,9 @@ use crate::types::{
     CORE_FACT_PATCH_RESULT_SCHEMA_VERSION, CORE_FACT_SCHEMA_VERSION,
     CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION, CORE_STORE_SCHEMA_VERSION, EVENT_SCHEMA_VERSION,
     FIDELITY_REVIEW_SCHEMA_VERSION, FORGET_REVIEW_INPUT_SCHEMA_VERSION,
-    FORGET_REVIEW_RESULT_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION,
+    FORGET_REVIEW_RESULT_SCHEMA_VERSION, HYPOTHESIS_EVIDENCE_LINK_SCHEMA_VERSION,
+    HYPOTHESIS_GRAPH_MIGRATION_OPERATION_SCHEMA_VERSION, HYPOTHESIS_NODE_SCHEMA_VERSION,
+    HYPOTHESIS_RELATION_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION,
     JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION,
     MEMORY_UNIT_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
     RECALL_RESULT_SCHEMA_VERSION, REFLECTION_ACTIONS_RESULT_SCHEMA_VERSION,
@@ -85,6 +92,7 @@ mod context_budget;
 mod core_context;
 mod fidelity_flow;
 mod forgetting_flow;
+mod hypothesis_flow;
 mod options;
 mod recall_api;
 mod recall_stage1;

@@ -47,9 +47,11 @@ The project has already proved the main foundation:
 
 The active design direction has two ordered tracks. Contextual memory expansion
 keeps ordinary chat context small and activates old details only for the
-current topic. Autonomous reflection first closes durable scope-safe apply and
-review, then evolves into an internal graph of evidence-backed hypotheses
-between Archive and Core.
+current topic. Autonomous reflection has a durable scope-safe apply/review
+foundation and now also has the first internal graph-storage slice: journaled
+candidate migration, MemoryUnit evidence edges and scope-exact inspection.
+Hierarchical reasoning over that graph remains the next phase between Archive
+and Core.
 
 ## How To Read The Wiki
 

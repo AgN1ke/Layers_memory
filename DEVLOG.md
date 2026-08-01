@@ -1,5 +1,65 @@
 # DEVLOG
 
+## Запис 153 — 2026-08-01 — Плоскі candidates отримали графове сховище без зміни поведінки
+
+**Контекст:**
+Живе приймання v0.5 тимчасово неможливе через ліміт тестового агента, але це не
+є технічною причиною блокувати незалежну storage-фазу v0.6. Щоб не змішувати
+ці два gates, завершену Phase C.1 зафіксовано комітом `30838ff`, а graph work
+винесено у `codex/hypothesis-graph-v0.6`.
+
+**Стратегічне рішення:**
+Phase 2 не навчає reflection будувати ієрархію. Вона спочатку дає майбутньому
+розумінню чесний носій: окремий hypothesis node, один evidence edge на
+MemoryUnit/hypothesis/polarity та окремий relation record. Migration переносить
+тільки відоме й не вгадує abstraction level, directness або semantic relation.
+Чинний v0.5 pipeline продовжує працювати через lossless CandidateBelief
+projection, тому зміна не впливає на chat prompt і не потребує LLM calibration.
+
+**Що реалізовано:**
+- `hypothesis_node.v1`, `hypothesis_evidence_link.v1`,
+  `hypothesis_relation.v1`, versioned export/migration contracts і manifest
+  schema markers;
+- файлова розкладка `memory/core/hypotheses/{nodes,evidence,relations}` та
+  Storage methods із validation; relation між різними personality scopes
+  відхиляється;
+- deterministic evidence-link identity не дозволяє одному MemoryUnit стати
+  кількома незалежними доказами; candidate/reinforcement лишаються origins
+  одного edge;
+- `migrate_hypothesis_graph()` готує frozen desired records, записує
+  `hypothesis_graph_migration_operation.v1` у journal, відновлюється після
+  restart і fail-closed реагує на graph record, змінений після підготовки;
+- migration не створює relations, не домислює archive/session для unreadable
+  unit і повертає unresolved IDs та warnings;
+- `export_hypothesis_graph()` повертає один exact `core_scope`; `null` означає
+  тільки unscoped namespace;
+- Python/Godot adapters отримали thin JSON methods для migration/export;
+- candidate writes синхронізують node/evidence, reads віддають graph projection
+  за наявності node, а graph-only поля не стираються legacy update-ом;
+- reflection/review recovery повторює повний ідемпотентний candidate write
+  навіть коли compatibility record уже збігається. Це закриває crash між node
+  та evidence files і не послаблює Phase C.1.
+
+**Перевірки:**
+- legacy migration, exact-scope export, unresolved evidence, нуль вигаданих
+  relations і повторна idempotent migration — PASS;
+- restart recovery після втрати graph files — PASS;
+- CandidateBelief projection без legacy candidate file і збереження
+  graph-only fields — PASS;
+- cross-scope relation negative control — PASS;
+- існуючий reflection fault-boundary test тепер також перевіряє відновлення
+  hypothesis node/evidence projection — PASS.
+- `cargo test --workspace`, `cargo clippy --workspace --all-targets --
+  -D warnings`, format/diff checks і release-version checker — PASS;
+- Python adapter із локально зібраного PyO3 module: 17/17; wiki links: PASS.
+
+**Чесна межа:**
+Це deterministic Phase 2 foundation. Міграція копії живого Chibigochi storage
+та ручна звірка provenance ще не виконані; v0.5 live acceptance теж лишається
+відкритим. Phase 3 — LLM-proposed narrow/generalization relations, bounded
+subgraph selection, support components і maturation — не реалізована й не
+маскується цим storage slice.
+
 ## Запис 152 — 2026-08-01 — Reflection переживає обрив посеред власного рішення
 
 **Проблематика:**

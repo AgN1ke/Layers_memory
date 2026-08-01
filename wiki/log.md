@@ -8,6 +8,19 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-01] architecture | Hypothesis graph Phase 2 storage foundation
+
+Updated strategy-facing project knowledge after implementing the first v0.6
+graph slice. Architecture and contracts now describe separate hypothesis node,
+MemoryUnit evidence and relation records, deterministic evidence identity,
+journaled/recoverable flat-candidate migration, exact-scope export and the
+CandidateBelief compatibility projection.
+
+The roadmap and phased plan distinguish deterministic implementation from the
+still-open migration of a real Chibigochi storage copy. They also preserve the
+behavioral boundary: migration creates no semantic relations, graph data does
+not enter chat context, and hierarchical reflection/maturation remains Phase 3.
+
 ## [2026-08-01] integrity | Reflection Phase C.1 is recoverable
 
 Implemented and documented the deterministic integrity closure that the prior

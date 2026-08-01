@@ -723,7 +723,13 @@ impl<S: Storage> MemoryEngine<S> {
                             .storage
                             .read_candidate_belief_optional(&candidate.candidate_id)?
                         {
-                            Some(current) if current == candidate => Ok(()),
+                            Some(current) if current == candidate => {
+                                // Candidate persistence now also materializes
+                                // its hypothesis node and evidence links. A
+                                // crash may leave that projection partial even
+                                // when the compatibility read already matches.
+                                self.storage.write_candidate_belief(&candidate)
+                            }
                             Some(_) => Err(MemoryEngineError::Validation(format!(
                                 "reflection operation candidate conflicts with stored value: {}",
                                 candidate.candidate_id
@@ -742,7 +748,9 @@ impl<S: Storage> MemoryEngine<S> {
                             .storage
                             .read_candidate_belief(&candidate.candidate_id)?;
                         if current == candidate {
-                            return Ok(());
+                            // Re-run the idempotent write to close a possibly
+                            // partial hypothesis-graph projection.
+                            return self.storage.write_candidate_belief(&candidate);
                         }
                         if current.updated_at != previous_updated_at {
                             return Err(MemoryEngineError::Validation(format!(
@@ -1069,6 +1077,22 @@ impl<S: Storage> MemoryEngine<S> {
                                 ))
                             })?;
                         self.execute_candidate_review_operation_unlocked(current)
+                            .map(|_| ())
+                    })?;
+                    recovered += 1;
+                }
+                JournalOperationType::Migration => {
+                    self.with_resource_lock("hypothesis_graph:migration".to_string(), || {
+                        let current = self
+                            .storage
+                            .load_journaled_operation(&operation.op_id)?
+                            .ok_or_else(|| {
+                                MemoryEngineError::Storage(format!(
+                                    "journal operation disappeared during recovery: {}",
+                                    operation.op_id
+                                ))
+                            })?;
+                        self.recover_hypothesis_graph_migration_unlocked(current)
                             .map(|_| ())
                     })?;
                     recovered += 1;
@@ -1436,7 +1460,12 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         let current = self.storage.read_candidate_belief(&intent.candidate_id)?;
-        if current != intent.desired_candidate {
+        if current == intent.desired_candidate {
+            // Owner-review recovery must also finish the graph projection if
+            // the earlier attempt stopped between its atomic files.
+            self.storage
+                .write_candidate_belief(&intent.desired_candidate)?;
+        } else {
             if current.updated_at != intent.previous_candidate_updated_at {
                 return Err(MemoryEngineError::Validation(format!(
                     "candidate changed while durable review was being applied: {}",
@@ -1473,7 +1502,7 @@ impl<S: Storage> MemoryEngine<S> {
         self.storage.begin_journaled_operation(operation)
     }
 
-    fn record_memory_operation_error_best_effort(
+    pub(super) fn record_memory_operation_error_best_effort(
         &self,
         operation_id: &str,
         error: &MemoryEngineError,

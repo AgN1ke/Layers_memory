@@ -773,4 +773,8 @@ scope не може бути wildcard, reflection/review мають бути jou
 порядок зафіксовано в
 [Reflective Belief System](../planning/reflective-belief-system.md).
 Станом на 2026-08-01 цей deterministic фундамент реалізований у Phase C.1;
-живе приймання v0.5 і наступний hypothesis graph лишаються окремими воротами.
+живе приймання v0.5 лишається окремим release gate. Незалежну Phase 2 storage
+foundation графа вже реалізовано без зміни reflection behavior: versioned
+records, journaled migration, exact-scope export і CandidateBelief projection.
+Жива міграція реального storage та Phase 3 ієрархічного reasoning лишаються
+окремими наступними воротами.

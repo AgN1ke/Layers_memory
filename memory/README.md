@@ -23,6 +23,14 @@ records from later reflection passes. They remain reviewable hypotheses, not
 Core facts; even a candidate that challenges Core changes nothing until owner
 review.
 
+The v0.6 storage foundation materializes the same reviewable understanding in
+`core/hypotheses/`: `nodes/` keeps statements and lifecycle, `evidence/` keeps
+one auditable MemoryUnit edge per hypothesis/polarity, and `relations/` is
+reserved for explicit broader/narrower/equivalence/contradiction links. During
+the compatibility period, `core/candidates/` remains readable and writable;
+the Rust core projects it into graph records without exposing the graph as a
+fourth prompt-visible memory layer.
+
 Machine-readable files may use JSON or JSONL. Human-readable summaries should use Markdown when useful.
 
-The exact schemas will be defined later, when implementation starts.
+The exact schemas are defined in `wiki/pages/foundation/contracts.md`.

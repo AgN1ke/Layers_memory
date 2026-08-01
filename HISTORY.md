@@ -46,6 +46,48 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Hypothesis graph storage is additive and migration is recoverable
+
+Context. Live v0.5 product acceptance is still pending, but the next storage
+foundation can be implemented independently because it does not change the
+reflection prompt, thresholds, chat context, or Core authority.
+
+**What changed:**
+- Added versioned `hypothesis_node.v1`, `hypothesis_evidence_link.v1` and
+  `hypothesis_relation.v1` records under `memory/core/hypotheses/`, plus schema
+  markers in backward-compatible `manifest.v1`.
+- `migrate_hypothesis_graph()` freezes desired node/evidence records in a
+  journaled `hypothesis_graph_migration_operation.v1`, resumes after restart,
+  reports unresolved MemoryUnit IDs, and creates no semantic relations.
+- One hypothesis/MemoryUnit/polarity tuple has one deterministic evidence edge.
+  Legacy candidate and reinforcement records are origins of that edge, not
+  independent copies of the same evidence.
+- Existing reflection and owner review remain source-compatible through a
+  lossless `CandidateBelief` projection. Candidate persistence also completes
+  graph projection, including during journal replay; graph-only abstraction,
+  contradiction, validity and directness fields are preserved.
+- `export_hypothesis_graph()` exposes one exact personality scope for human
+  inspection. Missing scope remains isolated unscoped data, never a wildcard.
+  Relation writes fail closed across scopes.
+- Python and Godot adapters expose the migration and versioned export request
+  without taking ownership of graph policy.
+
+**What is still true:**
+- Session, Archive and Core remain the three memory layers. The hypothesis
+  graph is internal Archive-to-Core reasoning state and is not chat context.
+- Reflection still cannot promote itself into Core; owner review remains
+  mandatory.
+- No hierarchical LLM action, semantic merge, support propagation or
+  maturation behavior is claimed by this storage phase.
+- Live v0.5 acceptance and a migration/inspection run on a copy of real
+  Chibigochi memory remain open gates.
+
+**Reproducibility anchor:**
+`crates/memory_engine/tests/engine_hypothesis.rs` covers legacy and repeated
+migration, restart recovery, scope-exact export, unresolved provenance,
+compatibility projection and cross-scope relation rejection. The reflection
+fault-boundary fixture additionally verifies node/evidence recovery.
+
 ## 2026-08-01 — v0.5 reflection integrity gate is implemented
 
 Context. The Phase C information-flow audit found three release-integrity

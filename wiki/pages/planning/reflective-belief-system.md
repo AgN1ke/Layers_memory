@@ -206,6 +206,10 @@ evidence rejection. Це закриває фундамент цілісност�
 
 ### Phase 2 — Hypothesis graph storage (`v0.6` foundation)
 
+Статус: детермінований storage/API slice реалізовано 2026-08-01; міграція
+реального Chibigochi storage і human inspection на живих candidates ще не
+виконані. Це не змінює prompt або поведінку reflection.
+
 Мета — перейти від плоского candidate record до графа, не змінюючи одразу
 поведінку reflection.
 
@@ -224,6 +228,28 @@ inspection до зміни промпта.
 Фаза завершена, коли старе сховище відкривається без втрати provenance,
 повторна міграція є ідемпотентною, а graph export дозволяє людині простежити
 кожний вузол до первинних MemoryUnit.
+
+Реалізована форма використовує окремі `hypothesis_node.v1`,
+`hypothesis_evidence_link.v1` і `hypothesis_relation.v1` records у
+`memory/core/hypotheses/`. `migrate_hypothesis_graph()` фіксує frozen migration
+intent у journal, відновлюється після restart і не створює жодного semantic
+relation. Один hypothesis + один MemoryUnit + одна polarity мають один
+детермінований evidence-link ID; кілька legacy reinforcement records стають
+origins того самого ребра, а не кількома незалежними доказами.
+
+Compatibility projection двостороння: чинний reflection/review продовжує
+бачити `CandidateBelief`, але кожний його запис синхронізує graph node та
+evidence links; якщо legacy candidate file відсутній, node може бути
+спроєктований назад у `candidate_belief.v1`. Поля, яких плоский candidate не
+знає (`abstraction_level`, окремий contradiction score, validity і graph-only
+directness), при такому оновленні не стираються. Relation storage відхиляє
+зв'язок між різними personality scopes.
+
+Чесна межа Phase 2: рівень узагальнення migrated node лишається `null`,
+directness старого evidence — `legacy_unspecified`, а archive-only
+contradiction без точного MemoryUnit лишається provenance на node. Це навмисна
+відмова вигадувати зміст. Формування і maturation ієрархії починається лише у
+Phase 3.
 
 ### Phase 3 — Hierarchical reflection and maturation (`v0.6` behavior)
 

@@ -26,14 +26,14 @@ crate/host README files stay outside the wiki.
   unit-level semantic recall boundary.
 - [Contracts](pages/foundation/contracts.md) - JSON/JSONL schemas, storage
   contracts, task contracts, prompt-facing contracts, hybrid recall scoring,
-  unit-focused semantic provenance, structured recall diagnostics, and
-  compatibility rules.
+  unit-focused semantic provenance, hypothesis graph storage/migration,
+  structured recall diagnostics, and compatibility rules.
 
 ## Planning
 
 - [Roadmap](pages/planning/roadmap.md) - current implementation state, completed
-  unit-focused vector Stage 2, explicit v0.4 release closure, open work,
-  deferred items, and phase ordering.
+  unit-focused vector Stage 2, v0.5 live gate, implemented v0.6 graph-storage
+  foundation, open work, deferred items, and phase ordering.
 - [Autonomous Reflection v0.5](pages/planning/autonomous-reflection-v0.5.md) -
   strategic design, trigger semantics, personality-scope evidence, bounded
   related history, typed candidate reinforcement/Core challenge/no-insight,

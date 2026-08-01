@@ -25,6 +25,12 @@ pub struct SchemaVersions {
     pub core_store: String,
     pub core_fact: String,
     pub candidate_belief: String,
+    #[serde(default = "default_hypothesis_node_schema_version")]
+    pub hypothesis_node: String,
+    #[serde(default = "default_hypothesis_evidence_link_schema_version")]
+    pub hypothesis_evidence_link: String,
+    #[serde(default = "default_hypothesis_relation_schema_version")]
+    pub hypothesis_relation: String,
     pub pending_task: String,
     #[serde(default = "default_reflection_state_schema_version")]
     pub reflection_state: String,
@@ -33,6 +39,18 @@ pub struct SchemaVersions {
 
 fn default_reflection_state_schema_version() -> String {
     crate::types::REFLECTION_STATE_SCHEMA_VERSION.to_string()
+}
+
+fn default_hypothesis_node_schema_version() -> String {
+    crate::types::HYPOTHESIS_NODE_SCHEMA_VERSION.to_string()
+}
+
+fn default_hypothesis_evidence_link_schema_version() -> String {
+    crate::types::HYPOTHESIS_EVIDENCE_LINK_SCHEMA_VERSION.to_string()
+}
+
+fn default_hypothesis_relation_schema_version() -> String {
+    crate::types::HYPOTHESIS_RELATION_SCHEMA_VERSION.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

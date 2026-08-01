@@ -457,6 +457,8 @@ fn journaled_reflection_recovers_each_logical_apply_boundary_without_duplicates(
             .join(format!("{candidate_id}.json")),
     )
     .expect("remove candidate fixture");
+    fs::remove_dir_all(root.join("core").join("hypotheses"))
+        .expect("remove hypothesis projection fixture");
     reopen_journal_operation(&storage_probe, &operation);
     recover_one_operation(&root);
     assert_reflection_apply_recovered(
@@ -480,6 +482,8 @@ fn journaled_reflection_recovers_each_logical_apply_boundary_without_duplicates(
     storage_probe
         .save_task(&task_before)
         .expect("restore pending task");
+    fs::remove_dir_all(root.join("core").join("hypotheses").join("evidence"))
+        .expect("remove evidence projection fixture");
     reopen_journal_operation(&storage_probe, &operation);
     recover_one_operation(&root);
     assert_reflection_apply_recovered(
@@ -2070,6 +2074,18 @@ fn assert_reflection_apply_recovered(
         .into_items();
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].candidate_id, candidate_id);
+    let nodes = storage
+        .read_hypothesis_nodes()
+        .expect("read recovered hypothesis nodes")
+        .into_items();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].hypothesis_id, candidate_id);
+    let evidence = storage
+        .read_hypothesis_evidence_links()
+        .expect("read recovered hypothesis evidence")
+        .into_items();
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].hypothesis_id, candidate_id);
     let task = storage.load_task(task_id).expect("read recovered task");
     assert_eq!(task.state, TaskState::Completed);
     assert_eq!(

@@ -27,6 +27,7 @@ use ::memory_engine::core_store::{
 };
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::forgetting::ForgetReviewResult;
+use ::memory_engine::hypothesis::HypothesisGraphExportRequest;
 use ::memory_engine::llm::{LlmResponse, SleepRun};
 use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::reflection::{
@@ -379,6 +380,18 @@ impl PyMemoryEngine {
     fn list_candidates(&self, py: Python<'_>) -> PyResult<String> {
         let candidates = run_without_gil(py, || self.inner.list_candidates())?;
         dump_json(&candidates, "candidate beliefs")
+    }
+
+    fn migrate_hypothesis_graph(&self, py: Python<'_>) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.migrate_hypothesis_graph())?;
+        dump_json(&result, "hypothesis graph migration result")
+    }
+
+    fn export_hypothesis_graph(&self, py: Python<'_>, request_json: &str) -> PyResult<String> {
+        let request: HypothesisGraphExportRequest =
+            parse_json(request_json, "hypothesis graph export request")?;
+        let result = run_without_gil(py, || self.inner.export_hypothesis_graph(request))?;
+        dump_json(&result, "hypothesis graph export")
     }
 
     fn review_candidate(&self, py: Python<'_>, review_json: &str) -> PyResult<String> {

@@ -1,6 +1,7 @@
 use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
 use crate::event::StoredEvent;
+use crate::hypothesis::{HypothesisEvidenceLink, HypothesisNode, HypothesisRelation};
 use crate::journal::JournalOperation;
 use crate::llm::SleepRun;
 use crate::manifest::Manifest;
@@ -79,7 +80,27 @@ pub trait Storage {
     fn read_candidate_belief(&self, candidate_id: &str) -> Result<CandidateBelief>;
     fn read_candidate_belief_optional(&self, candidate_id: &str)
         -> Result<Option<CandidateBelief>>;
+    /// Read only persisted v0.5 candidate files, without graph projections.
+    /// Schema migration uses this so future graph-native nodes are never
+    /// flattened back into legacy records.
+    fn read_legacy_candidate_beliefs(&self) -> Result<StorageCollection<CandidateBelief>>;
     fn read_candidate_beliefs(&self) -> Result<StorageCollection<CandidateBelief>>;
+    fn write_hypothesis_node(&self, node: &HypothesisNode) -> Result<()>;
+    fn read_hypothesis_node(&self, hypothesis_id: &str) -> Result<HypothesisNode>;
+    fn read_hypothesis_node_optional(&self, hypothesis_id: &str) -> Result<Option<HypothesisNode>>;
+    fn read_hypothesis_nodes(&self) -> Result<StorageCollection<HypothesisNode>>;
+    fn write_hypothesis_evidence_link(&self, link: &HypothesisEvidenceLink) -> Result<()>;
+    fn read_hypothesis_evidence_link_optional(
+        &self,
+        evidence_link_id: &str,
+    ) -> Result<Option<HypothesisEvidenceLink>>;
+    fn read_hypothesis_evidence_links(&self) -> Result<StorageCollection<HypothesisEvidenceLink>>;
+    fn write_hypothesis_relation(&self, relation: &HypothesisRelation) -> Result<()>;
+    fn read_hypothesis_relation_optional(
+        &self,
+        relation_id: &str,
+    ) -> Result<Option<HypothesisRelation>>;
+    fn read_hypothesis_relations(&self) -> Result<StorageCollection<HypothesisRelation>>;
 
     fn save_task(&self, task: &PendingTask) -> Result<()>;
     fn load_task(&self, task_id: &str) -> Result<PendingTask>;

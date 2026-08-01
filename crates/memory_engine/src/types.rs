@@ -16,6 +16,16 @@ pub const CORE_FACT_UPSERT_RESULT_SCHEMA_VERSION: &str = "core_fact_upsert_resul
 pub const CORE_CONTEXT_REQUEST_SCHEMA_VERSION: &str = "core_context_request.v1";
 pub const CORE_CONTEXT_PACKAGE_SCHEMA_VERSION: &str = "core_context_package.v1";
 pub const CANDIDATE_BELIEF_SCHEMA_VERSION: &str = "candidate_belief.v1";
+pub const HYPOTHESIS_NODE_SCHEMA_VERSION: &str = "hypothesis_node.v1";
+pub const HYPOTHESIS_EVIDENCE_LINK_SCHEMA_VERSION: &str = "hypothesis_evidence_link.v1";
+pub const HYPOTHESIS_RELATION_SCHEMA_VERSION: &str = "hypothesis_relation.v1";
+pub const HYPOTHESIS_GRAPH_EXPORT_REQUEST_SCHEMA_VERSION: &str =
+    "hypothesis_graph_export_request.v1";
+pub const HYPOTHESIS_GRAPH_EXPORT_SCHEMA_VERSION: &str = "hypothesis_graph_export.v1";
+pub const HYPOTHESIS_GRAPH_MIGRATION_RESULT_SCHEMA_VERSION: &str =
+    "hypothesis_graph_migration_result.v1";
+pub const HYPOTHESIS_GRAPH_MIGRATION_OPERATION_SCHEMA_VERSION: &str =
+    "hypothesis_graph_migration_operation.v1";
 pub const CANDIDATE_REVIEW_INPUT_SCHEMA_VERSION: &str = "candidate_review_input.v1";
 pub const CANDIDATE_REVIEW_RESULT_SCHEMA_VERSION: &str = "candidate_review_result.v1";
 pub const REFLECTION_RESULT_SCHEMA_VERSION: &str = "reflection_result.v1";

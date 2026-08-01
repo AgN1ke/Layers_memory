@@ -685,11 +685,12 @@ unscoped namespace, а cited evidence повторно перевіряєтьс�
 effect. Детальний gate зафіксовано в
 [Autonomous Reflection Phase C.1](../planning/autonomous-reflection-v0.5.md#phase-c1---integrity-and-recovery-closure).
 
-### 9.2 Planned hypothesis graph after v0.5
+### 9.2 Hypothesis graph storage foundation after v0.5
 
-Плоский `CandidateBelief` є поточною v0.5 формою reviewable висновку. Наступна
-архітектурна форма не замінює його одним «кращим» текстом, а представляє
-проміжне розуміння як граф гіпотез між Archive і Core.
+Плоский `CandidateBelief` є v0.5 compatibility-формою reviewable висновку.
+Phase 2 v0.6 реалізує persisted основу наступної архітектурної форми: проміжне
+розуміння представлено як graph records між Archive і Core, але чинна
+reflection-поведінка ще працює через стару проєкцію.
 
 Вузол графа є окремим твердженням із personality scope, evidence, support,
 contradiction, часовою застосовністю і lifecycle. Ребра відрізняють ширше
@@ -704,10 +705,19 @@ validated MemoryUnit може підтримувати кілька рівнів
 vectors можуть знайти стару повʼязану гіпотезу всередині третього, глибокого
 шару, але structural scope та non-vector fallback лишаються обовʼязковими.
 
-LLM пропонує формулювання й relations; Rust core володіє evidence identity,
-confidence components, propagation, transitions, journal і promotion gates.
-Схеми та API для цієї форми не вважаються реалізованими цим описом. Їхня
-послідовність визначена у
+Реалізовані окремі records `hypothesis_node.v1`,
+`hypothesis_evidence_link.v1`, `hypothesis_relation.v1`, scope-exact graph
+export і journaled migration. Migration переносить лише наявний flat зміст і
+ID provenance: вона не вгадує abstraction level, evidence directness або
+semantic relation. Один MemoryUnit у межах однієї hypothesis/polarity має один
+детермінований evidence edge; candidate та reinforcement records лишаються
+origins цього ребра й не множать незалежні докази.
+
+Поки Phase 3 не реалізована, LLM не створює hierarchy relations. Rust core уже
+володіє graph identity, scope isolation, persisted schema, migration/recovery і
+compatibility projection. Майбутня Phase 3 додасть bounded graph selection,
+typed hierarchical proposals, confidence components і propagation за
+послідовністю з
 [Reflective Belief System](../planning/reflective-belief-system.md).
 
 ---
@@ -736,6 +746,13 @@ memory/
       <category>.json        — стабільні факти по категоріях; pretty JSON is current human-inspectable form
     candidates/
       <candidate_id>.json    — кандидати на промоцію
+    hypotheses/
+      nodes/
+        <hypothesis_id>.json — reviewable graph nodes; candidate-compatible projection
+      evidence/
+        <evidence_link_id>.json — one independent MemoryUnit edge per hypothesis/polarity
+      relations/
+        <relation_id>.json   — proposed/confirmed graph relations; never inferred by migration
   tasks/
     <task_id>.json           — стан PendingTask'ів
   runs/

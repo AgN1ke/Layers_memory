@@ -20,6 +20,10 @@
 - `sleep.rs` - `SleepCompressionResult` і базова валідація результату.
 - `reflection.rs` - manual/autonomous reflection contracts, trigger status і
   durable per-scope processing state.
+- `hypothesis.rs` - versioned hypothesis node, MemoryUnit evidence edge,
+  relation, migration result and graph export contracts.
+- `engine/hypothesis_flow.rs` - journaled flat-candidate migration, restart
+  recovery and scope-exact human inspection export.
 - `engine/reflection_flow.rs` - core-owned eligibility, task orchestration,
   personality-scope membership, bounded structural history selection,
   typed result actions, reinforcement, checkpointing і CandidateBelief
@@ -50,5 +54,6 @@ candidate until explicit review. New tasks request
 `reflection_actions_result.v1`; legacy `reflection_result.v1` responses remain
 readable for compatibility. Scope isolation, terminal review guards, live
 evidence revalidation, journal-backed idempotent apply/review and text-free
-task outcomes are implemented; live v0.5 acceptance remains pending. The
-post-v0.5 hypothesis graph is planned, not part of the current source contract.
+task outcomes are implemented; live v0.5 acceptance remains pending. The v0.6
+hypothesis graph storage foundation is now part of the source contract, but
+hierarchical LLM actions, support propagation and maturation remain Phase 3.

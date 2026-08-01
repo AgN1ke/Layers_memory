@@ -27,11 +27,15 @@ into a trait. Apply and owner review are now scope-safe, journal-backed, and
 recoverable across multi-file writes; v0.5 release acceptance remains open for
 live Chibigochi calibration rather than for this integrity gap.
 
-The post-v0.5 direction is a hierarchy of reviewable hypotheses rather than
-one flat deduplicated text. A specific interest can strongly support a narrow
-hypothesis and weakly support broader ones; independent later evidence matures
-each level separately. This internal hypothesis graph remains part of the slow
-Archive-to-Core transition, not a fourth prompt-visible memory layer.
+The v0.6 storage foundation begins that hierarchy without pretending the
+reasoning behavior already exists. Flat candidates can be migrated through a
+journaled, restart-safe operation into separate hypothesis nodes and atomic
+MemoryUnit evidence links; graph export is exact-scope and human-inspectable,
+while the existing reflection/review API keeps working through a compatibility
+projection. Migration never invents broader/narrower relations. Hierarchical
+proposal and maturation remain the next behavior phase. This internal graph is
+part of the slow Archive-to-Core transition, not a fourth prompt-visible
+memory layer.
 
 Reflection is personality-scoped rather than conversation-scoped. A host binds
 several source sessions through one explicit `core_scope`; the core can then

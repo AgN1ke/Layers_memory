@@ -115,6 +115,21 @@ with new evidence, propose a reviewable Core challenge, or return structured
 no-insight. The legacy `resume_reflection_analysis` method remains available
 for saved `reflection_result.v1` work.
 
+The v0.6 hypothesis graph storage surface is administrative and remains a
+thin JSON boundary:
+
+```python
+migration = json.loads(engine.migrate_hypothesis_graph())
+graph = json.loads(engine.export_hypothesis_graph(json.dumps({
+    "schema_version": "hypothesis_graph_export_request.v1",
+    "core_scope": "owner_scope",
+})))
+```
+
+Migration is journaled and restart-safe. Export is exact-scope; `null` means
+only the isolated unscoped namespace. Neither method invokes an LLM or adds the
+graph to the chat prompt.
+
 All payloads follow the JSON contracts in `wiki/pages/foundation/contracts.md` at the
 repository root.
 

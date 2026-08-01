@@ -67,7 +67,11 @@ integrity Phase C.1 реалізовані: scope ізольований, apply/
 journal intent, evidence revalidation та restart replay без повторних side
 effects. v0.5 лишається в роботі до живого Chibigochi acceptance і release
 синхронізації. Наступна когнітивна віха після цього — не кращий flat candidate
-dedup, а v0.6 hypothesis graph із рівнями узагальнення.
+dedup, а v0.6 hypothesis graph із рівнями узагальнення. Storage foundation
+Phase 2 уже реалізовано окремо від live gate v0.5: schema, journaled migration,
+scope-safe export і compatibility projection не змінюють chat/reflection
+поведінку. Жива міграція Chibigochi ще не прийнята; Phase 3 reasoning не
+вважається реалізованим.
 
 ## Стан на 2026-06-10
 
@@ -488,10 +492,22 @@ Core-anchored contextual expansion Phase 2 і Recall Stage 3. Це наступ�
 вузьких і широких гіпотез із прямими evidence links. Це внутрішній простір між
 Archive і Core, не четвертий prompt-visible memory layer.
 
-- [ ] Версіоновані hypothesis node, evidence link і relation contracts;
-  journaled migration `candidate_belief.v1` без вигаданих semantic relations.
-- [ ] Human-readable graph export: кожний вузол простежується до validated
-  MemoryUnit, reinforcement, session і archive provenance.
+- [x] Версіоновані hypothesis node, evidence link і relation contracts;
+  journaled restart-safe migration `candidate_belief.v1` без вигаданих
+  semantic relations. — 2026-08-01,
+  `crates/memory_engine/src/hypothesis.rs`,
+  `engine/hypothesis_flow.rs`.
+- [x] Scope-exact human-inspectable JSON graph export: кожний resolved evidence
+  link простежується до MemoryUnit, session/archive provenance та legacy
+  candidate/reinforcement origin; unresolved legacy IDs позначені явно. —
+  2026-08-01.
+- [x] Compatibility projection: чинні reflection/review API продовжують
+  працювати як `CandidateBelief`, водночас graph-only abstraction,
+  contradiction, validity і evidence-directness fields не стираються під час
+  legacy update. Cross-scope relations fail closed. — 2026-08-01.
+- [ ] Прогнати journaled migration та scope export на копії живого Chibigochi
+  storage; звірити counts, unresolved IDs і provenance вручну. Це acceptance
+  Phase 2, а не передумова для написання її детермінованого коду.
 - [ ] Trigger-related candidate subgraph замість recency-only останніх N:
   structural baseline плюс optional local-vector enrichment у глибокому шарі;
   non-vector fallback повний, vectors не визначають scope або truth.

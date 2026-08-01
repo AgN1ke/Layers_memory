@@ -14,6 +14,7 @@ use memory_engine::core_store::{
 };
 use memory_engine::event::IngestEvent;
 use memory_engine::forgetting::ForgetReviewResult;
+use memory_engine::hypothesis::HypothesisGraphExportRequest;
 use memory_engine::llm::{LlmResponse, SleepRun};
 use memory_engine::recall::RecallQuery;
 use memory_engine::reflection::{
@@ -298,6 +299,28 @@ impl MemoryEngineGodot {
         self.with_engine(|engine| {
             let candidates = engine.list_candidates().map_err(|err| err.to_string())?;
             dump_json(&candidates, "candidate beliefs")
+        })
+    }
+
+    #[func]
+    fn migrate_hypothesis_graph(&self) -> GString {
+        self.with_engine(|engine| {
+            let result = engine
+                .migrate_hypothesis_graph()
+                .map_err(|err| err.to_string())?;
+            dump_json(&result, "hypothesis graph migration result")
+        })
+    }
+
+    #[func]
+    fn export_hypothesis_graph(&self, request_json: GString) -> GString {
+        self.with_engine(|engine| {
+            let request: HypothesisGraphExportRequest =
+                parse_json(&request_json.to_string(), "hypothesis graph export request")?;
+            let result = engine
+                .export_hypothesis_graph(request)
+                .map_err(|err| err.to_string())?;
+            dump_json(&result, "hypothesis graph export")
         })
     }
 
