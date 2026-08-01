@@ -120,7 +120,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
             schema_version: INGEST_RESULT_SCHEMA_VERSION.to_string(),
             stored_event: stored_event.clone(),
         };
-        let result_digest = serializable_digest(&ingest)?;
+        let result_digest = transactional_support::serializable_digest(&ingest)?;
         let session_key = RecordKey::new(SESSION_COLLECTION, stored_event.session_id.clone())?;
         let event_key = RecordKey::new(EVENT_COLLECTION, stored_event.event_id.clone())?;
         let host_id = request.host_id.clone();
@@ -231,16 +231,11 @@ struct IngestDigestInput<'a> {
 }
 
 fn ingest_request_digest(host_id: &str, received_at: &str, event: &IngestEvent) -> Result<String> {
-    serializable_digest(&IngestDigestInput {
+    transactional_support::serializable_digest(&IngestDigestInput {
         host_id,
         received_at,
         event,
     })
-}
-
-pub(super) fn serializable_digest<T: Serialize>(value: &T) -> Result<String> {
-    let bytes = serde_json::to_vec(value)?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 fn deterministic_event_id(context: &VaultContext, intent: &WorkUnitIntent) -> String {

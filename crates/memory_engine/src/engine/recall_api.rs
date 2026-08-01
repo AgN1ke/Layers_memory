@@ -40,54 +40,23 @@ impl<S: Storage> MemoryEngine<S> {
             .as_ref()
             .map(|collection| collection.warnings.clone())
             .unwrap_or_default();
-        let mut archive_entries = if let Some(collection) = archive_read {
+        let archive_entries = if let Some(collection) = archive_read {
             collection
                 .items
                 .into_iter()
-                .filter(|entry| entry.status == ArchiveStatus::Complete)
-                .filter(|entry| {
-                    query
-                        .session_id
-                        .as_ref()
-                        .is_none_or(|session_id| &entry.source_session_id == session_id)
+                .map(|entry| {
+                    let delta = pending_recall_stats.get(&entry.archive_id);
+                    archive_with_pending_recall_stats(entry, delta)
                 })
                 .collect()
         } else {
             Vec::new()
         };
-
-        let candidate_count = archive_entries.len();
-        let mut scored_entries = archive_entries
-            .drain(..)
-            .filter_map(|entry| {
-                let delta = pending_recall_stats.get(&entry.archive_id);
-                let effective_entry = archive_with_pending_recall_stats(entry, delta);
-                let scored = score_archive_entry(
-                    &effective_entry,
-                    &query,
-                    &created_at,
-                    &self.options.recall,
-                );
-                if query
-                    .filters
-                    .min_freshness
-                    .is_some_and(|min_freshness| scored.effective_freshness < min_freshness)
-                {
-                    None
-                } else {
-                    Some((effective_entry, scored))
-                }
-            })
-            .collect::<Vec<_>>();
-        let filtered_count = scored_entries.len();
-
-        scored_entries.sort_by(|(left_entry, left_score), (right_entry, right_score)| {
-            right_score
-                .score
-                .total_cmp(&left_score.score)
-                .then_with(|| right_entry.weight.total_cmp(&left_entry.weight))
-                .then_with(|| left_entry.archive_id.cmp(&right_entry.archive_id))
-        });
+        let ranking =
+            rank_stage1_archives(archive_entries, &query, &created_at, &self.options.recall);
+        let candidate_count = ranking.candidate_count;
+        let filtered_count = ranking.filtered_count;
+        let mut scored_entries = ranking.entries;
 
         let limit = if query.limit == 0 {
             self.options.recall.default_limit

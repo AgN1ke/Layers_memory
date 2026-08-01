@@ -279,8 +279,15 @@ The first S2.B slice adds transactional Core upsert/patch without duplicating
 the cognitive policy. One category and its durable operation result publish
 together under an exact revision; patch is category-addressed and therefore a
 point operation. Recall feedback is classified as durable correctness state,
-not telemetry, because it changes ranking and forgetting protection. Its
-transactional mutation and committed-view read path remain the next S2.B gate.
+not telemetry, because it changes ranking and forgetting protection.
+
+That recall gate is now implemented for Stage 1 in the logical reference.
+Ranking, feedback on selected archives and the exact returned result share one
+idempotent work unit; snapshot membership/revisions detect phantoms and retry.
+Another engine instance sees the committed counters immediately. The reference
+may scan one vault collection to prove semantics, but S3 still owes indexed
+queries and query-plan evidence. Stage 2 is rejected on this API until vector
+records migrate in S2.D.
 
 ### S3 — PostgreSQLVaultStorage and pgvector
 

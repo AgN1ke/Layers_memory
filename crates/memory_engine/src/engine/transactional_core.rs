@@ -1,4 +1,3 @@
-use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -187,7 +186,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                     || Ok(new_fact_id.clone()),
                     applied_at.clone(),
                 )?;
-                let result_digest = transactional_ingest::serializable_digest(&result)?;
+                let result_digest = transactional_support::serializable_digest(&result)?;
                 work_unit.put(
                     category_key.clone(),
                     expected,
@@ -209,7 +208,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
         )
         .map_err(MemoryEngineError::from)?;
 
-        let upsert = read_committed_result::<S, CoreFactUpsertResult>(
+        let upsert = transactional_support::read_transaction_result::<S, CoreFactUpsertResult>(
             &self.storage,
             context,
             &result_key,
@@ -260,7 +259,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                     category_name.clone(),
                     applied_at.clone(),
                 )?;
-                let result_digest = transactional_ingest::serializable_digest(&result)?;
+                let result_digest = transactional_support::serializable_digest(&result)?;
                 work_unit.put(
                     category_key.clone(),
                     expected,
@@ -282,7 +281,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
         )
         .map_err(MemoryEngineError::from)?;
 
-        let patch = read_committed_result::<S, CoreFactPatchResult>(
+        let patch = transactional_support::read_transaction_result::<S, CoreFactPatchResult>(
             &self.storage,
             context,
             &result_key,
@@ -321,43 +320,6 @@ fn read_core_category<W: StorageWorkUnit>(
             ExpectedRevision::Absent,
         )),
     }
-}
-
-fn read_committed_result<S: TransactionalStorage, T: DeserializeOwned + Serialize>(
-    storage: &S,
-    context: &VaultContext,
-    key: &RecordKey,
-    receipt: &WorkUnitReceipt,
-    expected_payload_schema: &str,
-) -> Result<T> {
-    if receipt.result_reference != key.reference() {
-        return Err(MemoryEngineError::Storage(
-            "committed Core receipt points to an unexpected result record".to_string(),
-        ));
-    }
-    let record = storage
-        .read_record(context, key)
-        .map_err(MemoryEngineError::from)?
-        .ok_or_else(|| {
-            MemoryEngineError::Storage(
-                "committed Core receipt has no durable result record".to_string(),
-            )
-        })?;
-    record.validate()?;
-    if record.payload_schema_version != expected_payload_schema {
-        return Err(MemoryEngineError::IncompatibleSchema {
-            expected: expected_payload_schema.to_string(),
-            actual: record.payload_schema_version,
-        });
-    }
-    let result: T = serde_json::from_value(record.payload)?;
-    let digest = transactional_ingest::serializable_digest(&result)?;
-    if receipt.result_digest != digest {
-        return Err(MemoryEngineError::Storage(
-            "committed Core result digest does not match its receipt".to_string(),
-        ));
-    }
-    Ok(result)
 }
 
 fn validate_stored_category(category: &CoreStoreCategory, expected_name: &str) -> Result<()> {
@@ -417,7 +379,7 @@ fn transactional_core_digest<T: Serialize>(
     category: Option<&str>,
     input: &T,
 ) -> Result<String> {
-    transactional_ingest::serializable_digest(&TransactionalCoreDigestInput {
+    transactional_support::serializable_digest(&TransactionalCoreDigestInput {
         applied_at,
         category,
         input,

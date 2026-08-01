@@ -476,10 +476,12 @@ core як централізований сервіс для тисяч грав
   category revision, durable operation result і shared Core policy; чинний
   Storage/FileStorage API не зламано. Compatibility adapter і решта flow ще
   відкриті. — 2026-08-01.
-- [~] Correctness-critical recall state класифіковано: `recall_count` і
-  `last_recalled_at` не telemetry, доки впливають на Stage 1/forgetting.
-  Durable atomic feedback та committed-view server recall ще треба
-  реалізувати; replica-local path не буде оголошений server-ready.
+- [x] Correctness-critical recall state класифіковано й перенесено в S2.B
+  reference: `recall_transactional` читає один Archive snapshot, ранжує shared
+  Stage 1 policy та одним work unit зберігає selected feedback і exact result.
+  Replica-local deltas не беруть участі. Collection revision/membership
+  захищені від phantom changes. Production indexed query лишається S3, vectors
+  — S2.D. — 2026-08-01, `server_recall_storage_v2.rs`.
 - [x] S2.B Core logical implementation: versioned transactional upsert/patch,
   deterministic new fact IDs, durable replay result, exact revision retry,
   point patch із explicit category, scope/vault isolation та fault suite. Це

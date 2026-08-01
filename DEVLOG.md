@@ -1,5 +1,32 @@
 # DEVLOG
 
+## Запис 163 — 2026-08-01 — S2.B recall став committed cognitive transition
+
+Після Core slice перенесено correctness-affecting recall state. Новий
+`recall_transactional` не використовує `MemoryEngine.recall_stats` конкретного
+процесу: він читає vault-bound Archive snapshot, застосовує ту саму Stage 1
+policy, що й FileStorage path, і одним work unit записує increments вибраних
+archives та exact `RecallResult`. Result зберігається тому, що replay не має ні
+рахувати hit удруге, ні повертати інший rank після пізніших змін.
+
+Storage work unit отримав collection snapshot read із revision/membership
+tracking. In-memory reference ловить не лише update, а й phantom insert/delete
+між scan і commit та повторює весь deterministic recall. Default method у
+public trait fail-closed, тому additive API не ламає компіляцію сторонніх
+Storage v2 implementations; реальний backend мусить явно підтримати snapshot.
+
+Вісім tests покривають пʼять pre-publish edges для двох selected archives плюс
+result record, lost acknowledgement, replay/tamper, concurrent increments,
+видимість rank boost іншій engine instance, phantom insert і vault isolation.
+Старий buffered FileStorage path та vector recall не змінені. Explicit vector
+query на transactional API відхиляється до S2.D замість тихого Stage 1
+downgrade. Full-vault scan допустимий лише в conformance reference; S3 має
+довести indexed query plan.
+
+Наступний S2.B slice: manifest/task/checkpoint transitions і Session archive
+coverage. Host adapters, PostgreSQL і production readiness залишаються
+відкритими.
+
 ## Запис 162 — 2026-08-01 — S2.B почався з транзакційного Core
 
 Core upsert/patch перенесено на Storage v2 як окремий additive server path.

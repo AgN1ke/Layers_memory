@@ -229,6 +229,17 @@ pub enum BeginWorkUnit<W> {
 pub trait StorageWorkUnit {
     fn get(&mut self, key: &RecordKey) -> StorageV2Result<Option<VaultRecord>>;
 
+    /// Reads one vault-bound collection from the work-unit snapshot and tracks
+    /// its membership/revisions so commit detects inserts, deletes and updates
+    /// (phantoms included). Reference backends may scan; production backends
+    /// implement domain-indexed queries in S3.
+    fn scan_collection(&mut self, collection: &str) -> StorageV2Result<Vec<VaultRecord>> {
+        Err(MemoryEngineError::Storage(format!(
+            "transactional collection snapshot is not supported: {collection}"
+        ))
+        .into())
+    }
+
     fn put(
         &mut self,
         key: RecordKey,
@@ -503,6 +514,7 @@ impl TransactionalStorage for InMemoryTransactionalStorage {
             intent,
             snapshot,
             observed: BTreeMap::new(),
+            observed_collections: BTreeMap::new(),
             staged: BTreeMap::new(),
         }))
     }
@@ -530,6 +542,7 @@ pub struct InMemoryWorkUnit<'a> {
     intent: WorkUnitIntent,
     snapshot: BTreeMap<RecordKey, VaultRecord>,
     observed: BTreeMap<RecordKey, Option<u64>>,
+    observed_collections: BTreeMap<String, BTreeMap<RecordKey, u64>>,
     staged: BTreeMap<RecordKey, StagedMutation>,
 }
 
@@ -559,6 +572,24 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
         self.observed
             .insert(key.clone(), value.as_ref().map(|record| record.revision));
         Ok(value)
+    }
+
+    fn scan_collection(&mut self, collection: &str) -> StorageV2Result<Vec<VaultRecord>> {
+        validate_component("record collection", collection)?;
+        let records = self
+            .snapshot
+            .iter()
+            .filter(|(key, _)| key.collection == collection)
+            .map(|(key, record)| (key.clone(), record.clone()))
+            .collect::<BTreeMap<_, _>>();
+        self.observed_collections.insert(
+            collection.to_string(),
+            records
+                .iter()
+                .map(|(key, record)| (key.clone(), record.revision))
+                .collect(),
+        );
+        Ok(records.into_values().collect())
     }
 
     fn put(
@@ -622,6 +653,20 @@ impl StorageWorkUnit for InMemoryWorkUnit<'_> {
                     key.reference(),
                     observed,
                     current_revision
+                )));
+            }
+        }
+
+        for (collection, observed) in &self.observed_collections {
+            let current_revisions = current
+                .records
+                .iter()
+                .filter(|(key, _)| key.collection == *collection)
+                .map(|(key, record)| (key.clone(), record.revision))
+                .collect::<BTreeMap<_, _>>();
+            if &current_revisions != observed {
+                return Err(StorageV2Error::Conflict(format!(
+                    "collection {collection} changed while the work unit was open"
                 )));
             }
         }

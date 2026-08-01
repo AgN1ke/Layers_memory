@@ -61,10 +61,13 @@ server track keeps the same Rust cognitive core behind an authenticated Memory
 Runtime, binds one logical vault per game account, and adds transactional
 PostgreSQL/pgvector storage plus durable workers. S1 now defines fail-closed
 vault identity and restart-safe ordered/idempotent turns. The active S2
-foundation adds an additive vault-bound work-unit contract and proves the first
-atomic domain transition: event and Session metadata commit together with
-optimistic retry and idempotent replay. It is still a conformance reference,
-not the production server backend: remaining memory flows, PostgreSQL, the
+foundation adds an additive vault-bound work-unit contract. Event and Session
+metadata commit together; Core upsert/patch uses exact category revisions and
+durable replay results; transactional Stage 1 recall ranks one committed
+Archive snapshot and atomically records its correctness-affecting feedback.
+These paths have optimistic retry, phantom protection and idempotent replay.
+They are still a conformance reference, not the production server backend:
+remaining workflows and vector recall, indexed PostgreSQL storage, the
 authenticated game API and durable workers are open. The phased plan and launch gates are documented in
 the [Server-scale Memory Runtime](wiki/pages/planning/server-scale-memory-runtime.md).
 

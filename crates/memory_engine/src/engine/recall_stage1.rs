@@ -22,6 +22,98 @@ pub(super) struct ScoredArchiveEntry {
     pub(super) semantic_similarity: Option<f64>,
 }
 
+pub(super) struct Stage1ArchiveRanking {
+    pub(super) candidate_count: usize,
+    pub(super) filtered_count: usize,
+    pub(super) entries: Vec<(ArchiveEntry, ScoredArchiveEntry)>,
+}
+
+pub(super) fn rank_stage1_archives(
+    archive_entries: Vec<ArchiveEntry>,
+    query: &RecallQuery,
+    reference_at: &str,
+    config: &RecallStage1Config,
+) -> Stage1ArchiveRanking {
+    let archive_filters = archive_filters_from_recall(&query.filters);
+    let archive_entries = archive_entries
+        .into_iter()
+        .filter(|entry| archive_matches_filters(entry, &archive_filters))
+        .filter(|entry| entry.status == ArchiveStatus::Complete)
+        .filter(|entry| {
+            query
+                .session_id
+                .as_ref()
+                .is_none_or(|session_id| &entry.source_session_id == session_id)
+        })
+        .collect::<Vec<_>>();
+    let candidate_count = archive_entries.len();
+    let mut entries = archive_entries
+        .into_iter()
+        .filter_map(|entry| {
+            let scored = score_archive_entry(&entry, query, reference_at, config);
+            if query
+                .filters
+                .min_freshness
+                .is_some_and(|min_freshness| scored.effective_freshness < min_freshness)
+            {
+                None
+            } else {
+                Some((entry, scored))
+            }
+        })
+        .collect::<Vec<_>>();
+    let filtered_count = entries.len();
+    entries.sort_by(|(left_entry, left_score), (right_entry, right_score)| {
+        right_score
+            .score
+            .total_cmp(&left_score.score)
+            .then_with(|| right_entry.weight.total_cmp(&left_entry.weight))
+            .then_with(|| left_entry.archive_id.cmp(&right_entry.archive_id))
+    });
+    Stage1ArchiveRanking {
+        candidate_count,
+        filtered_count,
+        entries,
+    }
+}
+
+fn archive_matches_filters(entry: &ArchiveEntry, filters: &ArchiveFilters) -> bool {
+    if filters
+        .theme
+        .as_ref()
+        .is_some_and(|theme| entry.theme.as_ref() != Some(theme))
+    {
+        return false;
+    }
+    if filters
+        .min_weight
+        .is_some_and(|min_weight| entry.weight < min_weight)
+    {
+        return false;
+    }
+    if filters
+        .min_freshness
+        .is_some_and(|min_freshness| entry.freshness < min_freshness)
+    {
+        return false;
+    }
+    if !filters.tags.is_empty()
+        && !filters
+            .tags
+            .iter()
+            .all(|tag| entry.tags.iter().any(|entry_tag| entry_tag == tag))
+    {
+        return false;
+    }
+    if filters.time_range.as_ref().is_some_and(|time_range| {
+        entry.time_range.end.as_str() < time_range.start.as_str()
+            || entry.time_range.start.as_str() > time_range.end.as_str()
+    }) {
+        return false;
+    }
+    true
+}
+
 pub(super) fn score_archive_entry(
     entry: &ArchiveEntry,
     query: &RecallQuery,

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Status: **S2 inventory complete; S2.A accepted; first S2.B Core slice implemented; S2 exit gate open**.
+Status: **S2 inventory complete; S2.A accepted; S2.B Core and committed-view Stage 1 recall slices implemented; S2 exit gate open**.
 
 This page is the migration ledger between the method-by-method local `Storage`
 trait and the vault-bound transactional storage required by the server runtime.
@@ -140,10 +140,26 @@ The recall-statistics ambiguity is resolved as a design decision: Archive
 `recall_count` and `last_recalled_at` are **correctness state**, because Stage 1
 reads them to alter ranking and forgetting uses their archive-level proxy.
 They are not allowed to remain replica-local on the server path and cannot be
-downgraded to telemetry while those policies consume them. The next S2.B slice
-must add durable atomic recall feedback and a committed-view server recall
-path. Until both exist, server recall is not declared replica-consistent.
-After that, move manifest/task transitions and Session archive coverage.
+downgraded to telemetry while those policies consume them.
+
+**Committed-view Stage 1 recall is now implemented as the second S2.B
+sub-slice.** `recall_transactional` ranks a vault-bound Archive snapshot with
+the same Stage 1 policy as Storage v1, increments feedback on exactly the
+selected entries and stores the exact `RecallResult` in one work unit. Replay
+cannot count twice or return a newly recomputed rank. Snapshot collection reads
+track membership and revisions, so an insert/delete/update during the operation
+causes whole-unit retry instead of a phantom result. Eight tests cover every
+pre-publish mutation edge, lost acknowledgement, tamper, replay, concurrent
+feedback, cross-replica ranking visibility, phantom insertion and vault
+isolation.
+
+This reference intentionally supports Stage 1 only. A request carrying
+`query_embedding` fails clearly until S2.D ports the vector scope/index; it
+does not silently degrade a caller that explicitly requested Stage 2. The
+in-memory reference scans one vault collection for conformance. S3 must replace
+that with indexed Archive queries and prove query plans; this is not a
+production scan approval. Next move manifest/task transitions and Session
+archive coverage.
 
 ### S2.C — Sleep, fidelity and forgetting
 

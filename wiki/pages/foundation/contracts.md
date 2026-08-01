@@ -2124,8 +2124,18 @@ scope лишається exact isolation boundary.
 
 `recall_count` і `last_recalled_at` у server form є correctness state, а не
 lossy telemetry: вони впливають на Stage 1 rank і forgetting protection.
-Server recall не може враховувати незлиті replica-local deltas. До реалізації
-atomic feedback і committed-view read цей flow не має production-ready claim.
+Server recall не враховує незлиті replica-local deltas.
+`transactional_recall_request.v1` freeze-ить `RecallQuery` разом із
+`created_at`; `transactional_recall_result.v1` повертає exact committed
+`recall_result.v1` та receipt. Stage 1 ranking, increment вибраних archives і
+result record комітяться разом. Collection snapshot відстежує membership і
+revisions, тому phantom insert/delete/update спричиняє retry. Replay повертає
+той самий result і не збільшує counters вдруге.
+
+Поточний Storage v2 recall contract є Stage 1 reference. Explicit
+`query_embedding` відхиляється до перенесення vector records у S2.D. In-memory
+`scan_collection` доводить committed-view semantics; production S3 adapter має
+реалізувати indexed vault query, а не переносити full scan у hot path.
 
 PostgreSQL row-level security, composite `(vault_id, id)` references і
 non-owner runtime role є defense in depth поверх bound storage handle. Вони не

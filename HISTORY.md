@@ -46,6 +46,37 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-01 — Recall feedback becomes committed server correctness state
+
+Context. The compatible FileStorage path buffers recall counters inside one
+`MemoryEngine`. In a multi-replica runtime that would make Stage 1 ranking and
+forgetting protection depend on which process served the request.
+
+**What changed:**
+- Added versioned transactional Stage 1 recall. One Archive snapshot is ranked
+  with the shared policy; feedback on selected records and the exact result are
+  committed atomically and replayed idempotently.
+- Storage v2 work units can request a collection snapshot whose membership and
+  revisions are validated at commit, including phantom inserts/deletes.
+- Another engine instance sees durable recall feedback immediately; concurrent
+  recalls retry without dropping increments.
+
+**What is retracted:**
+- Replica-local recall deltas are not an acceptable server optimization while
+  they alter cognitive ranking. They remain valid only on the existing
+  single-writer FileStorage compatibility path.
+
+**What is still true:**
+- Stage 1 scoring behavior is shared with and unchanged for Storage v1.
+- Transactional vector reranking is not implemented; explicit embeddings fail
+  closed until the vector-storage workflow migrates.
+- The in-memory collection scan proves semantics, not production performance.
+  S3 still requires indexed PostgreSQL queries and query-plan evidence.
+
+**What we are doing:**
+- Continue S2.B with task/manifest/checkpoint transitions and Session archive
+  coverage, then port the larger durable workflows.
+
 ## 2026-08-01 — Transactional Core preserves one policy and exact replay
 
 Context. Core category files are protected only by in-process locks. In a

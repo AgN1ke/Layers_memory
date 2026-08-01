@@ -34,6 +34,7 @@ pub use engine::{
     RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result,
     TransactionalCorePatchRequest, TransactionalCorePatchResult, TransactionalCoreUpsertRequest,
     TransactionalCoreUpsertResult, TransactionalIngestRequest, TransactionalIngestResult,
+    TransactionalRecallRequest, TransactionalRecallResult,
 };
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;
