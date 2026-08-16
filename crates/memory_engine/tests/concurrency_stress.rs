@@ -72,6 +72,7 @@ fn run_parallel_session_and_core_stress(thread_count: usize, events_per_session:
                     schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
                     category: "name".to_string(),
                     scope: Some(session_id),
+                    subject: None,
                     text: format!("Stress user {index} has a stable name fact."),
                     confidence: 0.95,
                     tags: vec!["stress".to_string()],

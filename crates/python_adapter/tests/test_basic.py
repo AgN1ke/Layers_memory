@@ -38,6 +38,24 @@ def test_constructor_accepts_vector_tuning(tmp_path: Path):
     assert state["status"] == "disabled"
 
 
+def test_erasure_api_returns_versioned_idempotent_reports(
+    engine: memory_engine.MemoryEngine,
+):
+    session_report = json.loads(engine.delete_session("missing_session"))
+    assert session_report["schema_version"] == "memory_erasure_report.v1"
+    assert session_report["operation"] == "delete_session"
+    assert session_report["target_id"] == "missing_session"
+    assert session_report["archived_memory_preserved"] is True
+    assert session_report["deleted"]["sessions"] == 0
+
+    scope_report = json.loads(engine.purge_scope("missing_scope"))
+    assert scope_report["schema_version"] == "memory_erasure_report.v1"
+    assert scope_report["operation"] == "purge_scope"
+    assert scope_report["target_id"] == "missing_scope"
+    assert scope_report["archived_memory_preserved"] is False
+    assert scope_report["deleted"]["core_facts"] == 0
+
+
 def test_constructor_rejects_invalid_stage2_tuning(tmp_path: Path):
     with pytest.raises(ValueError, match="stage2_candidate_limit"):
         memory_engine.MemoryEngine(

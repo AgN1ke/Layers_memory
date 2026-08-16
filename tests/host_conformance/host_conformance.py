@@ -1513,8 +1513,8 @@ def run_direct_multispeaker(keep_runtime: bool) -> DriverResult:
     """Deterministic multi-speaker scenario over the public adapter surface.
 
     Proves that `speaker` survives the PyO3 JSON boundary, that the transcript
-    is attributed by name, and that the Phase-1 gate keeps high-confidence
-    gossip signals out of Core for multi-speaker sessions.
+    is attributed by name, direct self-statements reach subject-bound Core,
+    and gossip or dishonest model hints stay behind manual review.
     """
     runtime = Path(tempfile.mkdtemp(prefix="memory_engine_multispeaker_conformance_"))
     engine = memory_engine.MemoryEngine(str(runtime), host_id="host_conformance_multispeaker")
@@ -1522,7 +1522,7 @@ def run_direct_multispeaker(keep_runtime: bool) -> DriverResult:
         turns = [
             ("tg_101", "Жека", "Я нарешті купив мотоцикл!"),
             ("tg_202", "Антон", "А я на рибалці був, клювало на світанку."),
-            ("tg_101", "Жека", "Завтра заберу мотоцикл із салону."),
+            ("tg_101", "Жека", "Антон нібито збирається переїхати до Одеси."),
         ]
         for index, (speaker_id, speaker_name, text) in enumerate(turns, start=1):
             engine.ingest(
@@ -1541,6 +1541,10 @@ def run_direct_multispeaker(keep_runtime: bool) -> DriverResult:
                     }
                 )
             )
+
+        state = loads(engine.set_vector_scope(MULTISPEAKER_SESSION, True, False))
+        if state.get("status") not in {"building", "ready"}:
+            raise ConformanceError(f"multi-speaker vector scope did not enable: {state!r}")
 
         current_text = "Жека, коли забираєш мотоцикл?"
         live_package = loads(
@@ -1592,17 +1596,34 @@ def run_direct_multispeaker(keep_runtime: bool) -> DriverResult:
             raise ConformanceError(f"memory unit theses are not attributed:\n{theses}")
 
         core_summary = outcome.get("core_summary", {})
-        if core_summary.get("created", 0) != 0:
+        if core_summary.get("created", 0) != 2:
             raise ConformanceError(
-                f"multi-speaker gate failed: bridge created Core facts {core_summary!r}"
+                f"verified self-statements did not create two Core facts: {core_summary!r}"
             )
-        if core_summary.get("skipped", 0) < 1:
+        if core_summary.get("skipped", 0) < 2:
             raise ConformanceError(
-                f"multi-speaker gate did not report skipped signals: {core_summary!r}"
+                f"gossip or dishonest hint was not skipped: {core_summary!r}"
             )
-        if outcome.get("fidelity_requests"):
+        if len(outcome.get("fidelity_requests", [])) != 2:
             raise ConformanceError(
-                "no unit should be on the automatic Core path in a multi-speaker session"
+                f"only two verified Core-path units should reach fidelity: {outcome.get('fidelity_requests')!r}"
+            )
+        embedding_items = [
+            item
+            for request in outcome.get("embedding_requests", [])
+            for item in request.get("prompt_inputs", {})
+            .get("embed_batch", {})
+            .get("items", [])
+        ]
+        if len(embedding_items) != 3:
+            raise ConformanceError(
+                f"expected three attributed vector units and one rejected unit: {embedding_items!r}"
+            )
+
+        candidates = loads(engine.list_candidates())
+        if len(candidates) != 2:
+            raise ConformanceError(
+                f"gossip and dishonest hint must create two review candidates: {candidates!r}"
             )
 
         package = loads(
@@ -1622,12 +1643,23 @@ def run_direct_multispeaker(keep_runtime: bool) -> DriverResult:
                 )
             )
         )
-        if package.get("core_facts"):
-            raise ConformanceError(
-                f"multi-speaker Core must stay empty without review: {package.get('core_facts')!r}"
-            )
+        core_facts = package.get("core_facts", [])
+        subjects = {
+            fact.get("subject", {}).get("id"): fact.get("text", "")
+            for fact in core_facts
+            if isinstance(fact.get("subject"), dict)
+        }
+        if set(subjects) != {"tg_101", "tg_202"}:
+            raise ConformanceError(f"Core facts lost participant subjects: {core_facts!r}")
+        if "мотоцикл" not in subjects["tg_101"] or "рибал" not in subjects["tg_202"]:
+            raise ConformanceError(f"Core facts were assigned to the wrong people: {subjects!r}")
         view = engine.render_memory_view(dumps(package), current_text)
-        for marker in ["<memory_context>", "<long_memory>", "Жека"]:
+        for marker in [
+            "<memory_context>",
+            "<long_memory>",
+            "about Жека",
+            "about Антон",
+        ]:
             if marker not in view:
                 raise ConformanceError(f"post-sleep memory view missing {marker!r}\n{view}")
 
@@ -1657,7 +1689,12 @@ def multispeaker_response_for_request(run: dict[str, Any], request: dict[str, An
     inputs = request.get("prompt_inputs", {})
     sleep_task = inputs.get("sleep_task", {}) if isinstance(inputs, dict) else {}
     events = sleep_task.get("events", []) if isinstance(sleep_task, dict) else []
-    first_event_id = event_id(events[0]) if events else ""
+    events_by_text = {event_text(event): event_id(event) for event in events}
+    zheka_id = events_by_text.get("Я нарешті купив мотоцикл!", "")
+    anton_id = events_by_text.get("А я на рибалці був, клювало на світанку.", "")
+    gossip_id = events_by_text.get("Антон нібито збирається переїхати до Одеси.", "")
+    if not zheka_id or not anton_id or not gossip_id:
+        raise ConformanceError(f"multi-speaker task lost source events: {events!r}")
 
     if prompt_id == "memory_unit_pass":
         payload: dict[str, Any] = {
@@ -1666,17 +1703,39 @@ def multispeaker_response_for_request(run: dict[str, Any], request: dict[str, An
             "memory_units": [
                 {
                     "thesis": "Мотоцикл -> Жека купив мотоцикл і забирає його завтра.",
-                    "source_event_ids": [first_event_id],
+                    "source_event_ids": [zheka_id],
                     "evidence": "Жека сам повідомив про покупку в чаті.",
                     "tags": ["group_chat"],
                     "weight": 0.6,
+                    "subject_hint": "self_statement",
+                    "speaker_id": "tg_101",
                 },
                 {
                     "thesis": "Рибалка -> Антон рибалив на світанку.",
-                    "source_event_ids": [first_event_id],
+                    "source_event_ids": [anton_id],
                     "evidence": "Антон розповів про кльов на світанку.",
                     "tags": ["group_chat"],
                     "weight": 0.5,
+                    "subject_hint": "self_statement",
+                    "speaker_id": "tg_202",
+                },
+                {
+                    "thesis": "Плітка -> Жека сказав, що Антон нібито планує переїзд.",
+                    "source_event_ids": [gossip_id],
+                    "evidence": "Це твердження Жеки про Антона, а не самовисловлювання Антона.",
+                    "tags": ["group_chat", "hearsay"],
+                    "weight": 0.5,
+                    "subject_hint": "about_other",
+                    "speaker_id": "tg_202",
+                },
+                {
+                    "thesis": "Хибна атрибуція -> модель назвала автором Антона.",
+                    "source_event_ids": [gossip_id],
+                    "evidence": "Source event насправді написав Жека.",
+                    "tags": ["group_chat", "dishonest_hint"],
+                    "weight": 0.5,
+                    "subject_hint": "self_statement",
+                    "speaker_id": "tg_202",
                 },
             ],
         }
@@ -1688,7 +1747,7 @@ def multispeaker_response_for_request(run: dict[str, Any], request: dict[str, An
                 {
                     "topic": "group_chat",
                     "summary": "Мотоцикл Жеки і рибалка Антона.",
-                    "source_event_ids": [first_event_id] if first_event_id else [],
+                    "source_event_ids": [zheka_id, anton_id],
                 }
             ]
         }
@@ -1699,8 +1758,34 @@ def multispeaker_response_for_request(run: dict[str, Any], request: dict[str, An
                     "text": "У Жеки є мотоцикл.",
                     "category": "vehicle",
                     "confidence": 0.95,
-                    "source_event_ids": [first_event_id],
-                }
+                    "source_event_ids": [zheka_id],
+                    "subject_hint": "self_statement",
+                    "speaker_id": "tg_101",
+                },
+                {
+                    "text": "Антон любить рибалити на світанку.",
+                    "category": "hobby",
+                    "confidence": 0.95,
+                    "source_event_ids": [anton_id],
+                    "subject_hint": "self_statement",
+                    "speaker_id": "tg_202",
+                },
+                {
+                    "text": "Антон збирається переїхати до Одеси.",
+                    "category": "residence_plan",
+                    "confidence": 0.95,
+                    "source_event_ids": [gossip_id],
+                    "subject_hint": "about_other",
+                    "speaker_id": "tg_202",
+                },
+                {
+                    "text": "Антон сам повідомив про переїзд.",
+                    "category": "residence_plan",
+                    "confidence": 0.95,
+                    "source_event_ids": [gossip_id],
+                    "subject_hint": "self_statement",
+                    "speaker_id": "tg_202",
+                },
             ]
         }
     elif prompt_id == "sleep_relational_pass":

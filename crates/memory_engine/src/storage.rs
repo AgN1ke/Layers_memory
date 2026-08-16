@@ -1,5 +1,6 @@
 use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
+use crate::erasure::MemoryErasurePlan;
 use crate::event::StoredEvent;
 use crate::hypothesis::{HypothesisEvidenceLink, HypothesisNode, HypothesisRelation};
 use crate::journal::JournalOperation;
@@ -52,6 +53,7 @@ pub trait Storage {
     fn write_manifest(&self, manifest: &Manifest) -> Result<()>;
 
     fn read_session(&self, session_id: &str) -> Result<SessionRecord>;
+    fn read_sessions(&self) -> Result<StorageCollection<SessionMetadata>>;
     fn read_session_metadata(&self, session_id: &str) -> Result<SessionMetadata>;
     fn write_session_metadata(&self, metadata: &SessionMetadata) -> Result<()>;
     fn read_session_archived_events(&self, session_id: &str) -> Result<Vec<StoredEvent>>;
@@ -68,6 +70,7 @@ pub trait Storage {
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>>;
     fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()>;
     fn read_memory_unit_by_id(&self, memory_unit_id: &str) -> Result<MemoryUnit>;
+    fn read_memory_units(&self) -> Result<StorageCollection<MemoryUnit>>;
     fn read_memory_units_for_archive(
         &self,
         archive_id: &str,
@@ -105,12 +108,14 @@ pub trait Storage {
     fn save_task(&self, task: &PendingTask) -> Result<()>;
     fn load_task(&self, task_id: &str) -> Result<PendingTask>;
     fn load_tasks(&self) -> Result<StorageCollection<PendingTask>>;
+    fn load_all_tasks(&self) -> Result<StorageCollection<PendingTask>>;
 
     fn save_sleep_run(&self, run: &SleepRun) -> Result<()>;
     fn load_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun>;
     fn load_sleep_runs(&self) -> Result<StorageCollection<SleepRun>>;
 
     fn read_reflection_state(&self, scope: &str) -> Result<Option<ReflectionState>>;
+    fn read_reflection_states(&self) -> Result<StorageCollection<ReflectionState>>;
     fn write_reflection_state(&self, state: &ReflectionState) -> Result<()>;
 
     fn read_vector_index(&self, scope: &str) -> Result<Option<VectorIndexData>>;
@@ -129,4 +134,10 @@ pub trait Storage {
     fn complete_journaled_operation(&self, op_id: &str) -> Result<()>;
     fn load_journaled_operation(&self, op_id: &str) -> Result<Option<JournalOperation>>;
     fn load_journaled_operations(&self) -> Result<StorageCollection<JournalOperation>>;
+    fn delete_journaled_operation(&self, op_id: &str) -> Result<()>;
+
+    /// Apply an engine-prepared deletion plan idempotently. The plan is
+    /// journaled before this method is called and may be replayed after a
+    /// process crash.
+    fn apply_memory_erasure_plan(&self, plan: &MemoryErasurePlan) -> Result<()>;
 }

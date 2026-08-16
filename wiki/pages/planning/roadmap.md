@@ -26,7 +26,7 @@
 
 Документ оновлюється у двох випадках: коли пункт стає зробленим (відмітка `[x]` + дата + посилання на коміт або файл), і коли з'являється нова велика мета, яку треба зафіксувати раніше реалізації. Дрібні правки і робочий процес живуть у `DEVLOG.md`, не тут.
 
-Версія документа: 2026-08-02.
+Версія документа: 2026-08-16.
 
 ---
 
@@ -51,7 +51,7 @@ Memory Engine має бути **довготривалою памʼяттю, щ�
 
 ---
 
-## Поточний стан (2026-08-01)
+## Поточний стан (2026-08-16)
 
 Після v0.3: ліцензію повернуто на non-commercial; Chibigochi має async
 product loop і реальну Godot-інтеграцію; prompt view має derived time labels.
@@ -79,6 +79,14 @@ scope-safe export і compatibility projection не змінюють chat/reflect
 migration/provenance/idempotence/projection gate; owner storage лишився
 недоторканим і без legacy candidates. Phase 3 reasoning ще не реалізований, а
 live v0.5 reflection calibration лишається окремим behavioral gate.
+
+Local/reference core тепер підтримує атрибутовану памʼять групового чату:
+кожен self-statement перевіряється за авторами source events, Core і candidates
+несуть `subject`, а неоднозначні або чужі твердження йдуть у review. Та сама
+зміна відкрила embedding для підтверджено атрибутованих multi-speaker units.
+Також FileStorage отримав два різні людські шляхи очищення: видалення журналу
+окремої розмови зі збереженням довгоживучої памʼяті та повне незворотне
+стирання scope з crash recovery. Server-side per-vault deletion лишається S6.
 
 Google Play додає незалежний release blocker: current `FileStorage` безпечно
 координує тільки один writer process на runtime directory й не є production
@@ -308,7 +316,7 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 
 Векторне сховище не входить у v0.3 close. Робочий research-документ зафіксовано в `wiki/pages/research/vector-recall.md`, але перед кодом він має пройти alignment із поточною архітектурою: індексувати validated active `MemoryUnit`, а не великі archive JSON; core приймає vectors, host рахує embeddings; recall feedback має використовувати buffered stats path.
 
-- [x] **Залежність від атрибуції розвʼязана хірургічно (рішення власника 2026-07-03):** замість блокування всього vector storage — gate у ядрі: units із мультиспікерних сесій (`session_is_multi_speaker`) не embed-яться, доки не закриті гілки 1b–2 атрибуції; однокористувацькі scope embed-яться одразу (там «користувач» однозначний). Після гілки 2 gate знімається + backfill групових scope. ТЗ: `wiki/pages/research/vector-storage-tz-2026-07-03.md`.
+- [x] **Залежність від атрибуції розвʼязана посигнально:** у мультиспікерній сесії embed-яться лише units із `subject`, який ядро детерміновано підтвердило через source events; змішані або неатрибутовані units лишаються fail-closed. Однокористувацькі й speakerless scope поводяться як раніше. — 2026-08-16, `engine/vector_flow.rs`, `engine_multi_speaker.rs`.
 - [x] Фаза A за ТЗ: storage `memory/archive/vectors/<scope>/` (manifest/vectors.f32/rows.jsonl/tombstones), `ComputeEmbedding`-батчі, backfill/enable/disable/purge/rebuild, R1-recovery, compaction, мультиспікерний gate. Реалізація: `feature/vector-storage-phase-a`, тести `engine_vectors.rs`.
 - [x] Фаза B за ТЗ: `recall_deep` (min_sim-чесність, top_k, buffered reinforcement), локальний fastembed embedder у Telegram host, `/vectors*` і `/recall_deep` команди, conformance `--host direct-vectors`; live-калібрування на owner scope виконано для MiniLM (`min_sim=0.30`, `vivid_sim=0.55`); автоматичний distant-memory gate підключений у Telegram development host.
 - [x] Contextual expansion Phase 1: `CoreContextRequest.query_embedding` дає ядру можливість додати 1-3 детальні memory-unit спогади з векторного індексу у `archive_relevant` під існуючим budget. Telegram development host передає embedding тільки для ready scope.
@@ -381,25 +389,26 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 
 - [x] Опціональний `speaker: { id, name }` в `IngestEvent`/`StoredEvent`/`CoreContextEvent` (serde default; відсутність = поточна бінарна поведінка). `reply_to` kind-конвенція задокументована в `contracts.md`. — 2026-07-03, HISTORY-запис.
 - [x] `render_memory_view`: події зі speaker рендеряться імʼям (`Жека: ...`) замість `user:`; без speaker — байтово поточна поведінка; dedup current message працює для будь-якої не-assistant ролі. — 2026-07-03, `memory_view_attributes_speakers_and_drops_current_speaker_duplicate`.
-- [ ] Рендер сирого матеріалу sleep-пасів: імена спікерів + компактні reply-маркери (`[Жека, у відповідь на №12]`, локальні номери вікна).
-- [ ] Evidence pack теж рендерить speaker (`evidence_event_from_stored`) — інакше fidelity validator не може перевірити авторство (Запис 117, п.1).
+- [~] Сирий матеріал sleep-пасів несе структурований `speaker`, а промпти вимагають конкретної атрибуції. Компактні reply-маркери (`[Жека, у відповідь на №12]`) ще відкриті.
+- [x] Evidence pack рендерить `speaker`, а `memory_fidelity_pass` перевіряє правильність авторства. — 2026-08-16, `fidelity.rs`, `sleep_driver.rs`, `prompts/memory_fidelity_pass.md`.
 - [ ] `recall_by_event_id(session_id, event_id)`: покрита подія → архівний запис через metadata cache; жива → ознака «в активному хвості». Перед цим закрити storage-гальмо: `archive_entry_path_by_id` сканує весь каталог — потрібен path-hint або map `event_id -> archive_id` у `SessionMetadata` (перебудовний кеш; Запис 117, п.4).
-- [x] Фаза 1 захисту Core: auto-bridge і автоматичний Core-fidelity-path вимикаються для сесій із ≥2 speaker.id — **у ядрі** (`session_is_multi_speaker` в `engine/sleep_flow.rs`). — 2026-07-03, `engine_multi_speaker.rs`.
+- [-] Фаза 1 захисту Core вимикала auto-bridge для всієї сесії з ≥2 speaker.id. Її замінив точніший посигнальний guard: безпечні self-statements тепер проходять, чужі або неоднозначні твердження йдуть у review. — замінено 2026-08-16.
 - [ ] Host-рішення: бот у групі ingest-ить УСІ повідомлення, адресація керує лише відповіддю; Telegram privacy mode off (Запис 117, п.5).
 - [x] Детермінований мультиспікерний conformance-сценарій: `tests/host_conformance/host_conformance.py --host direct-multispeaker` (speaker через PyO3, атрибутований transcript, атрибутовані тези, gossip-сигнал 0.95 не потрапляє в Core); лінійні сценарії без змін. — 2026-07-03.
 
 **Гілка 2 — промпти пасів (окремо, бо змінює якість Archive; власний HISTORY-слід):**
 
-- [ ] `memory_unit_pass` / `sleep_personal_signal_pass` / `sleep_consolidator`: тези атрибутуються іменами («Жека купив мотоцикл», не «користувач купив мотоцикл»); reply-ланцюжки розплутують переплетені теми; reply на стару тему формулюється як повернення до неї.
-- [ ] `memory_fidelity_pass` питає про правильність авторства — validator стає guard-ом атрибуції.
+- [x] `memory_unit_pass` / `sleep_personal_signal_pass` / `sleep_consolidator` вимагають конкретних імен і повертають `subject_hint` / `speaker_id`; ядро трактує їх як підказку, а не істину. — 2026-08-16, prompt version 2.
+- [x] `memory_fidelity_pass` перевіряє правильність авторства — validator став додатковим guard-ом атрибуції. — 2026-08-16, prompt version 2.
+- [ ] Reply-ланцюжки розплутують переплетені теми, а reply на стару тему формулюється як повернення до неї.
 - [ ] Live-тест на переплетених темах (мотоцикли Жеки + рибалка Антона + reply на старе повідомлення).
 
 **Гілка 3 — Core subject (фаза 2):**
 
-- [ ] `CoreFact.subject` як пара `{ id, name }` (імена змінюються, стабільний id; Запис 117, п.6); відсутній subject = «єдиний користувач скоупу».
-- [ ] Субʼєктний guard у bridge: сигнал про X проходить тільки з подій авторства X; сигнали про X зі слів Y — лише через reflection + review.
-- [ ] Near-duplicate gate стає subject-aware — інакше «у Жеки є мотоцикл» блокує «у Антона є мотоцикл» через token overlap (Запис 117, п.2).
-- [ ] Рендер Core-фактів показує subject, коли він є.
+- [x] `CoreFact.subject` як пара `{ id, name }`; additive `subject` також проходить через PersonalSignal, MemoryUnit, CandidateBelief, reflection і hypothesis records. Відсутній subject зберігає семантику єдиного користувача. — 2026-08-16.
+- [x] Субʼєктний guard у bridge: self-statement проходить тільки з подій того самого автора; about-other, кілька авторів або неправдива model hint створюють reviewable candidate. — 2026-08-16, `engine_multi_speaker.rs`.
+- [x] Near-duplicate gate і Core upsert стали subject-aware. — 2026-08-16.
+- [x] Core context і prompt view віддають subject для кожного атрибутованого факту; query-aware budget ranking враховує імʼя/id людини. — 2026-08-16.
 
 ### Diagnostic tools
 
@@ -418,6 +427,22 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [ ] Документований backup flow: snapshot цілої `memory/` директорії з checksum для manifest і кожного persistence layer.
 - [ ] Документований restore flow: перевірка integrity, journal replay для незавершених операцій, migration на актуальну схему якщо backup старший.
 - [ ] CLI команда `memory_inspector backup` і `memory_inspector restore`.
+
+### Людське видалення у local/reference режимі
+
+- [x] `delete_session(session_id)` ідемпотентно видаляє raw-журнал розмови,
+  archived segments, session metadata та повʼязані tasks/runs, зберігаючи вже
+  створену довгоживу памʼять scope. — 2026-08-16,
+  `engine/erasure_flow.rs`.
+- [x] `purge_scope(personality_scope_id)` ідемпотентно й незворотно видаляє всі
+  FileStorage-дані scope, включно з Core, Archive/units, candidates/hypothesis,
+  tasks, reflection state та derived vectors; сусідній scope зберігається. —
+  2026-08-16, `engine/erasure_flow.rs`.
+- [x] Обидва шляхи мають frozen journal plan, restart replay і структурований
+  звіт; Python та Godot adapters відкривають той самий API. — 2026-08-16,
+  `erasure.rs`, `tests/engine_erasure.rs`.
+- [ ] Видалення логів застосунку, зовнішнього провайдера й резервних копій
+  інтегрує конкретний продукт навколо core report.
 
 ---
 

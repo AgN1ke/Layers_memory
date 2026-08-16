@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 use crate::archive::{
     archive_has_prompt_eligible_memory, memory_unit_is_prompt_eligible, ArchiveEntry,
     ArchiveFilters, ArchiveStatus, FidelityReview, FidelityStatus, ForgetDecision,
-    ForgetReviewRecord, MemoryUnit, MemoryUnitStatus,
+    ForgetReviewRecord, MemoryUnit, MemoryUnitStatus, PersonalSignalSubjectHint,
 };
 use crate::core_store::{
     AssociativeMemoryActivation, AssociativeMemoryItem, CandidateBelief, CandidateReinforcement,
@@ -20,6 +20,10 @@ use crate::core_store::{
     CoreContextTokenBudget, CoreFact, CoreFactInput, CoreFactPatchInput, CoreFactPatchResult,
     CoreFactStatus, CoreFactUpsertResult, CoreStoreCategory, PromotionChecks, ReviewDecision,
     ReviewRecord,
+};
+use crate::erasure::{
+    ErasureCoreFactRef, MemoryErasureCounts, MemoryErasureKind, MemoryErasureOperationIntent,
+    MemoryErasurePlan, MemoryErasureReport,
 };
 use crate::event::{IngestEvent, StoredEvent};
 use crate::fidelity::{EvidenceEvent, EvidenceEventRole, EvidencePack, MemoryFidelityPassStart};
@@ -56,12 +60,15 @@ use crate::reflection::{
 };
 use crate::session::SessionRecord;
 use crate::sleep::{
-    MemoryUnitPassResult, SleepCompressionResult, SleepInputEvent, SleepInputReference,
+    attribute_personal_signals, attribution_session_is_multi_speaker,
+    personal_signal_has_user_source, personal_signal_is_auto_core_eligible,
+    resolve_attributed_subject, AttributionEvent, MemoryUnitPassResult, SleepCompressionResult,
+    SleepInputEvent, SleepInputReference,
 };
-use crate::storage::{Storage, StorageReadWarning};
+use crate::storage::{Storage, StorageCollection, StorageReadWarning};
 use crate::tasks::{AttemptStatus, PendingTask, TaskAttempt, TaskState, TaskType};
 use crate::types::{
-    ImportanceHint, Link, ModelRole, Quote, RecallStage, TimeRange, WeightedFact,
+    ImportanceHint, Link, ModelRole, Quote, RecallStage, Speaker, TimeRange, WeightedFact,
     ARCHIVE_ENTRY_SCHEMA_VERSION, CANDIDATE_BELIEF_SCHEMA_VERSION,
     CANDIDATE_REVIEW_INPUT_SCHEMA_VERSION, CANDIDATE_REVIEW_RESULT_SCHEMA_VERSION,
     COMPACT_MEMORY_RESULT_SCHEMA_VERSION, CONSOLIDATOR_TEXT_SCHEMA_VERSION,
@@ -73,7 +80,9 @@ use crate::types::{
     FORGET_REVIEW_RESULT_SCHEMA_VERSION, HYPOTHESIS_EVIDENCE_LINK_SCHEMA_VERSION,
     HYPOTHESIS_GRAPH_MIGRATION_OPERATION_SCHEMA_VERSION, HYPOTHESIS_NODE_SCHEMA_VERSION,
     HYPOTHESIS_RELATION_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION,
-    JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+    JOURNAL_OPERATION_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
+    MEMORY_ERASURE_OPERATION_SCHEMA_VERSION, MEMORY_ERASURE_PLAN_SCHEMA_VERSION,
+    MEMORY_ERASURE_REPORT_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION,
     MEMORY_UNIT_SCHEMA_VERSION, PENDING_TASK_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
     RECALL_RESULT_SCHEMA_VERSION, REFLECTION_ACTIONS_RESULT_SCHEMA_VERSION,
     REFLECTION_APPLY_RESULT_SCHEMA_VERSION, REFLECTION_OPERATION_SCHEMA_VERSION,
@@ -94,6 +103,7 @@ use crate::{MemoryEngineError, Result};
 mod context_budget;
 mod core_context;
 mod core_policy;
+mod erasure_flow;
 mod fidelity_flow;
 mod forgetting_flow;
 mod hypothesis_flow;

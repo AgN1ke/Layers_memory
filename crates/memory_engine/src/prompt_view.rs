@@ -366,6 +366,16 @@ pub fn render_core_fact_prompt_line(fact: &CoreContextFact) -> Option<String> {
         clean_string(&fact.category)
     };
     let confidence = format_score(fact.confidence);
+    let subject = fact
+        .subject
+        .as_ref()
+        .map(|subject| {
+            let name = clean_string(&subject.name);
+            let id = clean_string(&subject.id);
+            let label = if name.is_empty() { id } else { name };
+            format!(" about {}", xml_escape(label))
+        })
+        .unwrap_or_default();
     let status_marker = match fact.status {
         CoreFactStatus::Active => String::new(),
         CoreFactStatus::Contested => " [contested]".to_string(),
@@ -374,7 +384,7 @@ pub fn render_core_fact_prompt_line(fact: &CoreContextFact) -> Option<String> {
         CoreFactStatus::NeedsReview => " [needs_review]".to_string(),
     };
     Some(format!(
-        "- {category}{status_marker} ({confidence}): {}",
+        "- {category}{subject}{status_marker} ({confidence}): {}",
         xml_escape(&text)
     ))
 }
@@ -538,6 +548,7 @@ mod tests {
                 category: "profile".to_string(),
                 core_fact_id: "core_fact_1".to_string(),
                 scope: Some("chat_1".to_string()),
+                subject: None,
                 text: "User name is Mykyta.".to_string(),
                 status: CoreFactStatus::Active,
                 confidence: 0.95,

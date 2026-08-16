@@ -404,6 +404,16 @@ impl PyMemoryEngine {
         run_without_gil(py, || self.inner.recover_pending_memory_operations())
     }
 
+    fn delete_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let report = run_without_gil(py, || self.inner.delete_session(session_id))?;
+        dump_json(&report, "session deletion report")
+    }
+
+    fn purge_scope(&self, py: Python<'_>, personality_scope_id: &str) -> PyResult<String> {
+        let report = run_without_gil(py, || self.inner.purge_scope(personality_scope_id))?;
+        dump_json(&report, "scope purge report")
+    }
+
     fn resume_memory_fidelity_pass(
         &self,
         py: Python<'_>,

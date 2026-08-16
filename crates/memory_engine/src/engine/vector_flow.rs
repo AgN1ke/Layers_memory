@@ -640,14 +640,13 @@ impl<S: Storage> MemoryEngine<S> {
         let mut units = Vec::new();
         for archive in archives {
             let events = self.read_session_events_with_archived(&archive.source_session_id)?;
-            if session_is_multi_speaker(&events) {
-                continue;
-            }
+            let multi_speaker = session_is_multi_speaker(&events);
             units.extend(
                 archive
                     .memory_units
                     .into_iter()
-                    .filter(memory_unit_is_vector_eligible),
+                    .filter(memory_unit_is_vector_eligible)
+                    .filter(|unit| !multi_speaker || unit.subject.is_some()),
             );
         }
         units.sort_by(|left, right| {

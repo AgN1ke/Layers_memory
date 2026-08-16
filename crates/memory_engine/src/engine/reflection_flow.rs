@@ -23,6 +23,7 @@ struct RelatedReflectionUnit {
 
 struct ReflectionKnownEvidence<'a> {
     unit_sessions: &'a HashMap<String, String>,
+    unit_subjects: &'a HashMap<String, Speaker>,
     archive_ids: &'a HashSet<String>,
     core_fact_ids: &'a HashSet<String>,
 }
@@ -393,6 +394,15 @@ impl<S: Storage> MemoryEngine<S> {
                     ))
                 })
                 .collect::<HashMap<_, _>>();
+            let known_unit_subjects = task_memory_units
+                .iter()
+                .filter_map(|unit| {
+                    Some((
+                        unit.get("memory_unit_id")?.as_str()?.to_string(),
+                        serde_json::from_value::<Speaker>(unit.get("subject")?.clone()).ok()?,
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
             let known_archive_ids = task
                 .inputs
                 .get("archives")
@@ -416,6 +426,7 @@ impl<S: Storage> MemoryEngine<S> {
                 .unwrap_or_default();
             let known_evidence = ReflectionKnownEvidence {
                 unit_sessions: &known_unit_sessions,
+                unit_subjects: &known_unit_subjects,
                 archive_ids: &known_archive_ids,
                 core_fact_ids: &known_core_facts,
             };
@@ -1097,6 +1108,32 @@ impl<S: Storage> MemoryEngine<S> {
                     })?;
                     recovered += 1;
                 }
+                JournalOperationType::DeleteSession | JournalOperationType::PurgeScope => {
+                    let intent: MemoryErasureOperationIntent =
+                        serde_json::from_value(operation.intent.clone())?;
+                    let lock_key = match intent.plan.operation {
+                        MemoryErasureKind::DeleteSession => {
+                            session_lock_key(&intent.plan.target_id)
+                        }
+                        MemoryErasureKind::PurgeScope => {
+                            format!("memory_erasure:scope:{}", intent.plan.target_id)
+                        }
+                    };
+                    self.with_resource_lock(lock_key, || {
+                        let current = self
+                            .storage
+                            .load_journaled_operation(&operation.op_id)?
+                            .ok_or_else(|| {
+                                MemoryEngineError::Storage(format!(
+                                    "journal operation disappeared during recovery: {}",
+                                    operation.op_id
+                                ))
+                            })?;
+                        self.execute_memory_erasure_operation_unlocked(current)
+                            .map(|_| ())
+                    })?;
+                    recovered += 1;
+                }
                 _ => {}
             }
         }
@@ -1342,8 +1379,11 @@ impl<S: Storage> MemoryEngine<S> {
                 let tags = unique_strings(tags);
                 let source_archive_ids = unique_strings(candidate.supporting_archive_ids.clone());
                 let fact = if let Some(existing) = desired.facts.iter_mut().find(|fact| {
-                    normalize_match_text(&fact.text) == needle && fact.scope == candidate.core_scope
+                    normalize_match_text(&fact.text) == needle
+                        && fact.scope == candidate.core_scope
+                        && same_subject(fact.subject.as_ref(), candidate.subject.as_ref())
                 }) {
+                    existing.subject = candidate.subject.clone();
                     existing.text = text;
                     existing.status = CoreFactStatus::Active;
                     existing.confidence = existing
@@ -1362,6 +1402,7 @@ impl<S: Storage> MemoryEngine<S> {
                         schema_version: CORE_FACT_SCHEMA_VERSION.to_string(),
                         core_fact_id: new_id("core_fact")?,
                         scope: candidate.core_scope.clone(),
+                        subject: candidate.subject.clone(),
                         text,
                         status: CoreFactStatus::Active,
                         confidence: candidate.confidence.clamp(0.0, 1.0),
@@ -2225,12 +2266,15 @@ impl<S: Storage> MemoryEngine<S> {
         );
         let confidence = draft.confidence.clamp(0.0, 1.0);
         let min_sources_met = source_memory_unit_ids.len() >= 2;
+        let subject =
+            common_memory_unit_subject(&source_memory_unit_ids, known_evidence.unit_subjects);
         Ok(Some(CandidateBelief {
             schema_version: CANDIDATE_BELIEF_SCHEMA_VERSION.to_string(),
             candidate_id: new_id("candidate")?,
             source_session_id: Some(source_session_id.to_string()),
             source_session_ids,
             core_scope,
+            subject,
             created_at: now.to_string(),
             updated_at: now.to_string(),
             text,
@@ -2645,6 +2689,24 @@ fn validate_reflection_config(config: &ReflectionConfig) -> Result<()> {
 
 fn reflection_scope_id(session_id: &str, core_scope: Option<&str>) -> String {
     normalize_optional_string(core_scope).unwrap_or_else(|| session_id.to_string())
+}
+
+fn common_memory_unit_subject(
+    memory_unit_ids: &[String],
+    subjects: &HashMap<String, Speaker>,
+) -> Option<Speaker> {
+    let mut resolved: Option<Speaker> = None;
+    for unit_id in memory_unit_ids {
+        let subject = normalize_speaker(subjects.get(unit_id))?;
+        if resolved
+            .as_ref()
+            .is_some_and(|existing| existing.id != subject.id)
+        {
+            return None;
+        }
+        resolved = Some(subject);
+    }
+    resolved
 }
 
 fn reflection_lock_key(scope: &str) -> String {

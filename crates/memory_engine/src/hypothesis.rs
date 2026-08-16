@@ -7,9 +7,10 @@ use crate::core_store::{
     CandidateBelief, CandidateReinforcement, CandidateStatus, PromotionChecks, ReviewRecord,
 };
 use crate::types::{
-    Id, Link, Timestamp, CANDIDATE_BELIEF_SCHEMA_VERSION, HYPOTHESIS_EVIDENCE_LINK_SCHEMA_VERSION,
-    HYPOTHESIS_GRAPH_EXPORT_SCHEMA_VERSION, HYPOTHESIS_GRAPH_MIGRATION_RESULT_SCHEMA_VERSION,
-    HYPOTHESIS_NODE_SCHEMA_VERSION, HYPOTHESIS_RELATION_SCHEMA_VERSION,
+    Id, Link, Speaker, Timestamp, CANDIDATE_BELIEF_SCHEMA_VERSION,
+    HYPOTHESIS_EVIDENCE_LINK_SCHEMA_VERSION, HYPOTHESIS_GRAPH_EXPORT_SCHEMA_VERSION,
+    HYPOTHESIS_GRAPH_MIGRATION_RESULT_SCHEMA_VERSION, HYPOTHESIS_NODE_SCHEMA_VERSION,
+    HYPOTHESIS_RELATION_SCHEMA_VERSION,
 };
 use crate::{MemoryEngineError, Result};
 
@@ -75,6 +76,8 @@ pub struct HypothesisNode {
     pub source_session_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Speaker>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub statement: String,
@@ -124,6 +127,7 @@ impl HypothesisNode {
             source_session_id: candidate.source_session_id.clone(),
             source_session_ids: candidate.source_session_ids.clone(),
             core_scope: candidate.core_scope.clone(),
+            subject: candidate.subject.clone(),
             created_at: candidate.created_at.clone(),
             updated_at: candidate.updated_at.clone(),
             statement: candidate.text.clone(),
@@ -154,6 +158,7 @@ impl HypothesisNode {
         self.source_session_id = candidate.source_session_id.clone();
         self.source_session_ids = candidate.source_session_ids.clone();
         self.core_scope = candidate.core_scope.clone();
+        self.subject = candidate.subject.clone();
         self.created_at = candidate.created_at.clone();
         self.updated_at = candidate.updated_at.clone();
         self.statement = candidate.text.clone();
@@ -183,6 +188,7 @@ impl HypothesisNode {
             source_session_id: self.source_session_id.clone(),
             source_session_ids: self.source_session_ids.clone(),
             core_scope: self.core_scope.clone(),
+            subject: self.subject.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
             text: self.statement.clone(),

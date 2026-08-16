@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
+use crate::erasure::MemoryErasurePlan;
 use crate::event::StoredEvent;
 use crate::hypothesis::{
     evidence_links_from_candidate, validate_hypothesis_storage_id, HypothesisEvidenceLink,
@@ -22,7 +23,8 @@ use crate::session::{SessionMetadata, SessionRecord, SessionStatus};
 use crate::storage::{Storage, StorageCollection, StorageReadWarning};
 use crate::tasks::TaskState;
 use crate::types::{
-    CORE_STORE_SCHEMA_VERSION, REFLECTION_STATE_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
+    CORE_STORE_SCHEMA_VERSION, MEMORY_ERASURE_PLAN_SCHEMA_VERSION, REFLECTION_STATE_SCHEMA_VERSION,
+    SESSION_SCHEMA_VERSION,
 };
 use crate::vector::{
     VectorAppendRecord, VectorIndexData, VectorIndexManifest, VectorTombstone,
@@ -133,6 +135,14 @@ impl FileStorage {
             .ok_or_else(|| {
                 MemoryEngineError::Storage(format!("archive entry not found: {archive_id}"))
             })
+    }
+
+    fn archive_entry_path_by_id_optional(&self, archive_id: &str) -> Result<Option<PathBuf>> {
+        let mut files = Vec::new();
+        collect_archive_entry_files(&self.root.join("archive"), &mut files)?;
+        Ok(files
+            .into_iter()
+            .find(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(archive_id)))
     }
 
     fn core_store_path(&self, category: &str) -> PathBuf {
@@ -339,6 +349,35 @@ impl Storage for FileStorage {
         Ok(SessionRecord { metadata, events })
     }
 
+    fn read_sessions(&self) -> Result<StorageCollection<SessionMetadata>> {
+        self.ensure_layout()?;
+        let mut sessions = Vec::new();
+        let mut warnings = Vec::new();
+        for entry in fs::read_dir(self.root.join("sessions"))? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let path = entry.path().join("session.json");
+            if !path.exists() {
+                continue;
+            }
+            if let Some(metadata) = read_json_from_collection::<SessionMetadata>(
+                self,
+                &path,
+                "session metadata",
+                &mut warnings,
+            )? {
+                sessions.push(metadata);
+            }
+        }
+        sessions.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        Ok(StorageCollection {
+            items: sessions,
+            warnings,
+        })
+    }
+
     fn read_session_metadata(&self, session_id: &str) -> Result<SessionMetadata> {
         self.read_session_metadata_file(session_id)
     }
@@ -496,6 +535,26 @@ impl Storage for FileStorage {
             )));
         }
         read_json(&path)
+    }
+
+    fn read_memory_units(&self) -> Result<StorageCollection<MemoryUnit>> {
+        let mut files = Vec::new();
+        collect_json_files(&self.root.join("archive").join("units"), &mut files)?;
+
+        let mut units = Vec::new();
+        let mut warnings = Vec::new();
+        for path in files {
+            if let Some(unit) =
+                read_json_from_collection::<MemoryUnit>(self, &path, "memory unit", &mut warnings)?
+            {
+                units.push(unit);
+            }
+        }
+        units.sort_by(|left, right| left.memory_unit_id.cmp(&right.memory_unit_id));
+        Ok(StorageCollection {
+            items: units,
+            warnings,
+        })
     }
 
     fn read_memory_units_for_archive(
@@ -941,6 +1000,30 @@ impl Storage for FileStorage {
         })
     }
 
+    fn load_all_tasks(&self) -> Result<StorageCollection<crate::tasks::PendingTask>> {
+        let mut files = Vec::new();
+        collect_json_files(&self.root.join("tasks"), &mut files)?;
+
+        let mut tasks = Vec::new();
+        let mut warnings = Vec::new();
+        for path in files {
+            if let Some(task) = read_json_from_collection::<crate::tasks::PendingTask>(
+                self,
+                &path,
+                "task",
+                &mut warnings,
+            )? {
+                tasks.push(task);
+            }
+        }
+        tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+        tasks.dedup_by(|left, right| left.task_id == right.task_id);
+        Ok(StorageCollection {
+            items: tasks,
+            warnings,
+        })
+    }
+
     fn save_sleep_run(&self, run: &SleepRun) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.sleep_run_path(&run.sleep_task_id), run)
@@ -1002,6 +1085,29 @@ impl Storage for FileStorage {
             )));
         }
         Ok(Some(state))
+    }
+
+    fn read_reflection_states(&self) -> Result<StorageCollection<ReflectionState>> {
+        self.ensure_layout()?;
+        let mut files = Vec::new();
+        collect_json_files_shallow(&self.root.join("runs").join("reflection"), &mut files)?;
+        let mut states = Vec::new();
+        let mut warnings = Vec::new();
+        for path in files {
+            if let Some(state) = read_json_from_collection::<ReflectionState>(
+                self,
+                &path,
+                "reflection state",
+                &mut warnings,
+            )? {
+                states.push(state);
+            }
+        }
+        states.sort_by(|left, right| left.reflection_scope.cmp(&right.reflection_scope));
+        Ok(StorageCollection {
+            items: states,
+            warnings,
+        })
     }
 
     fn write_reflection_state(&self, state: &ReflectionState) -> Result<()> {
@@ -1216,6 +1322,84 @@ impl Storage for FileStorage {
             warnings,
         })
     }
+
+    fn delete_journaled_operation(&self, op_id: &str) -> Result<()> {
+        validate_erasure_path_component("journal operation id", op_id)?;
+        remove_file_if_exists(&self.journal_path(op_id))
+    }
+
+    fn apply_memory_erasure_plan(&self, plan: &MemoryErasurePlan) -> Result<()> {
+        self.ensure_layout()?;
+        validate_memory_erasure_plan(plan)?;
+
+        let mut core_ids_by_category = BTreeMap::<&str, HashSet<&str>>::new();
+        for reference in &plan.core_facts {
+            core_ids_by_category
+                .entry(reference.category.as_str())
+                .or_default()
+                .insert(reference.core_fact_id.as_str());
+        }
+        for (category_name, core_ids) in core_ids_by_category {
+            let mut category = self
+                .read_core_store_category(category_name)
+                .map_err(|error| {
+                    MemoryEngineError::Storage(format!(
+                        "cannot read Core category {category_name:?} during memory erasure: {error}"
+                    ))
+                })?;
+            let previous_len = category.facts.len();
+            category
+                .facts
+                .retain(|fact| !core_ids.contains(fact.core_fact_id.as_str()));
+            if category.facts.len() != previous_len {
+                self.write_core_store_category(&category)?;
+            }
+        }
+
+        for relation_id in &plan.hypothesis_relation_ids {
+            remove_file_if_exists(&self.hypothesis_relation_path(relation_id))?;
+        }
+        for evidence_link_id in &plan.hypothesis_evidence_link_ids {
+            remove_file_if_exists(&self.hypothesis_evidence_path(evidence_link_id))?;
+        }
+        for candidate_id in &plan.candidate_ids {
+            remove_file_if_exists(&self.candidate_path(candidate_id))?;
+        }
+        for hypothesis_id in &plan.hypothesis_node_ids {
+            remove_file_if_exists(&self.hypothesis_node_path(hypothesis_id))?;
+        }
+
+        for task_id in &plan.task_ids {
+            remove_file_if_exists(&self.task_path(task_id))?;
+            remove_file_if_exists(&self.completed_task_path(task_id))?;
+        }
+        for sleep_task_id in &plan.sleep_task_ids {
+            remove_file_if_exists(&self.sleep_run_path(sleep_task_id))?;
+        }
+        for scope in &plan.reflection_scopes {
+            remove_file_if_exists(&self.reflection_state_path(scope))?;
+        }
+        for scope in &plan.vector_scopes {
+            self.purge_vector_scope(scope)?;
+        }
+
+        for archive_id in &plan.archive_ids {
+            if let Some(path) = self.archive_entry_path_by_id_optional(archive_id)? {
+                remove_file_if_exists(&path)?;
+            }
+        }
+        for memory_unit_id in &plan.memory_unit_ids {
+            remove_file_if_exists(&self.memory_unit_path(memory_unit_id))?;
+        }
+        for session_id in &plan.session_ids {
+            remove_dir_all_if_exists(&self.session_dir(session_id))?;
+        }
+        for op_id in &plan.journal_operation_ids {
+            remove_file_if_exists(&self.journal_path(op_id))?;
+        }
+
+        Ok(())
+    }
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
@@ -1395,6 +1579,81 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err.into()),
     }
+}
+
+fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn validate_memory_erasure_plan(plan: &MemoryErasurePlan) -> Result<()> {
+    if plan.schema_version != MEMORY_ERASURE_PLAN_SCHEMA_VERSION {
+        return Err(MemoryEngineError::IncompatibleSchema {
+            expected: MEMORY_ERASURE_PLAN_SCHEMA_VERSION.to_string(),
+            actual: plan.schema_version.clone(),
+        });
+    }
+    validate_erasure_path_component("erasure target", &plan.target_id)?;
+    for value in &plan.session_ids {
+        validate_erasure_path_component("session id", value)?;
+    }
+    for value in &plan.archive_ids {
+        validate_erasure_path_component("archive id", value)?;
+    }
+    for value in &plan.memory_unit_ids {
+        validate_erasure_path_component("memory unit id", value)?;
+    }
+    for reference in &plan.core_facts {
+        validate_erasure_path_component("Core category", &reference.category)?;
+        validate_erasure_path_component("Core fact id", &reference.core_fact_id)?;
+    }
+    for value in &plan.candidate_ids {
+        validate_erasure_path_component("candidate id", value)?;
+    }
+    for value in &plan.hypothesis_node_ids {
+        validate_erasure_path_component("hypothesis node id", value)?;
+    }
+    for value in &plan.hypothesis_evidence_link_ids {
+        validate_erasure_path_component("hypothesis evidence link id", value)?;
+    }
+    for value in &plan.hypothesis_relation_ids {
+        validate_erasure_path_component("hypothesis relation id", value)?;
+    }
+    for value in &plan.task_ids {
+        validate_erasure_path_component("task id", value)?;
+    }
+    for value in &plan.sleep_task_ids {
+        validate_erasure_path_component("sleep task id", value)?;
+    }
+    for value in &plan.reflection_scopes {
+        validate_reflection_scope_component(value)?;
+    }
+    for value in &plan.vector_scopes {
+        validate_scope_component(value)?;
+    }
+    for value in &plan.journal_operation_ids {
+        validate_erasure_path_component("journal operation id", value)?;
+    }
+    Ok(())
+}
+
+fn validate_erasure_path_component(label: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty()
+        || value.contains('/')
+        || value.contains('\\')
+        || value == "."
+        || value == ".."
+        || value.contains("..")
+        || value.chars().any(char::is_control)
+    {
+        return Err(MemoryEngineError::Validation(format!(
+            "invalid {label} path component: {value}"
+        )));
+    }
+    Ok(())
 }
 
 fn task_state_is_terminal(state: &TaskState) -> bool {

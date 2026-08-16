@@ -554,30 +554,18 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         let session_events = self.read_session_events_with_archived(&archive.source_session_id)?;
-        if session_is_multi_speaker(&session_events) {
-            // Phase 1 of the multi-speaker plan: with several human speakers
-            // the user-source guard cannot tell self-statements from gossip
-            // about another participant, so the automatic Archive -> Core
-            // bridge is disabled. Core still grows through explicit
-            // /remember and reflection candidates with manual review.
-            summary.skipped += archive.personal_signals.len();
-            return Ok(summary);
-        }
-        let user_event_ids = session_events
+        let attribution_events = session_events
             .iter()
-            .filter(|event| event.event_type == "user_message")
-            .map(|event| event.event_id.clone())
-            .collect::<HashSet<_>>();
+            .map(AttributionEvent::from)
+            .collect::<Vec<_>>();
+        let mut signals = archive.personal_signals.clone();
+        attribute_personal_signals(&mut signals, &attribution_events);
         let scope = Some(archive.effective_personality_scope_id());
 
-        for signal in &archive.personal_signals {
+        for signal in &signals {
             let text = normalize_whitespace(&signal.text);
             let category = normalize_category_name(&signal.category);
-            let has_user_source = !user_event_ids.is_empty()
-                && signal
-                    .source_event_ids
-                    .iter()
-                    .any(|event_id| user_event_ids.contains(event_id));
+            let has_user_source = personal_signal_has_user_source(signal, &attribution_events);
 
             if text.is_empty()
                 || category.is_empty()
@@ -588,8 +576,19 @@ impl<S: Storage> MemoryEngine<S> {
                 continue;
             }
 
+            if !personal_signal_is_auto_core_eligible(signal, &attribution_events) {
+                self.route_personal_signal_to_review_candidate(archive, signal, &category, &text)?;
+                summary.skipped += 1;
+                continue;
+            }
+
             let result = self.with_resource_lock(core_lock_key(&category), || {
-                if self.is_near_duplicate_core_fact(&category, scope, &text)? {
+                if self.is_near_duplicate_core_fact(
+                    &category,
+                    scope,
+                    signal.subject.as_ref(),
+                    &text,
+                )? {
                     return Ok(None);
                 }
                 self.upsert_core_fact_unlocked(
@@ -597,6 +596,7 @@ impl<S: Storage> MemoryEngine<S> {
                         schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
                         category: category.clone(),
                         scope: scope.map(str::to_string),
+                        subject: signal.subject.clone(),
                         text,
                         confidence: signal.confidence,
                         tags: vec![
@@ -623,6 +623,79 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         Ok(summary)
+    }
+
+    fn route_personal_signal_to_review_candidate(
+        &self,
+        archive: &ArchiveEntry,
+        signal: &crate::archive::PersonalSignal,
+        category: &str,
+        text: &str,
+    ) -> Result<()> {
+        let core_scope = Some(archive.effective_personality_scope_id().to_string());
+        let duplicate_exists = self
+            .storage
+            .read_candidate_beliefs()?
+            .into_items()
+            .into_iter()
+            .any(|candidate| {
+                matches!(
+                    candidate.status,
+                    CandidateStatus::Draft | CandidateStatus::ReadyForReview
+                ) && candidate.core_scope == core_scope
+                    && candidate.category == category
+                    && same_subject(candidate.subject.as_ref(), signal.subject.as_ref())
+                    && normalize_match_text(&candidate.text) == normalize_match_text(text)
+            });
+        if duplicate_exists {
+            return Ok(());
+        }
+
+        let now = now_rfc3339()?;
+        let mut tags = vec![
+            "archive_signal_review".to_string(),
+            "attribution_review".to_string(),
+            format!("signal_category:{category}"),
+        ];
+        if signal.subject_hint == Some(PersonalSignalSubjectHint::AboutOther) {
+            tags.push("about_other".to_string());
+        }
+        let candidate = CandidateBelief {
+            schema_version: CANDIDATE_BELIEF_SCHEMA_VERSION.to_string(),
+            candidate_id: new_id("candidate")?,
+            source_session_id: Some(archive.source_session_id.clone()),
+            source_session_ids: vec![archive.source_session_id.clone()],
+            core_scope,
+            subject: signal.subject.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+            text: text.to_string(),
+            category: category.to_string(),
+            status: CandidateStatus::ReadyForReview,
+            confidence: signal.confidence.clamp(0.0, 1.0),
+            supporting_archive_ids: vec![archive.archive_id.clone()],
+            contradicting_archive_ids: Vec::new(),
+            contradicted_core_fact_ids: Vec::new(),
+            evidence_summary: signal
+                .evidence
+                .as_deref()
+                .map(normalize_whitespace)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| text.to_string()),
+            promotion_checks: PromotionChecks {
+                min_sources_met: false,
+                weight_threshold_met: signal.confidence >= 0.70,
+                no_recent_contradiction: true,
+                manual_review_required: true,
+            },
+            source_memory_unit_ids: Vec::new(),
+            tags: unique_strings(tags),
+            promoted_core_fact_id: None,
+            review: None,
+            links: Vec::new(),
+            reinforcements: Vec::new(),
+        };
+        self.storage.write_candidate_belief(&candidate)
     }
 
     pub(super) fn auto_route_memory_fidelity_requests(
@@ -692,32 +765,23 @@ impl<S: Storage> MemoryEngine<S> {
             return Ok(HashSet::new());
         }
         let session_events = self.read_session_events_with_archived(&archive.source_session_id)?;
-        if session_is_multi_speaker(&session_events) {
-            // No unit is on the automatic Core path while the bridge is
-            // disabled for multi-speaker sessions.
-            return Ok(HashSet::new());
-        }
-        let user_event_ids = session_events
+        let attribution_events = session_events
             .iter()
-            .filter(|event| event.event_type == "user_message")
-            .map(|event| event.event_id.clone())
-            .collect::<HashSet<_>>();
-        if user_event_ids.is_empty() {
-            return Ok(HashSet::new());
-        }
+            .map(AttributionEvent::from)
+            .collect::<Vec<_>>();
+        let mut signals = archive.personal_signals.clone();
+        attribute_personal_signals(&mut signals, &attribution_events);
 
         let mut ids = HashSet::new();
-        for signal in &archive.personal_signals {
+        for signal in &signals {
             let text = normalize_whitespace(&signal.text);
             let category = normalize_category_name(&signal.category);
-            let has_user_source = signal
-                .source_event_ids
-                .iter()
-                .any(|event_id| user_event_ids.contains(event_id));
+            let has_user_source = personal_signal_has_user_source(signal, &attribution_events);
             if text.is_empty()
                 || category.is_empty()
                 || signal.confidence < 0.85
                 || !has_user_source
+                || !personal_signal_is_auto_core_eligible(signal, &attribution_events)
             {
                 continue;
             }
@@ -745,6 +809,7 @@ impl<S: Storage> MemoryEngine<S> {
         &self,
         category_name: &str,
         scope: Option<&str>,
+        subject: Option<&Speaker>,
         text: &str,
     ) -> Result<bool> {
         let normalized_scope = normalize_optional_string(scope);
@@ -753,7 +818,10 @@ impl<S: Storage> MemoryEngine<S> {
         let category = self.storage.read_core_store_category(category_name)?;
 
         for fact in category.facts {
-            if fact.status != CoreFactStatus::Active || fact.scope != normalized_scope {
+            if fact.status != CoreFactStatus::Active
+                || fact.scope != normalized_scope
+                || !same_subject(fact.subject.as_ref(), subject)
+            {
                 continue;
             }
             if normalize_match_text(&fact.text) == needle {
@@ -791,7 +859,7 @@ impl<S: Storage> MemoryEngine<S> {
     pub(super) fn resume_sleep_compression_unlocked(
         &self,
         task_id: &str,
-        result: SleepCompressionResult,
+        mut result: SleepCompressionResult,
     ) -> Result<ArchiveEntry> {
         if result.schema_version != SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION {
             return Err(MemoryEngineError::IncompatibleSchema {
@@ -811,6 +879,12 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         let mut archive_entry = self.storage.read_archive_entry_by_id(&result.archive_id)?;
+        let attribution_events = self
+            .read_session_events_with_archived(&archive_entry.source_session_id)?
+            .iter()
+            .map(AttributionEvent::from)
+            .collect::<Vec<_>>();
+        attribute_personal_signals(&mut result.personal_signals, &attribution_events);
 
         let now = now_rfc3339()?;
         if archive_entry.status == ArchiveStatus::Complete {
@@ -941,7 +1015,7 @@ impl<S: Storage> MemoryEngine<S> {
                 result.archive_id
             )));
         }
-        let allowed_event_ids = task
+        let frozen_events = task
             .inputs
             .get("events")
             .and_then(Value::as_array)
@@ -951,19 +1025,17 @@ impl<S: Storage> MemoryEngine<S> {
                 ))
             })?
             .iter()
-            .map(|event| {
-                event
-                    .get("event_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .ok_or_else(|| {
-                        MemoryEngineError::Validation(format!(
-                            "memory_unit_pass task has event without event_id: {task_id}"
-                        ))
-                    })
-            })
-            .collect::<Result<HashSet<_>>>()?;
+            .map(|event| serde_json::from_value::<SleepInputEvent>(event.clone()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let allowed_event_ids = frozen_events
+            .iter()
+            .map(|event| event.event_id.clone())
+            .collect::<HashSet<_>>();
         result.validate_source_event_ids(&allowed_event_ids)?;
+        let attribution_events = frozen_events
+            .iter()
+            .map(AttributionEvent::from)
+            .collect::<Vec<_>>();
 
         let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
         let now = now_rfc3339()?;
@@ -981,6 +1053,12 @@ impl<S: Storage> MemoryEngine<S> {
             if thesis.is_empty() {
                 continue;
             }
+            let subject = resolve_attributed_subject(
+                &draft.source_event_ids,
+                draft.subject_hint,
+                draft.speaker_id.as_deref(),
+                &attribution_events,
+            );
             units.push(MemoryUnit {
                 schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
                 memory_unit_id: new_id("mu")?,
@@ -990,6 +1068,7 @@ impl<S: Storage> MemoryEngine<S> {
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 thesis,
+                subject,
                 source_event_ids: draft.source_event_ids,
                 evidence: normalize_optional_string(draft.evidence.as_deref()),
                 tags: draft.tags,
@@ -1066,6 +1145,7 @@ fn push_repair_memory_unit(
         created_at: now.to_string(),
         updated_at: now.to_string(),
         thesis,
+        subject: None,
         source_event_ids: input.source_event_ids,
         evidence: normalize_optional_string(input.evidence.as_deref()),
         tags: input.tags,
@@ -1086,22 +1166,9 @@ fn push_repair_memory_unit(
 /// single-user semantics, so a lone identified speaker (or none) is not
 /// multi-speaker.
 pub(super) fn session_is_multi_speaker(events: &[StoredEvent]) -> bool {
-    let mut speaker_ids = HashSet::new();
-    for event in events {
-        if event.event_type != "user_message" {
-            continue;
-        }
-        let Some(speaker) = event.speaker.as_ref() else {
-            continue;
-        };
-        let id = normalize_whitespace(&speaker.id);
-        if id.is_empty() {
-            continue;
-        }
-        speaker_ids.insert(id);
-        if speaker_ids.len() >= 2 {
-            return true;
-        }
-    }
-    false
+    let attribution_events = events
+        .iter()
+        .map(AttributionEvent::from)
+        .collect::<Vec<_>>();
+    attribution_session_is_multi_speaker(&attribution_events)
 }

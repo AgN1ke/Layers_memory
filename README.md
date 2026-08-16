@@ -45,6 +45,20 @@ accumulate their new validated units and add a bounded, explainable slice of
 structurally related older history. Similar text never links identities, and
 the non-vector path remains complete.
 
+Group conversations preserve participant identity through compression. The
+core verifies each claimed subject against the cited source events: a direct
+self-statement may become a subject-bound Core fact, while hearsay, mixed
+authorship, or a conflicting model hint is routed to human review. The same
+subject identity survives Archive units, fidelity, reflection and prompt
+rendering.
+
+Local/reference storage exposes two explicit erasure operations. A product may
+delete one conversation while preserving memories already consolidated into
+the personality scope, or irreversibly purge every FileStorage record for that
+scope. Both operations are idempotent, journaled for restart recovery, and
+available through the Rust, Python and Godot APIs. Product-owned logs, backups
+and provider data remain the integrating application's responsibility.
+
 Optional vectors do not create another persisted memory layer. They form a
 local, rebuildable sidecar index over atomic memory units. During a live turn,
 the Rust core may use that index to build a small ephemeral

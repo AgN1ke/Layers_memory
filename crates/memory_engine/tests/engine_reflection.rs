@@ -52,6 +52,8 @@ fn reflection_creates_reviewable_candidate_and_confirm_promotes_to_core() {
                 memory_units: vec![MemoryUnitDraft {
                     thesis: "Space interest -> the user returns to space because it calms them."
                         .to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: sleep.archive_entry.source_event_ids.clone(),
                     evidence: Some("The user directly said space calms them down.".to_string()),
                     tags: vec!["interest".to_string(), "values".to_string()],
@@ -417,6 +419,7 @@ fn journaled_reflection_recovers_each_logical_apply_boundary_without_duplicates(
                     candidate: ReflectionCandidateDraft {
                         text: "The user has a stable interest in space.".to_string(),
                         category: "interest".to_string(),
+                        subject: None,
                         confidence: 0.9,
                         evidence_summary: "Validated evidence repeats the same interest."
                             .to_string(),
@@ -698,6 +701,7 @@ fn typed_reinforcement_rejects_reused_evidence_without_checkpointing_new_memory(
                 candidates: vec![ReflectionCandidateDraft {
                     text: "The user has a stable interest in space.".to_string(),
                     category: "interests".to_string(),
+                    subject: None,
                     confidence: 0.75,
                     evidence_summary: "Validated recurring interest.".to_string(),
                     source_memory_unit_ids: vec![first_unit.clone()],
@@ -831,6 +835,7 @@ fn typed_core_challenge_stays_reviewable_until_owner_approval() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "location".to_string(),
             scope: Some("owner_scope".to_string()),
+            subject: None,
             text: "The user lives in Berlin.".to_string(),
             confidence: 0.95,
             tags: vec!["manual".to_string()],
@@ -911,6 +916,7 @@ fn confirming_contradicting_candidate_marks_existing_core_fact_contested() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "location".to_string(),
             scope: Some("live_session".to_string()),
+            subject: None,
             text: "The user lives in Berlin.".to_string(),
             confidence: 0.95,
             tags: vec!["manual".to_string()],
@@ -940,6 +946,8 @@ fn confirming_contradicting_candidate_marks_existing_core_fact_contested() {
                     thesis:
                         "Location update -> the user moved back to Kyiv and Berlin is outdated."
                             .to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: sleep.archive_entry.source_event_ids.clone(),
                     evidence: Some("The user directly said Berlin is outdated now.".to_string()),
                     tags: vec!["location".to_string(), "core_path".to_string()],
@@ -1509,6 +1517,7 @@ fn reflection_adds_bounded_related_history_and_existing_candidates() {
                 candidates: vec![ReflectionCandidateDraft {
                     text: "The user has a stable interest in space.".to_string(),
                     category: "interests".to_string(),
+                    subject: None,
                     confidence: 0.82,
                     evidence_summary: "The validated memory describes a lasting interest."
                         .to_string(),
@@ -1727,6 +1736,7 @@ fn unscoped_reflection_does_not_treat_named_core_scopes_as_a_wildcard() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "private_fact".to_string(),
             scope: Some("another_owner".to_string()),
+            subject: None,
             text: "A fact from another personality scope.".to_string(),
             confidence: 0.95,
             tags: vec!["scope_test".to_string()],
@@ -1790,6 +1800,7 @@ fn reflection_revalidates_live_evidence_before_starting_durable_apply() {
                     candidate: ReflectionCandidateDraft {
                         text: "The user has a stable interest in space.".to_string(),
                         category: "interest".to_string(),
+                        subject: None,
                         confidence: 0.9,
                         evidence_summary: "The task snapshot contained a supporting unit."
                             .to_string(),
@@ -1944,6 +1955,8 @@ fn seed_valid_unit_for_session(
                 archive_id: archive_id.clone(),
                 memory_units: vec![MemoryUnitDraft {
                     thesis: thesis.to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: sleep.archive_entry.source_event_ids.clone(),
                     evidence: Some(text.to_string()),
                     tags: tags.iter().map(|tag| (*tag).to_string()).collect(),

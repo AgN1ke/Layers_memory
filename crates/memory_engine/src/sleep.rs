@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
-use crate::archive::{EmotionalMarker, PersonalSignal, RelationalTone, TopicThreadItem};
+use crate::archive::{
+    EmotionalMarker, PersonalSignal, PersonalSignalSubjectHint, RelationalTone, TopicThreadItem,
+};
 use crate::event::StoredEvent;
 use crate::types::{
     Id, ImportanceHint, Link, ProcessingMode, Quote, Speaker, Timestamp, WeightedFact,
@@ -143,6 +145,10 @@ pub struct MemoryUnitPassResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryUnitDraft {
     pub thesis: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_hint: Option<PersonalSignalSubjectHint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
     #[serde(default)]
     pub source_event_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,6 +156,170 @@ pub struct MemoryUnitDraft {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub weight: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttributionEvent {
+    pub event_id: Id,
+    pub event_type: String,
+    pub speaker: Option<Speaker>,
+}
+
+impl From<&StoredEvent> for AttributionEvent {
+    fn from(event: &StoredEvent) -> Self {
+        Self {
+            event_id: event.event_id.clone(),
+            event_type: event.event_type.clone(),
+            speaker: event.speaker.clone(),
+        }
+    }
+}
+
+impl From<&SleepInputEvent> for AttributionEvent {
+    fn from(event: &SleepInputEvent) -> Self {
+        Self {
+            event_id: event.event_id.clone(),
+            event_type: event.event_type.clone(),
+            speaker: event.speaker.clone(),
+        }
+    }
+}
+
+pub fn attribute_personal_signals(signals: &mut [PersonalSignal], events: &[AttributionEvent]) {
+    for signal in signals {
+        signal.subject = resolve_attributed_subject(
+            &signal.source_event_ids,
+            signal.subject_hint,
+            signal.speaker_id.as_deref(),
+            events,
+        );
+    }
+}
+
+pub fn resolve_attributed_subject(
+    source_event_ids: &[Id],
+    subject_hint: Option<PersonalSignalSubjectHint>,
+    speaker_id_hint: Option<&str>,
+    events: &[AttributionEvent],
+) -> Option<Speaker> {
+    let participants = participant_speakers(events);
+    let source_speakers = source_user_speakers(source_event_ids, events);
+    let normalized_hint = speaker_id_hint.map(str::trim).filter(|id| !id.is_empty());
+
+    match subject_hint {
+        Some(PersonalSignalSubjectHint::SelfStatement) => {
+            let source = sole_speaker(&source_speakers)?;
+            if normalized_hint.is_some_and(|id| id != source.id) {
+                return None;
+            }
+            Some(source)
+        }
+        Some(PersonalSignalSubjectHint::AboutOther) => {
+            normalized_hint.and_then(|id| participants.get(id).cloned())
+        }
+        None => {
+            // Legacy model output remains promotable only while the session
+            // contains at most one identified human speaker.
+            (participants.len() <= 1)
+                .then(|| sole_speaker(&source_speakers))
+                .flatten()
+        }
+    }
+}
+
+pub fn personal_signal_is_auto_core_eligible(
+    signal: &PersonalSignal,
+    events: &[AttributionEvent],
+) -> bool {
+    if !personal_signal_has_user_source(signal, events) {
+        return false;
+    }
+
+    let participants = participant_speakers(events);
+    if participants.is_empty() {
+        return true;
+    }
+
+    match signal.subject_hint {
+        Some(PersonalSignalSubjectHint::SelfStatement) => {
+            let sources = source_user_speakers(&signal.source_event_ids, events);
+            let Some(source) = sole_speaker(&sources) else {
+                return false;
+            };
+            signal
+                .subject
+                .as_ref()
+                .is_some_and(|subject| subject.id == source.id)
+                && signal
+                    .speaker_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .is_none_or(|id| id == source.id)
+        }
+        Some(PersonalSignalSubjectHint::AboutOther) => false,
+        None => participants.len() <= 1,
+    }
+}
+
+pub fn personal_signal_has_user_source(
+    signal: &PersonalSignal,
+    events: &[AttributionEvent],
+) -> bool {
+    let source_user_ids = events
+        .iter()
+        .filter(|event| event.event_type == "user_message")
+        .map(|event| event.event_id.as_str())
+        .collect::<HashSet<_>>();
+    signal
+        .source_event_ids
+        .iter()
+        .any(|event_id| source_user_ids.contains(event_id.as_str()))
+}
+
+pub fn attribution_session_is_multi_speaker(events: &[AttributionEvent]) -> bool {
+    participant_speakers(events).len() >= 2
+}
+
+fn participant_speakers(events: &[AttributionEvent]) -> BTreeMap<String, Speaker> {
+    events
+        .iter()
+        .filter(|event| event.event_type == "user_message")
+        .filter_map(|event| normalized_speaker(event.speaker.as_ref()))
+        .map(|speaker| (speaker.id.clone(), speaker))
+        .collect()
+}
+
+fn source_user_speakers(
+    source_event_ids: &[Id],
+    events: &[AttributionEvent],
+) -> BTreeMap<String, Speaker> {
+    let source_ids = source_event_ids.iter().collect::<HashSet<_>>();
+    events
+        .iter()
+        .filter(|event| event.event_type == "user_message")
+        .filter(|event| source_ids.contains(&event.event_id))
+        .filter_map(|event| normalized_speaker(event.speaker.as_ref()))
+        .map(|speaker| (speaker.id.clone(), speaker))
+        .collect()
+}
+
+fn sole_speaker(speakers: &BTreeMap<String, Speaker>) -> Option<Speaker> {
+    (speakers.len() == 1)
+        .then(|| speakers.values().next().cloned())
+        .flatten()
+}
+
+fn normalized_speaker(speaker: Option<&Speaker>) -> Option<Speaker> {
+    speaker.and_then(|speaker| {
+        let id = speaker.id.split_whitespace().collect::<Vec<_>>().join(" ");
+        let name = speaker
+            .name
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!id.is_empty() && !name.is_empty()).then_some(Speaker { id, name })
+    })
 }
 
 impl MemoryUnitPassResult {

@@ -49,6 +49,9 @@ pub const FORGET_REVIEW_INPUT_SCHEMA_VERSION: &str = "forget_review_input.v1";
 pub const FORGET_REVIEW_RESULT_SCHEMA_VERSION: &str = "forget_review_result.v1";
 pub const MANIFEST_SCHEMA_VERSION: &str = "manifest.v1";
 pub const JOURNAL_OPERATION_SCHEMA_VERSION: &str = "journal_operation.v1";
+pub const MEMORY_ERASURE_PLAN_SCHEMA_VERSION: &str = "memory_erasure_plan.v1";
+pub const MEMORY_ERASURE_OPERATION_SCHEMA_VERSION: &str = "memory_erasure_operation.v1";
+pub const MEMORY_ERASURE_REPORT_SCHEMA_VERSION: &str = "memory_erasure_report.v1";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Link {

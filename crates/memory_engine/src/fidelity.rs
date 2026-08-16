@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::tasks::PendingTask;
-use crate::types::{Id, Timestamp, EVIDENCE_PACK_SCHEMA_VERSION};
+use crate::types::{Id, Speaker, Timestamp, EVIDENCE_PACK_SCHEMA_VERSION};
 use crate::LlmRequest;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,6 +29,8 @@ pub struct EvidenceEvent {
     #[serde(rename = "type")]
     pub event_type: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<Speaker>,
     pub role: EvidenceEventRole,
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

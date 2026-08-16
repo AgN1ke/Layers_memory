@@ -424,6 +424,22 @@ pub(super) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+pub(super) fn normalize_speaker(speaker: Option<&Speaker>) -> Option<Speaker> {
+    speaker.and_then(|speaker| {
+        let id = normalize_whitespace(&speaker.id);
+        let name = normalize_whitespace(&speaker.name);
+        (!id.is_empty() && !name.is_empty()).then_some(Speaker { id, name })
+    })
+}
+
+pub(super) fn same_subject(left: Option<&Speaker>, right: Option<&Speaker>) -> bool {
+    match (normalize_speaker(left), normalize_speaker(right)) {
+        (None, None) => true,
+        (Some(left), Some(right)) => left.id == right.id,
+        _ => false,
+    }
+}
+
 pub(super) fn unique_strings(items: Vec<String>) -> Vec<String> {
     items
         .into_iter()

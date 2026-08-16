@@ -116,6 +116,7 @@ fn forget_review_rechecks_core_link_protection_on_submit() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "profile".to_string(),
             scope: Some("live_session".to_string()),
+            subject: None,
             text: "Core-linked fact from the archive.".to_string(),
             confidence: 0.95,
             tags: vec!["test".to_string()],
@@ -274,6 +275,8 @@ fn create_archive_with_units(
         .into_iter()
         .map(|(thesis, weight)| MemoryUnitDraft {
             thesis: thesis.to_string(),
+            subject_hint: None,
+            speaker_id: None,
             source_event_ids: sleep.archive_entry.source_event_ids.clone(),
             evidence: Some("Routine source event.".to_string()),
             tags: vec!["routine".to_string()],

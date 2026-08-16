@@ -90,6 +90,21 @@ pub(super) fn validate_core_fact_input(input: &CoreFactInput) -> Result<()> {
         ));
     }
 
+    if let Some(subject) = input.subject.as_ref() {
+        validate_speaker(subject, "core fact subject")?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn validate_speaker(speaker: &Speaker, label: &str) -> Result<()> {
+    if normalize_whitespace(&speaker.id).is_empty()
+        || normalize_whitespace(&speaker.name).is_empty()
+    {
+        return Err(MemoryEngineError::Validation(format!(
+            "{label} id and name must not be empty"
+        )));
+    }
     Ok(())
 }
 

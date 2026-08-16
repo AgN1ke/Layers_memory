@@ -11,6 +11,8 @@ pub enum JournalOperationType {
     CorePromotion,
     ReflectionApply,
     CandidateReview,
+    DeleteSession,
+    PurgeScope,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,7 +4,7 @@
 
 - [Architecture](../foundation/architecture.md) - session, scope, and host boundary this design must preserve.
 - [Contracts](../foundation/contracts.md) - event/session schema changes implied by multi-speaker attribution.
-- [Vector storage implementation TZ](vector-storage-tz-2026-07-03.md) - current vector gate that defers multi-speaker embedding.
+- [Vector storage implementation TZ](vector-storage-tz-2026-07-03.md) - vector gate now admits only deterministically attributed multi-speaker units.
 - [Roadmap](../planning/roadmap.md) - planned attribution work and its order.
 - [Audit 2026-06-10](../planning/audit-2026-06-10.md) - cleanup context before this deferred work.
 
@@ -13,6 +13,30 @@
 Цей документ фіксує постановку власника проєкту, результат дослідження поточного стану Memory Engine (за `wiki/pages/foundation/strategy.md`, `wiki/pages/planning/roadmap.md`, `audit-2026-06-10.md`, `DEVLOG.md`, `README.md`) і запропоноване рішення.
 
 Документ адресований ШІ-агенту, який працює з кодом. Його задача: перенести рішення в `wiki/pages/planning/roadmap.md` як окремий блок пунктів, узгодити з `wiki/pages/foundation/architecture.md` і `wiki/pages/foundation/contracts.md`, і далі виконувати по зафіксованому порядку. Це не ТЗ на одну гілку, а напрям з фазуванням. Кожна зміна контрактів проходить через `HISTORY.md` за загальною дисципліною проєкту.
+
+## Implementation update — 2026-08-16
+
+Фаза субʼєктної памʼяті реалізована. `PersonalSignal`, `MemoryUnit`, Core,
+reflection candidates і hypothesis records мають additive `subject`. Модель
+повертає `subject_hint` і можливий `speaker_id`, але ядро виводить канонічного
+субʼєкта тільки з `source_event_ids` та фактичних `StoredEvent.speaker`.
+
+Історичний Phase 1 guard, який вимикав Archive → Core для всієї
+мультиспікерної сесії, замінено посигнальним правилом. Безпечний self-statement
+одного автора автоматично потрапляє в його Core; about-other, кілька авторів і
+суперечлива підказка моделі створюють candidate для review. Near-duplicate
+перевірка і prompt projection враховують subject. Векторний gate тепер
+пропускає підтверджено атрибутовані units і лишає неоднозначні fail-closed.
+
+Детермінований сценарій у `crates/memory_engine/tests/engine_multi_speaker.rs`
+перевіряє двох авторів, чужу заяву, неправдивий model hint, Core, candidates,
+fidelity routing, vector eligibility та сумісність speakerless-сесій.
+
+Відкритою частиною цього research-напряму лишаються reply-маркери в raw
+sleep-material, `recall_by_event_id`, host ingestion усього групового потоку і
+живий тест переплетених reply-тем. Вони не потрібні для вже реалізованої
+детермінованої атрибуції self-statements, але потрібні для повної геометрії
+старих Telegram reply-ланцюжків.
 
 ## Інваріанти, які не можна зламати
 

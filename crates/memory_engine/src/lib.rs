@@ -8,6 +8,7 @@ pub mod archive;
 pub mod config;
 pub mod core_store;
 pub mod engine;
+pub mod erasure;
 pub mod error;
 pub mod event;
 pub mod fidelity;
@@ -41,6 +42,7 @@ pub use engine::{
     TransactionalSleepSubmitResult, MAX_SLEEP_MEMORY_UNITS_PER_RUN,
     MAX_SLEEP_SUBMIT_RESPONSE_BYTES, MAX_SLEEP_WORKFLOW_INPUT_BYTES,
 };
+pub use erasure::{MemoryErasureCounts, MemoryErasureKind, MemoryErasureReport};
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;
 pub use llm::{

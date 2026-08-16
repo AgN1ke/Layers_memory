@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core_store::CandidateBelief;
 use crate::tasks::PendingTask;
-use crate::types::{Id, Timestamp};
+use crate::types::{Id, Speaker, Timestamp};
 use crate::LlmRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +160,8 @@ pub struct ReflectionNoInsight {
 pub struct ReflectionCandidateDraft {
     pub text: String,
     pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Speaker>,
     pub confidence: f64,
     pub evidence_summary: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

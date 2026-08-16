@@ -354,6 +354,7 @@ fn upsert_request(
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "interests".to_string(),
             scope: scope.map(str::to_string),
+            subject: None,
             text: text.to_string(),
             confidence,
             tags: tags.into_iter().map(str::to_string).collect(),

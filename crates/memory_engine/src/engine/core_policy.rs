@@ -11,6 +11,7 @@ where
     F: FnOnce() -> Result<String>,
 {
     let scope = normalize_optional_string(input.scope.as_deref());
+    let subject = normalize_speaker(input.subject.as_ref());
     let fact_text = normalize_whitespace(&input.text);
 
     if category.schema_version.trim().is_empty() {
@@ -21,12 +22,13 @@ where
 
     let needle = normalize_match_text(&fact_text);
     let mut created = false;
-    let fact = if let Some(existing) = category
-        .facts
-        .iter_mut()
-        .find(|fact| normalize_match_text(&fact.text) == needle && fact.scope == scope)
-    {
+    let fact = if let Some(existing) = category.facts.iter_mut().find(|fact| {
+        normalize_match_text(&fact.text) == needle
+            && fact.scope == scope
+            && same_subject(fact.subject.as_ref(), subject.as_ref())
+    }) {
         existing.scope = scope.clone();
+        existing.subject = subject.clone();
         existing.text = fact_text;
         existing.status = CoreFactStatus::Active;
         existing.confidence = existing.confidence.max(input.confidence).clamp(0.0, 1.0);
@@ -43,6 +45,7 @@ where
             schema_version: CORE_FACT_SCHEMA_VERSION.to_string(),
             core_fact_id: new_fact_id()?,
             scope,
+            subject,
             text: fact_text,
             status: CoreFactStatus::Active,
             confidence: input.confidence.clamp(0.0, 1.0),

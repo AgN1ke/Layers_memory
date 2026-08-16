@@ -1,5 +1,16 @@
 # Information Flow Integrity Plan
 
+## Related pages
+
+- [Strategy](../foundation/strategy.md) - invariants this repair preserves.
+- [Architecture](../foundation/architecture.md) - implemented information and
+  storage boundaries.
+- [Contracts](../foundation/contracts.md) - canonical schemas used along the
+  event-to-prompt path.
+- [Roadmap](roadmap.md) - implementation status and remaining server phases.
+- [Server-scale Memory Runtime](server-scale-memory-runtime.md) - Storage v2
+  migration and production acceptance track.
+
 Status: **architectural repair implemented in the local/reference path;
 server lifecycle migration continues through S2.C–S2.D**
 

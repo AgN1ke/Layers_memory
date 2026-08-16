@@ -46,6 +46,72 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-16 — Group memory gains verified subjects and FileStorage gains recoverable erasure
+
+Context. A multi-speaker Session previously disabled the entire automatic
+Archive-to-Core and vector paths. This protected Core from gossip, but also
+prevented a group assistant from learning direct self-statements from any
+participant. The public library also lacked a truthful distinction between
+starting a conversation over and deleting all memory for a personality scope.
+
+**What changed:**
+- `PersonalSignal`, `MemoryUnit`, `CoreFact`, `CoreFactInput`,
+  `CoreContextFact`, `CandidateBelief`, reflection drafts and hypothesis records
+  gained an optional `subject: { id, name }`. Existing records deserialize with
+  `subject = null` and keep their previous single-user meaning;
+- sleep outputs may declare `subject_hint: self_statement | about_other` and a
+  `speaker_id`. These are untrusted hints. The Rust core derives the canonical
+  subject from cited source events and their stored speakers;
+- a direct self-statement with exactly one verified author may cross the
+  Archive-to-Core bridge. About-other statements, mixed authorship and a model
+  hint that disagrees with source events become reviewable candidates instead;
+- Core upsert, near-duplicate checks, candidate promotion, query-aware Core
+  ranking, context projection and prompt rendering preserve subject identity.
+  Fidelity evidence includes the event speaker, and attributed multi-speaker
+  units may enter the derived vector index while unattributed units remain
+  excluded;
+- `sleep_personal_signal_pass`, `memory_unit_pass`, `sleep_consolidator` and
+  `memory_fidelity_pass` now use prompt version 2. Persisted transactional
+  version-1 sleep tasks remain accepted for restart compatibility;
+- the public Rust, Python and Godot APIs gained `delete_session` and
+  `purge_scope`. Session deletion removes engine-owned conversation records and
+  pending workflow state while preserving already materialized Archive/Core
+  memory. Scope purge removes all FileStorage-owned Session, Archive,
+  MemoryUnit, Core, candidate/hypothesis, task/run/reflection and vector data;
+- both erasure operations return `memory_erasure_report.v1` and write a frozen
+  `memory_erasure_plan.v1` journal intent before the first deletion. Replay is
+  idempotent, unreadable planned Core data fails visibly and remains retryable,
+  and the erasure journal marker is removed only after the plan has completed.
+
+**What is retracted:**
+- the previous statement that a multi-speaker Session must disable the whole
+  automatic Core and embedding path is no longer current. Protection is now
+  applied to each signal or unit using verified attribution;
+- marking memory `Forgotten`, starting a new Session, or deleting a vector
+  index must not be described as full user-requested deletion.
+
+**What is still true:**
+- model output never assigns Core truth by itself; Core promotion remains
+  guarded by source evidence and review policy;
+- speakerless and single-speaker hosts keep their previous behavior without a
+  data migration;
+- vectors remain optional derived data, and the core still performs no model
+  or network calls;
+- these erasure guarantees cover local/reference `FileStorage`. Product logs,
+  backups and provider-side data remain the host's responsibility, while
+  server Storage v2/PostgreSQL per-vault deletion remains an open S6 gate. A
+  FileStorage host must quiesce new operations for the target scope while
+  `purge_scope` runs;
+
+**Reproducibility anchor:**
+- `crates/memory_engine/tests/engine_multi_speaker.rs` covers verified
+  self-statements, about-other routing, a dishonest model hint, subject-aware
+  Core output, fidelity routing, vector eligibility and legacy behavior;
+- `crates/memory_engine/tests/engine_erasure.rs` covers session deletion, full
+  scope isolation, idempotence and restart recovery after a partial purge;
+- adapter compatibility is covered by
+  `crates/python_adapter/tests/test_basic.py` and the workspace release gates.
+
 ## 2026-08-02 — Server Sleep no longer stops at a durable reservation
 
 Context. Storage v2 could atomically reserve a Session and publish preliminary

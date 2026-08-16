@@ -1,5 +1,95 @@
 # DEVLOG
 
+## Запис 167 — 2026-08-16 — Групова памʼять отримала субʼєктів, а людина — справжнє видалення
+
+Чернетку інтеграційного ТЗ від Smartest v2 розібрано як дві зміни одного
+принципу: бібліотека має точно знати, чиї це слова, і точно виконувати людське
+рішення про межу памʼяті. Реалізація зроблена в гілці
+`codex/attributed-memory-erasure` без перенесення memory policy у Telegram,
+Godot або зовнішню модель.
+
+### Атрибуція у груповому чаті
+
+`PersonalSignal`, standalone `MemoryUnit`, Core facts/context, reflection
+candidates і hypothesis records отримали additive `subject: { id, name }`.
+Старі JSON без поля читаються як раніше. Sleep-пас може повернути
+`subject_hint: self_statement | about_other` та `speaker_id`, але ці поля не є
+правдою. Ядро бере cited `source_event_ids`, знаходить відповідні
+`StoredEvent.speaker` і саме виводить канонічного субʼєкта.
+
+Колишній захист вимикав Archive → Core для всієї сесії з двома авторами. Його
+замінено посигнальним guard-ом. Self-statement проходить автоматично лише за
+одного автора source events і збігу optional speaker hint. About-other,
+змішані автори та навмисно неправдивий hint створюють `ReadyForReview`
+candidate. Core upsert і near-duplicate стали subject-aware, тому однакові
+факти про двох людей не блокують один одного. Prompt view показує subject, а
+Core ranking враховує імʼя/id людини при тісному budget. Fidelity evidence
+зберігає автора події.
+
+`memory_unit_pass`, `sleep_personal_signal_pass`, `sleep_consolidator` і
+`memory_fidelity_pass` підняті до prompt version 2. Старі persisted version-1
+transactional tasks приймаються для recovery. У мультиспікерній сесії vector
+backfill тепер бере units із перевіреним subject; неатрибутовані units
+залишаються fail-closed. Односпікерні й speakerless хости мають попередню
+семантику.
+
+### Людське видалення
+
+Додано два різні public API. `delete_session(session_id)` стирає active і
+rotated raw events, Session metadata, повʼязані tasks, sleep runs та journal
+records, але зберігає Archive/MemoryUnit/Core, уже винесені у довгоживучий
+scope. `purge_scope(personality_scope_id)` незворотно прибирає всі
+FileStorage-owned дані scope: Sessions, Archive/units, Core facts зі спільних
+category files, candidates/hypothesis graph, tasks/runs/reflection state та
+derived vectors. Сусідні scope не змінюються.
+
+Перед першим side effect ядро записує versioned frozen erasure plan у journal.
+Кожне видалення ідемпотентне; restart replay повторює той самий план. Поточний
+journal marker видаляється останнім, щоб завершений full purge не лишав у
+сховищі ідентифікатор стертої людини. Public result —
+`memory_erasure_report.v1` із точними planned counts. Rust API дзеркалено в
+PyO3 та GDExtension.
+
+Окремий fault-test пошкоджує Core category вже після запису frozen purge plan.
+Apply читає заплановані category files точково й строго: помилка лишається
+видимою, journal зберігає `started`, а після відновлення файла наступний
+recovery завершує той самий purge. Толерантний collection scan на цьому
+destructive шляху не використовується.
+
+### Acceptance
+
+Старий `direct-multispeaker` conformance ще доводив лише Phase 1 «Core завжди
+порожній». Його оновлено до нового контракту через public Python adapter:
+Жека й Антон дають по self-statement, Жека каже неперевірене про Антона, а
+fake model окремо бреше в hint. Результат: 4 units, 2 subject-bound Core facts,
+2 review candidates, 2 automatic fidelity requests і 3 attributed vector
+items; неправдивий unit у vectors не проходить.
+
+Перевірки на завершенні:
+
+- `cargo fmt --all -- --check` — пройдено;
+- `cargo test --workspace` — пройдено; 1000-session disk stress лишається
+  штатно ignored, його малий parallel sibling зелений;
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройдено;
+- PyO3 adapter перебудовано через `maturin develop`; pytest — `18 passed`;
+- `py_compile` для host-conformance runner — пройдено;
+- усі 11 deterministic host-conformance режимів пройдено: direct,
+  direct-vectors, direct-forced-recall, direct-multispeaker, Telegram-local,
+  Telegram distant gate, Godot-headless і чотири Chibigochi paths;
+- wiki link checker пройшов для 67 Markdown-файлів; `git diff --check` також
+  пройшов.
+
+### Межа заяви
+
+Зміна закриває attribution і erasure для local/reference FileStorage. Reply
+markers, `recall_by_event_id`, ingest усього реального групового Telegram
+потоку та live-тест переплетених тем лишаються в multi-speaker roadmap.
+Застосунок окремо видаляє власні логи, backups і provider-side records.
+Storage v2/PostgreSQL per-vault deletion лишається відкритим пунктом S6.
+Current FileStorage contract також прямо вимагає призупинити новий ingest і
+background workflows цільового scope до повернення `purge_scope`; це
+maintenance-команда one-writer runtime, а не міжпроцесна server-транзакція.
+
 ## Запис 166 — 2026-08-02 — Storage v2 Sleep став завершуваним durable workflow
 
 Наступний крок після information-flow audit реалізовано як один state machine,

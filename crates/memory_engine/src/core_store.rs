@@ -37,6 +37,8 @@ pub struct CoreFact {
     pub core_fact_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Speaker>,
     pub text: String,
     pub status: CoreFactStatus,
     pub confidence: f64,
@@ -69,6 +71,8 @@ pub struct CoreFactInput {
     pub category: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Speaker>,
     pub text: String,
     #[serde(default)]
     pub confidence: f64,
@@ -117,6 +121,8 @@ pub struct CoreContextFact {
     pub core_fact_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Speaker>,
     pub text: String,
     #[serde(default = "default_core_context_fact_status")]
     pub status: CoreFactStatus,
@@ -332,6 +338,8 @@ pub struct CandidateBelief {
     pub source_session_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Speaker>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub text: String,

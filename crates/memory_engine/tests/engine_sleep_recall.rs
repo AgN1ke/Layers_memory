@@ -13,7 +13,7 @@ use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressi
 use memory_engine::storage::Storage;
 use memory_engine::tasks::{TaskState, TaskType};
 use memory_engine::types::{
-    ModelRole, CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
+    ModelRole, Speaker, CORE_CONTEXT_REQUEST_SCHEMA_VERSION, CORE_FACT_INPUT_SCHEMA_VERSION,
     CORE_FACT_PATCH_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, FIDELITY_REVIEW_SCHEMA_VERSION,
     MEMORY_UNITS_RESULT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
     SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
@@ -114,6 +114,8 @@ fn memory_unit_pass_rejects_event_outside_frozen_sleep_input() {
                 archive_id: sleep.archive_entry.archive_id,
                 memory_units: vec![MemoryUnitDraft {
                     thesis: "Користувач цікавиться Марсом.".to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: vec!["event_from_another_task".to_string()],
                     evidence: None,
                     tags: vec!["space".to_string()],
@@ -462,6 +464,8 @@ fn recall_uses_standalone_memory_unit_as_canonical_prompt_truth() {
                 archive_id: sleep.archive_entry.archive_id.clone(),
                 memory_units: vec![MemoryUnitDraft {
                     thesis: "На Титані щільна атмосфера.".to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: sleep.archive_entry.source_event_ids.clone(),
                     evidence: None,
                     tags: vec!["titan".to_string()],
@@ -839,6 +843,7 @@ fn engine_context_skips_unreadable_core_store_files_with_notes() {
         .upsert_core_fact(CoreFactInput {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             scope: Some("live_session".to_string()),
+            subject: None,
             text: "The user likes astronomy.".to_string(),
             category: "interest".to_string(),
             confidence: 0.95,
@@ -918,6 +923,8 @@ fn engine_evidence_pack_uses_source_events_and_configured_neighbors() {
                 archive_id: sleep_result.archive_entry.archive_id.clone(),
                 memory_units: vec![MemoryUnitDraft {
                     thesis: "Source event 2 should be checked against local context.".to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: vec![source_event_id.clone()],
                     evidence: Some("The source was event 2.".to_string()),
                     tags: vec!["evidence_test".to_string()],
@@ -985,6 +992,8 @@ fn engine_memory_fidelity_review_marks_distorted_unit_for_revision() {
                 archive_id: sleep_result.archive_entry.archive_id.clone(),
                 memory_units: vec![MemoryUnitDraft {
                     thesis: "The user is a professional astronomer.".to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: vec![source_event_id],
                     evidence: Some(
                         "The user only said they like astronomy documentaries.".to_string(),
@@ -1073,6 +1082,8 @@ fn engine_memory_fidelity_marks_task_failed_on_invalid_validator_json() {
                 archive_id: sleep_result.archive_entry.archive_id.clone(),
                 memory_units: vec![MemoryUnitDraft {
                     thesis: "The user likes astronomy documentaries.".to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: vec![source_event_id],
                     evidence: Some("The user said they like astronomy documentaries.".to_string()),
                     tags: vec!["preference".to_string()],
@@ -1453,6 +1464,7 @@ fn engine_upsert_core_fact_adds_stable_fact_to_context_package() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "name".to_string(),
             scope: Some("telegram_chat_a".to_string()),
+            subject: None,
             text: "Користувача звати Микита.".to_string(),
             confidence: 0.95,
             tags: vec!["telegram".to_string(), "name".to_string()],
@@ -1514,6 +1526,7 @@ fn engine_core_context_package_filters_core_facts_by_scope() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "profile".to_string(),
             scope: Some("telegram_1".to_string()),
+            subject: None,
             text: "Користувача звати Микита.".to_string(),
             confidence: 0.95,
             tags: vec!["name".to_string()],
@@ -1527,6 +1540,7 @@ fn engine_core_context_package_filters_core_facts_by_scope() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "profile".to_string(),
             scope: Some("telegram_2".to_string()),
+            subject: None,
             text: "Користувача звати Аліса.".to_string(),
             confidence: 0.95,
             tags: vec!["name".to_string()],
@@ -1606,6 +1620,9 @@ fn engine_core_context_package_enforces_token_budget_by_layer() {
                     text: "Користувач має кішечку на ім'я Іржа.".to_string(),
                     category: "relationships_with_pets".to_string(),
                     confidence: 0.95,
+                    subject: None,
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
                     evidence: Some("Пряма заява користувача.".to_string()),
                 }],
@@ -1631,6 +1648,7 @@ fn engine_core_context_package_enforces_token_budget_by_layer() {
                 schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
                 category: "profile".to_string(),
                 scope: Some("telegram_1".to_string()),
+                subject: None,
                 text: format!(
                     "Стабільний профільний факт {index}: користувач тестує довготривалу памʼять і уважно перевіряє, чи не губляться сенси."
                 ),
@@ -1771,6 +1789,7 @@ fn engine_core_context_package_keeps_query_relevant_core_fact_under_budget() {
                 schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
                 category: category.to_string(),
                 scope: Some("telegram_1".to_string()),
+                subject: None,
                 text: text.to_string(),
                 confidence: 0.95,
                 tags: vec![category.to_string()],
@@ -1785,6 +1804,7 @@ fn engine_core_context_package_keeps_query_relevant_core_fact_under_budget() {
                 schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
                 category: format!("zzz_unrelated_{index}"),
                 scope: Some("telegram_1".to_string()),
+                subject: None,
                 text: format!("Нерелевантний стабільний факт номер {index}."),
                 confidence: 0.95,
                 tags: vec!["unrelated".to_string()],
@@ -1833,6 +1853,88 @@ fn engine_core_context_package_keeps_query_relevant_core_fact_under_budget() {
 }
 
 #[test]
+fn engine_core_context_package_ranks_core_facts_by_subject() {
+    let root = unique_temp_dir("engine_core_context_package_ranks_core_facts_by_subject");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage);
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Поточна групова розмова.",
+        vec!["test"],
+    );
+    engine
+        .upsert_core_fact(CoreFactInput {
+            schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+            category: "vehicle".to_string(),
+            scope: Some("telegram_1".to_string()),
+            subject: Some(Speaker {
+                id: "tg_101".to_string(),
+                name: "Жека".to_string(),
+            }),
+            text: "Має мотоцикл.".to_string(),
+            confidence: 0.95,
+            tags: vec!["vehicle".to_string()],
+            source_archive_ids: vec![],
+            source_candidate_id: None,
+        })
+        .expect("upsert subject fact");
+    for index in 0..12 {
+        engine
+            .upsert_core_fact(CoreFactInput {
+                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                category: format!("zzz_unrelated_{index}"),
+                scope: Some("telegram_1".to_string()),
+                subject: Some(Speaker {
+                    id: format!("tg_{index}"),
+                    name: format!("Інший {index}"),
+                }),
+                text: format!("Нерелевантний стабільний факт номер {index}."),
+                confidence: 0.95,
+                tags: vec!["unrelated".to_string()],
+                source_archive_ids: vec![],
+                source_candidate_id: None,
+            })
+            .expect("upsert unrelated subject fact");
+    }
+
+    let package = engine
+        .core_context_package(CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.to_string(),
+            session_id: "live_session".to_string(),
+            domain_state: json!({ "current_text": "Що ти знаєш про Жеку?" }),
+            core_scope: Some("telegram_1".to_string()),
+            query_text: Some("Що ти знаєш про Жеку?".to_string()),
+            query_embedding: None,
+            explain_recall: false,
+            recall_limit: 0,
+            session_recent_limit: 1,
+            session_trace_event_limit: 0,
+            include_core: true,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
+            token_budget: Some(CoreContextTokenBudget {
+                total_tokens: 760,
+                current_memory_tokens: 300,
+                compressed_memory_tokens: 100,
+                core_tokens: 90,
+            }),
+        })
+        .expect("subject-ranked context");
+
+    assert!(package.budget.as_ref().unwrap().dropped_core_facts > 0);
+    assert!(package.core_facts.iter().any(|fact| {
+        fact.subject
+            .as_ref()
+            .is_some_and(|subject| subject.id == "tg_101")
+            && fact.text == "Має мотоцикл."
+    }));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_core_budget_uses_prompt_shape_not_storage_json() {
     let root = unique_temp_dir("engine_core_budget_uses_prompt_shape_not_storage_json");
     let storage = FileStorage::with_host_id(&root, "terminal");
@@ -1852,6 +1954,7 @@ fn engine_core_budget_uses_prompt_shape_not_storage_json() {
                 schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
                 category: format!("short_{index}"),
                 scope: Some("telegram_1".to_string()),
+                subject: None,
                 text: format!("Короткий стабільний факт номер {index}."),
                 confidence: 0.95,
                 tags: vec![long_tag.clone(), format!("debug_tag_{index}")],
@@ -1914,6 +2017,7 @@ fn engine_patch_core_fact_updates_text_and_deprecates_fact() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "pet".to_string(),
             scope: Some("telegram_1".to_string()),
+            subject: None,
             text: "Користувача звати Микита.".to_string(),
             confidence: 0.95,
             tags: vec!["name".to_string()],
@@ -2077,6 +2181,8 @@ fn engine_resume_sleep_compression_updates_archive_and_completes_task() {
                 memory_units: vec![MemoryUnitDraft {
                     thesis: "Берлін -> користувач повідомив стабільний особистий контекст."
                         .to_string(),
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
                     evidence: Some("Користувач прямо сказав, що живе в Берліні.".to_string()),
                     tags: vec!["location".to_string()],
@@ -3305,6 +3411,9 @@ fn engine_resume_sleep_compression_persists_multi_track_memory() {
                     text: "Користувач має кішечку на ім'я Іржа.".to_string(),
                     category: "relationships_with_pets".to_string(),
                     confidence: 0.95,
+                    subject: None,
+                    subject_hint: None,
+                    speaker_id: None,
                     source_event_ids: sleep_result.archive_entry.source_event_ids.clone(),
                     evidence: Some("Пряма заява користувача.".to_string()),
                 }],

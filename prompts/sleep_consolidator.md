@@ -43,6 +43,8 @@ Rules:
 - `GIST` must be one short sentence, not a flat topic list.
 - Put the most humanly salient memory first.
 - Preserve emotionally important personal details when evidence supports them.
+- Preserve participant names when speaker metadata supports them. Never merge
+  several people into a generic "user" in a multi-speaker memory.
 - Use topic facts only as context around the human memory.
 - If there is no clear emotional or personal signal, write a neutral but useful
   memory of the main conversation thread.

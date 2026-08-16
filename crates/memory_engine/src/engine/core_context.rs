@@ -278,6 +278,7 @@ impl<S: Storage> MemoryEngine<S> {
                     category: fact_category.clone(),
                     core_fact_id: fact.core_fact_id,
                     scope: fact.scope,
+                    subject: fact.subject,
                     text: fact.text,
                     status: fact.status,
                     confidence: fact.confidence,

@@ -103,7 +103,10 @@ Markdown-файли існують для людини. Вони не замін
 - `fidelity_review.v1`;
 - `sleep_compression_result.v1`;
 - `manifest.v1`;
-- `journal_operation.v1`.
+- `journal_operation.v1`;
+- `memory_erasure_plan.v1`;
+- `memory_erasure_operation.v1`;
+- `memory_erasure_report.v1`.
 
 Зміна формату будь-якої з цих структур потребує оновлення відповідної версії і міграції, якщо старі дані вже могли бути записані.
 
@@ -263,7 +266,7 @@ Markdown-файли існують для людини. Вони не замін
 - `tags` мають бути короткими машинними рядками;
 - `theme` - одна основна тема, якщо хост її знає;
 - `emotional_tone` - рядок, без фіксованого enum на v0.1;
-- `speaker` - `{ "id", "name" }` автора події в мультиспікерній сесії (груповий чат). `id` — стабільна ідентичність хоста (імена змінюються і колізять), `name` — prompt-facing форма. Відсутній `speaker` зберігає стару однокористувацьку семантику; лінійні хости поле не заповнюють. Сесія вважається мультиспікерною, коли серед `user_message` подій є ≥2 різних `speaker.id` — тоді автоматичний Archive → Core bridge вимикається (Фаза 1 захисту від «пліток у Core»), а Core росте через `/remember` і reflection + review;
+- `speaker` - `{ "id", "name" }` автора події в мультиспікерній сесії (груповий чат). `id` — стабільна ідентичність хоста (імена змінюються і колізять), `name` — prompt-facing форма. Відсутній `speaker` зберігає стару однокористувацьку семантику; лінійні хости поле не заповнюють. У мультиспікерній сесії ядро перевіряє кожен персональний сигнал окремо: автоматично до Core проходить лише `self_statement`, чиї source events мають рівно одного автора і чий `speaker_id` збігається з ним. `about_other`, змішані джерела й суперечлива підказка моделі стають reviewable candidate;
 - `links` типізовані: `{ "kind", "target" }`. Конвенція kind `reply_to`: `target` — `event_id` повідомлення, на яке відповідає ця подія. Reply-структура живе в сирому шарі сесії, використовується під час sleep-дистиляції і не зберігається в Archive/MemoryUnit (зміст замість структури); не плутати з `ArchiveEntry.links` — то звʼязки спогадів на іншому шарі.
 
 ### 3.2 StoredEvent
@@ -511,9 +514,12 @@ updated_at: 2026-05-17T16:45:00.000Z
   ],
   "personal_signals": [
     {
-      "text": "Користувач має кішечку на ім'я Іржа.",
+      "text": "Микита має кішечку на ім'я Іржа.",
       "category": "relationships_with_pets",
       "confidence": 0.95,
+      "subject": { "id": "telegram_user_42", "name": "Микита" },
+      "subject_hint": "self_statement",
+      "speaker_id": "telegram_user_42",
       "source_event_ids": ["event_01J00000000000000000000002"],
       "evidence": "Пряма заява користувача."
     }
@@ -599,6 +605,12 @@ JSON. Reader hydrate-ить Archive з canonical units. Prompt eligibility
 
 Multi-track поля `emotional_markers`, `topic_thread`, `personal_signals`, `relational_tone` заповнюються multi-pass sleep у host-і для storage/debug audit, Core bridge і майбутнього reflection. Старі archive entries можуть не мати цих полів; reader має трактувати відсутні масиви як порожні, а відсутній `relational_tone` як `null`.
 
+`PersonalSignal.subject_hint` і `speaker_id` є заявою моделі про семантику
+сигналу. Канонічне `subject` обчислює ядро з `source_event_ids` і реальних
+`StoredEvent.speaker`; модель не може самостійно призначити людину. Те саме
+additive поле `subject` зберігається у standalone `MemoryUnit`. У старих
+сигналів, units і односпікерних записів усі ці поля можуть бути відсутніми.
+
 Поля, які дозволено лишати `null` або пропускати, якщо вони ще не створені:
 
 - `theme` (сесія могла не мати чіткої теми);
@@ -668,7 +680,8 @@ Core Store - стабільна основа пам'яті.
       "schema_version": "core_fact.v1",
       "core_fact_id": "core_fact_01J00000000000000000000001",
       "scope": "telegram_311422683",
-      "text": "Користувач живе в Берліні.",
+      "subject": { "id": "telegram_user_42", "name": "Микита" },
+      "text": "Микита живе в Берліні.",
       "status": "active",
       "confidence": 0.82,
       "created_at": "2026-05-17T17:20:00.000Z",
@@ -706,6 +719,7 @@ Core Store - стабільна основа пам'яті.
   "schema_version": "core_fact_input.v1",
   "category": "profile",
   "scope": "telegram_311422683",
+  "subject": { "id": "telegram_user_42", "name": "Микита" },
   "text": "Користувача звати Микита.",
   "confidence": 0.95,
   "tags": ["telegram", "profile", "name"],
@@ -725,6 +739,7 @@ Core Store - стабільна основа пам'яті.
     "schema_version": "core_fact.v1",
     "core_fact_id": "core_fact_01J00000000000000000000001",
     "scope": "telegram_311422683",
+    "subject": { "id": "telegram_user_42", "name": "Микита" },
     "text": "Користувача звати Микита.",
     "status": "active",
     "confidence": 0.95,
@@ -735,7 +750,7 @@ Core Store - стабільна основа пам'яті.
 }
 ```
 
-`scope` визначає межу видимості факту. Для Telegram host використовується `session_id` виду `telegram_<chat_id>`, щоб факти одного чату не потрапляли в контекст іншого. Upsert дедуплікує факти за нормалізованим текстом і `scope` у межах категорії.
+`scope` визначає межу видимості факту. Для Telegram host використовується `session_id` виду `telegram_<chat_id>`, щоб факти одного чату не потрапляли в контекст іншого. Опціональний `subject` визначає людину всередині спільного scope; відсутність зберігає стару семантику єдиного користувача. Upsert і near-duplicate перевірка враховують `scope` та `subject`, тому подібні факти про різних учасників не блокують один одного. Query-aware Core ranking також враховує `subject.id` і `subject.name`, щоб короткий факт вижив у бюджеті за запитом про конкретну людину.
 
 ### 6.3 CoreFactPatchInput
 
@@ -1035,6 +1050,7 @@ proposals починаються лише у Phase 3 за планом
   "source_session_id": "session_2026_08_01",
   "source_session_ids": ["session_2026_07_20", "session_2026_08_01"],
   "core_scope": "owner_scope",
+  "subject": { "id": "telegram_user_42", "name": "Микита" },
   "created_at": "2026-05-17T17:18:00.000Z",
   "updated_at": "2026-05-17T17:18:00.000Z",
   "text": "Користувач живе в Берліні.",
@@ -1873,9 +1889,10 @@ forgotten/rejected units until compaction.
 
 Eligibility: `MemoryUnit.status == active_archive`, fidelity status is not
 `distorted` / `unsupported` / `needs_revision`, scope vector catalog is enabled,
-global `Manifest.features.embeddings_enabled == true`, and the session is not
-multi-speaker. Multi-speaker units are skipped until attributed memory units are
-implemented.
+and global `Manifest.features.embeddings_enabled == true`. In a multi-speaker
+session only units with a deterministically verified `subject` are eligible;
+unattributed mixed-speaker units remain fail-closed. Single-speaker and legacy
+speakerless sessions retain their previous behavior.
 
 ### 12.1 Deep recall
 
@@ -2019,7 +2036,9 @@ JournalOperation описує мульти-файлову операцію, як
 - `migration`;
 - `core_promotion`;
 - `reflection_apply`;
-- `candidate_review`.
+- `candidate_review`;
+- `delete_session`;
+- `purge_scope`.
 
 `reflection_apply` має deterministic ID `reflection_apply_<task_id>`. Його
 `intent` версії `reflection_operation.v1` містить digest початкового typed
@@ -2056,6 +2075,66 @@ engine instance виконує цей recovery один раз до читанн
 - `rollback`;
 - `manual_review`;
 - `retry_or_manual_review`.
+
+### 14.1 Видалення сесії та повне очищення scope
+
+`delete_session(session_id)` видаляє engine-owned журнал конкретної розмови:
+active й rotated raw events, `SessionMetadata`, sleep runs і повʼязані task та
+journal records. Уже створені Archive, MemoryUnit і Core-факти scope
+зберігаються. Це означає «почати нову розмову», а не «стерти памʼять про
+людину».
+
+`purge_scope(personality_scope_id)` незворотно видаляє всі FileStorage-дані
+scope: sessions, archives, standalone units, Core facts у спільних category
+files, candidates/hypothesis graph, tasks, sleep/reflection state, vector
+sidecar і старі journal operations. Сусідні scope у тих самих category-файлах
+лишаються без змін.
+
+Обидва методи повертають `memory_erasure_report.v1`:
+
+```json
+{
+  "schema_version": "memory_erasure_report.v1",
+  "operation": "purge_scope",
+  "target_id": "telegram_311422683",
+  "completed_at": "2026-08-16T12:00:00Z",
+  "deleted": {
+    "sessions": 2,
+    "active_events": 4,
+    "archived_events": 120,
+    "archives": 8,
+    "memory_units": 31,
+    "core_facts": 14,
+    "candidates": 2,
+    "hypothesis_nodes": 2,
+    "hypothesis_evidence_links": 6,
+    "hypothesis_relations": 0,
+    "tasks": 42,
+    "sleep_runs": 8,
+    "reflection_states": 1,
+    "vector_scopes": 1,
+    "journal_operations": 3
+  },
+  "archived_memory_preserved": false
+}
+```
+
+Перед першим видаленням ядро пише `memory_erasure_operation.v1` із повним
+`memory_erasure_plan.v1`. Ефекти ідемпотентні; після обриву recovery повторює
+план. Journal marker видаляється останнім, щоб сам `purge_scope` не залишав
+ідентифікатор очищеного scope. Заплановані shared Core category files читаються
+точково й строго: unreadable файл не пропускається, marker лишається для retry.
+Повторний API-виклик на завершеному очищенні повертає нульові лічильники.
+
+Ці методи охоплюють дані, якими володіє `FileStorage`. Застосунок окремо
+видаляє власні логи, резервні копії та дані зовнішніх провайдерів. Server
+Storage v2/PostgreSQL має пройти власний per-vault deletion gate у S6.
+
+Local/reference інтеграція має призупинити нові операції цільового scope до
+повернення `purge_scope`. `delete_session` серіалізується на наявному
+session-lock; повний scope purge є maintenance-командою одного writer process,
+а не міжпроцесною транзакцією проти одночасного нового ingest. Після успішного
+report застосунок може знову відкрити scope як порожній.
 
 ---
 

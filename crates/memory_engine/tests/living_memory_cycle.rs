@@ -171,6 +171,7 @@ fn living_memory_cycle_closes_v02_end_to_end() {
             schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
             category: "location".to_string(),
             scope: Some(SESSION.to_string()),
+            subject: None,
             text: "The user lives in Berlin.".to_string(),
             confidence: 0.95,
             tags: vec!["manual_seed".to_string()],

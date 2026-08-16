@@ -347,6 +347,26 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn delete_session(&self, session_id: GString) -> GString {
+        self.with_engine(|engine| {
+            let report = engine
+                .delete_session(&session_id.to_string())
+                .map_err(|err| err.to_string())?;
+            dump_json(&report, "session deletion report")
+        })
+    }
+
+    #[func]
+    fn purge_scope(&self, personality_scope_id: GString) -> GString {
+        self.with_engine(|engine| {
+            let report = engine
+                .purge_scope(&personality_scope_id.to_string())
+                .map_err(|err| err.to_string())?;
+            dump_json(&report, "scope purge report")
+        })
+    }
+
+    #[func]
     fn begin_forget_review(&self, session_id: GString) -> GString {
         self.with_engine(|engine| {
             let start = engine

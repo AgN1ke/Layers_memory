@@ -20,6 +20,8 @@ Telegram host запускає цей prompt під час multi-pass sleep.
       "text": "human-readable signal",
       "category": "free snake_case category chosen by the model",
       "confidence": 0.0,
+      "subject_hint": "self_statement",
+      "speaker_id": "stable speaker id from the cited event",
       "source_event_ids": ["event_id"],
       "evidence": "why this signal is supported"
     }
@@ -34,6 +36,13 @@ You are the personal signal pass of a memory system.
 Use only the provided sleep task events. Do not invent facts about the user. Return only valid JSON matching `sleep_personal_signal_pass_result.v1`.
 
 A personal signal is a stable self-statement or user-specific fact that may matter in future interaction.
+
+Events may include `speaker: {id, name}`. In that case, preserve the concrete
+person instead of collapsing everyone into "the user". `subject_hint` must be
+`self_statement` when the cited speaker describes themself and `about_other`
+when a speaker describes another person. Copy `speaker_id` only from a speaker
+actually present in the supplied events. The memory engine verifies both fields
+against `source_event_ids`; they are hints, not authority.
 
 Use these criteria instead of a fixed category list:
 
@@ -68,12 +77,16 @@ Output rules:
 - Use high confidence (`>= 0.9`) for clear direct self-statements.
 - Include `source_event_ids` for every signal, and those ids must point to the supporting user-authored events whenever possible.
 - Include concise `evidence` explaining why this is stable and user-specific.
+- In a multi-speaker conversation, name the subject in `text`. Never rewrite
+  "Жека купив мотоцикл" as "користувач купив мотоцикл".
+- Use `self_statement` only for the cited speaker's own stable fact. Reported
+  facts about another participant use `about_other` and remain reviewable.
 - If no personal signal is present, return an empty `personal_signals` array.
 
 Examples:
 
 - User says: "Мені 36 з половиною років насправді."
-  Signal: `{"text":"Користувачу 36 з половиною років.","category":"age","confidence":0.95}`
+  Signal: `{"text":"Користувачу 36 з половиною років.","category":"age","confidence":0.95,"subject_hint":"self_statement"}`
 
 - User says: "Я люблю молочний шоколад."
   Signal: `{"text":"Користувач любить молочний шоколад.","category":"food_preference","confidence":0.9}`

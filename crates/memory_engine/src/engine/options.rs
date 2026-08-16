@@ -41,7 +41,7 @@ impl Default for SleepStage1Config {
             active_tail_ratio: 0.30,
             partial_sleep_min_events: 10,
             prompt_id: "sleep_compression".to_string(),
-            prompt_version: 1,
+            prompt_version: 2,
         }
     }
 }
@@ -174,7 +174,7 @@ impl Default for FidelityConfig {
             max_evidence_tokens: 1_500,
             max_event_text_chars: 800,
             prompt_id: "memory_fidelity_pass".to_string(),
-            prompt_version: 1,
+            prompt_version: 2,
             auto_validate_after_sleep: true,
             auto_validate_weight_threshold: 0.85,
             auto_validate_tags: [

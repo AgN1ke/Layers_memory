@@ -8,6 +8,37 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-16] implementation | Verified participant memory and recoverable local erasure
+
+Updated [Architecture](pages/foundation/architecture.md),
+[Contracts](pages/foundation/contracts.md), the
+[Roadmap](pages/planning/roadmap.md) and
+[Multi-speaker geometry](pages/research/multi-speaker-geometry-2026-06-12.md)
+after implementing participant-bound memory and human-requested deletion.
+
+The wiki now records that model subject hints are untrusted: the Rust core
+derives canonical attribution from cited stored events. Direct
+self-statements may reach subject-aware Core; hearsay, mixed sources and a
+conflicting hint route to review. Attributed multi-speaker units may enter the
+derived vector index, while ambiguous units remain gated.
+
+Also documented the distinct FileStorage meanings of deleting one Session and
+purging a complete personality scope, the frozen journal replay contract,
+idempotent reports, adapter exposure and the boundary around product logs,
+backups and provider data. Server/PostgreSQL per-vault deletion remains an
+explicit S6 item rather than inheriting the local claim.
+
+The updated deterministic multi-speaker conformance proves two subject-bound
+Core facts plus review routing for hearsay and a dishonest model hint. Focused
+erasure tests prove scope isolation, idempotence and recovery after a partial
+purge. Product behavior and compatibility details are recorded in
+[HISTORY](../HISTORY.md), with the working implementation narrative in
+[DEVLOG Entry 167](../DEVLOG.md).
+
+The same maintenance pass restored the required Related-pages navigation on
+the pre-existing Information Flow Integrity plan; the checker now validates
+all 67 Markdown files.
+
 ## [2026-08-02] implementation | Transactional Sleep lifecycle closes its information path
 
 Updated the architecture, contracts, information-flow plan, roadmap,

@@ -28,6 +28,9 @@ Allowed `status` values:
 Rules:
 - Use only the evidence pack. If the evidence pack does not support a claim, mark it unsupported or too_broad.
 - Prefer strictness for facts about the user, relationships, identity, health, trauma, values, preferences, and emotional memories.
+- When speaker metadata is present, verify authorship and subject attribution.
+  A thesis that assigns one participant's statement or trait to another is
+  `distorted` or `unsupported` even when the surrounding topic is accurate.
 - Keep `explanation` short and specific.
 - Fill `revised_thesis` only when a concise faithful rewrite is obvious from the evidence.
 - Fill `missing_detail` only when the current thesis is missing one important detail.

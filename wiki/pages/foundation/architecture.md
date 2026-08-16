@@ -173,9 +173,11 @@ Crash safety реалізується двома механізмами:
 1. **Атомарний запис одного файлу:** запис у тимчасовий файл, fsync, перейменування. Стандартний UNIX-патерн.
 2. **Журнал операцій для мульти-файлових змін:** після v0.5 Phase C.1 він
    активно захищає reflection apply та candidate review через frozen intent і
-   idempotent replay. Runtime sleep навмисно лишається на іншому механізмі —
-   atomic files, durable `SleepRun` checkpoints та ідемпотентному
-   coverage-cache.
+   idempotent replay. Із 2026-08-16 той самий принцип захищає
+   `delete_session` і `purge_scope`: повний план стирання записується до першої
+   зміни й безпечно повторюється після обриву. Runtime sleep навмисно лишається
+   на іншому механізмі — atomic files, durable `SleepRun` checkpoints та
+   ідемпотентному coverage-cache.
 
 Чому файли є правдою для local/reference mode: людина має могти зайти у
 `memory/sessions/2026-05-17_001/session.md` і прочитати живий журнал сесії, а
@@ -394,7 +396,7 @@ Explicit path обовʼязково має задавати `scope`, якщо h
 
 **Heuristic tagging path** — активний у v0.1, але не пише в Core Store. Хост може додати event-теги (`personal_fact_signal`, `name_reference`, `age_reference`, `preference_signal`, `explicit_memory_request`) і підняти `importance_hint`, щоб sleep/reflection пізніше уважніше переглянули подію. Це мʼякий сигнал, не рішення "це Core-факт".
 
-**Archive personal-signal bridge** — активний у v0.1. Після успішного sleep LLM personal-signal pass виділяє стабільні self-statements і user-specific facts. Host не парсить raw text і не має whitelist-а тем; він тільки застосовує прозорі gating rules: `confidence >= 0.85`, supporting `source_event_ids` містять user-authored event, free category нормалізується до `snake_case`, і немає близького дубля в активному Core. Це bridge із Archive в Core, а не regex extraction.
+**Archive personal-signal bridge** — активний у v0.1. Після успішного sleep LLM personal-signal pass виділяє стабільні self-statements і user-specific facts. У мультиспікерній сесії модель повертає лише підказку `self_statement` / `about_other` та можливий `speaker_id`; канонічний `subject` ядро виводить із фактичних `source_event_ids` і `StoredEvent.speaker`. Автоматично в Core проходить тільки self-statement з рівно одним автором і узгодженим id. Чуже твердження, змішані джерела або неправдива підказка стають reflection-кандидатом для ручного review. Далі діють звичайні правила: `confidence >= 0.85`, вільна категорія нормалізується до `snake_case`, а near-duplicate перевірка враховує scope і subject. Це bridge із Archive в Core, а не regex extraction.
 
 **Reflection-based promotion path** — активний у v0.2. Ядро переглядає validated memory units і активний Core, знаходить повторювані теми й потенційні висновки, створює `CandidateBelief`, перевіряє source provenance і суперечності, після чого власник підтверджує або відхиляє промоцію в Core Store. Цей шлях потрібен для висновків типу "користувач постійно повертається до теми X", а не для прямих профільних фактів.
 
@@ -514,10 +516,10 @@ Embeddings обчислюватимуться для validated memory units аб
 Усі pending tasks зберігаються у `memory/tasks/<task_id>.json` одразу при
 створенні. Стан `state` оновлюється у файлі при кожній зміні. Перший звичайний
 API-виклик нового engine instance відновлює незавершені journal-backed
-reflection/review operations один раз; вже отриманий LLM result не запитується
-повторно. Тому `pending_tasks()` показує тільки справді незавершені мовні
-задачі, але recovery guarantee не залежить від того, чи host викликав саме цей
-метод першим.
+reflection/review/erasure operations один раз; вже отриманий LLM result не
+запитується повторно. Тому `pending_tasks()` показує тільки справді
+незавершені мовні задачі, але recovery guarantee не залежить від того, чи host
+викликав саме цей метод першим.
 
 Це дає очевидну поведінку при обриві: застосунок вбили посеред sleep — ми не втрачаємо ані сесію (вона у файлах), ані задачу (вона у `memory/tasks/`). При наступному запуску ядро каже хосту "є незавершений `sleep_compression` для сесії 2026-05-17_001", і хост вирішує: виконати зараз, відкласти, відкинути.
 
@@ -851,6 +853,7 @@ memory/
 - `save_task(task)`, `load_tasks() -> StorageCollection<PendingTask>`
 - `write_sleep_run(run)`, `load_sleep_runs() -> StorageCollection<SleepRun>`
 - `begin_journaled_operation(op_id)`, `complete_journaled_operation(op_id)`
+- `apply_memory_erasure_plan(plan)`, `delete_journaled_operation(op_id)`
 
 Колекційні читання толерантні: один пошкоджений JSON-файл пропускається і повертається як warning у `StorageCollection`, щоб recall/context/debug могли деградувати мʼяко. Point-read за конкретним id лишається strict і має повертати помилку.
 
@@ -861,20 +864,41 @@ memory/
 Runtime sleep recovery is provided by durable `SleepRun` checkpoints in
 `memory/runs/sleep/` plus idempotent event-coverage rules. Phase C.1 later made
 `memory/journal/` active for the concrete recovery-heavy operations that need
-it: reflection apply and candidate review. Sleep still does not use the
-transaction journal.
+it: reflection apply, candidate review, session deletion and scope purge.
+Sleep still does not use the transaction journal.
 
 **Один файл:** запис іде у `<file>.tmp`, виконується fsync, потім `rename(<file>.tmp, <file>)`. На більшості файлових систем це атомарна операція.
 
 **Мульти-файлові journal operations:** перед першим domain side effect у
 `memory/journal/<op_id>.json` атомарно пишеться frozen intent із цільовим
-станом і progress. Після успішного завершення запис переходить у `completed` і
-лишається inspectable audit trail. Перший звичайний API-виклик нового engine
+станом і progress. Reflection/review після успіху лишають completed audit
+record. Erasure видаляє свій recovery marker останнім, бо повний purge не має
+лишати ідентифікатор очищеного scope. Перший звичайний API-виклик нового engine
 instance перевіряє journal один раз і:
 
 - ідемпотентно завершує `started` reflection/review із повним frozen intent;
+- ідемпотентно повторює frozen `delete_session` / `purge_scope` plan;
 - зупиняється на unreadable journal record замість тихого skip;
 - не продовжує `needs_manual_review`, а повертає видиму помилку з operation ID.
+
+### 10.3.1 Людське видалення у FileStorage
+
+`delete_session(session_id)` прибирає engine-owned raw-журнал однієї розмови,
+її rotated segments, метадані, незавершені tasks і sleep runs. Уже створені
+Archive, MemoryUnit і Core записи довгоживучого scope зберігаються. Це операція
+«почати нову розмову», а не повне забуття.
+
+`purge_scope(personality_scope_id)` є повним незворотним стиранням даних scope,
+якими володіє FileStorage: Sessions, Archive, standalone MemoryUnits, Core,
+candidates/hypothesis graph, tasks, runs, reflection state і derived vectors.
+Спільні category files переписуються так, щоб сусідні scope лишились цілими.
+Обидва виклики ідемпотентні та повертають структурований звіт із кількостями.
+
+Ця гарантія не охоплює логи застосунку, зовнішнього LLM-провайдера або резервні
+копії, якими керує застосунок. Server Storage v2/PostgreSQL має окремо пройти
+per-vault deletion gate у S6. У current one-writer FileStorage integration
+застосунок на час `purge_scope` припиняє новий ingest/workflows цього scope;
+після завершеного report scope можна відкрити знову як порожній.
 
 ### 10.4 Manifest
 
@@ -1077,15 +1101,20 @@ Background queue є durable; `SKIP LOCKED` допустимий для worker cl
 - `engine.render_memory_view(package_dict, current_user_message) -> str`
 - sleep/reflection/fidelity/forgetting driver methods: `begin_*`, `next_*_batch`, `submit_*_response`, `finish_*`
 - `engine.pending_tasks() -> list`
-- review/admin methods: candidates, core patching, forgotten/remember_back, flush stats
+- review/admin methods: candidates, core patching, forgotten/remember_back,
+  `delete_session`, `purge_scope`, flush stats
 
 `event_dict` і `query_dict` — звичайні Python-словники з полями, описаними у розділах 4 і 6. Адаптер конвертує їх у Rust-структури.
 
 LLM виклики виконує **сам хост**, не Rust core. Адаптер передає `LlmRequest` у Python-код бота/хоста; хост рендерить prompt-файл, виконує задачу через свого Anthropic/OpenAI/Google клієнта і повертає результат через відповідний `submit_*` метод. Це чесна реалізація рішення з розділу 3.1: ядро володіє orchestration/state machine, але не знає провайдерів, ключів, моделей або мережі.
 
-### 14.2 Godot-адаптер (v0.3 candidate)
+### 14.2 Godot-адаптер
 
-GDExtension-крейт `memory_engine_godot`. Експортує клас `MemoryEngine` як Godot Node. Той самий набір методів, але з типами, природними для Godot (`Dictionary`, `Array`, `String`). Технічні нюанси (мобільні збірки, статичне лінкування) виявляться при реалізації, тому не фіксуємо їх тут.
+GDExtension-крейт `memory_engine_godot` експортує `MemoryEngineGodot`. Він
+дзеркалить той самий JSON-контракт, включно з атрибуцією та erasure API, і не
+містить memory policy. Godot 4.6 headless conformance є чинним regression gate;
+мобільне packaging і production gameplay лишаються задачами конкретного
+продукту.
 
 ---
 

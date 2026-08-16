@@ -39,6 +39,14 @@ The Telegram host now uses these prompts by default during `/sleep` and auto-sle
 
 `sleep_consolidator.md` receives the original sleep task plus all pass outputs and returns the final `sleep_compression_result.v1` with both legacy fields and multi-track fields.
 
+Prompt version 2 of `sleep_personal_signal_pass.md` and
+`memory_unit_pass.md` preserves participant attribution. Outputs may include
+`subject_hint` (`self_statement` or `about_other`) and `speaker_id`; these are
+untrusted hints that the Rust core checks against cited source events.
+`memory_fidelity_pass.md` version 2 also checks whether the compressed thesis
+kept the correct author. `sleep_consolidator.md` version 2 preserves concrete
+participant names in prose.
+
 Safe to edit: wording, examples, strictness, salience priorities, and output guidance.
 
 Do not change without code/contracts updates: prompt filenames, schema names, required top-level JSON fields, and the rule that consolidator returns `sleep_compression_result.v1`.

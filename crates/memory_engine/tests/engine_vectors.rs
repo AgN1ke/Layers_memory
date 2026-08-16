@@ -104,7 +104,7 @@ fn vector_backfill_appends_embeddings_and_rejects_model_mismatch() {
 }
 
 #[test]
-fn multi_speaker_scope_emits_no_embedding_tasks() {
+fn unattributed_multi_speaker_unit_emits_no_embedding_tasks() {
     let root = unique_temp_dir("vectors_multi_speaker");
     let storage = FileStorage::with_host_id(&root, "vector_test");
     let engine = MemoryEngine::new(storage);
@@ -122,7 +122,10 @@ fn multi_speaker_scope_emits_no_embedding_tasks() {
     let requests = engine
         .pending_embedding_backfill("group_scope")
         .expect("pending embedding backfill");
-    assert!(requests.is_empty());
+    assert!(
+        requests.is_empty(),
+        "mixed-speaker units without a verified subject remain fail-closed"
+    );
 
     fs::remove_dir_all(root).ok();
 }
@@ -980,6 +983,7 @@ fn create_archive_with_units_named_at(
             memory_unit_id: format!("mu_{archive_suffix}_{index}"),
             archive_id: archive_id.clone(),
             personality_scope_id: None,
+            subject: None,
             source_session_id: session_id.to_string(),
             created_at: created_at.to_string(),
             updated_at: created_at.to_string(),

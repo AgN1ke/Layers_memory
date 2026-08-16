@@ -273,6 +273,11 @@ pub(super) fn estimate_trace_event_prompt_tokens(event: &CoreContextEvent) -> us
 pub(super) fn core_fact_query_score(fact: &CoreContextFact, query_tokens: &[String]) -> usize {
     let fact_text = normalize_match_text(&fact.text);
     let fact_category = normalize_match_text(&fact.category);
+    let fact_subject = fact
+        .subject
+        .as_ref()
+        .map(|subject| normalize_match_text(&format!("{} {}", subject.id, subject.name)))
+        .unwrap_or_default();
     let fact_tags: Vec<String> = fact
         .tags
         .iter()
@@ -291,6 +296,9 @@ pub(super) fn core_fact_query_score(fact: &CoreContextFact, query_tokens: &[Stri
             }
             if fact_category.contains(token) {
                 score += 4;
+            }
+            if fact_subject.contains(token) {
+                score += 12;
             }
             if fact_tags.iter().any(|tag| tag.contains(token)) {
                 score += 2;

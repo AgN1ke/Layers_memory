@@ -1209,6 +1209,15 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                 }
                 apply_sleep_run_tags(&mut compression, &run);
                 compression.validate_basic()?;
+                let attribution_events = input
+                    .events
+                    .iter()
+                    .map(AttributionEvent::from)
+                    .collect::<Vec<_>>();
+                attribute_personal_signals(
+                    &mut compression.personal_signals,
+                    &attribution_events,
+                );
                 apply_compression_to_archive(&mut archive, compression, &sleep_task, &finalized_at);
                 let units = build_transactional_memory_units(
                     context,
@@ -1805,7 +1814,7 @@ fn validate_transactional_run_shape(run: &SleepRun, input: &SleepWorkflowInput) 
             SleepTrack::MemoryUnit => (
                 run.memory_unit_task_id.as_deref().unwrap_or_default(),
                 "memory_unit_pass",
-                1,
+                2,
                 MEMORY_UNITS_RESULT_SCHEMA_VERSION,
             ),
             SleepTrack::Emotional => (
@@ -1835,13 +1844,19 @@ fn validate_transactional_run_shape(run: &SleepRun, input: &SleepWorkflowInput) 
             SleepTrack::Consolidator => (
                 run.sleep_task_id.as_str(),
                 "sleep_consolidator",
-                1,
+                2,
                 CONSOLIDATOR_TEXT_SCHEMA_VERSION,
             ),
         };
+        let prompt_version_matches = match state.track {
+            SleepTrack::MemoryUnit | SleepTrack::Consolidator => {
+                matches!(state.request.prompt_version, 1 | 2)
+            }
+            _ => state.request.prompt_version == prompt_version,
+        };
         if state.request.task_id != task_id
             || state.request.prompt_id != prompt_id
-            || state.request.prompt_version != prompt_version
+            || !prompt_version_matches
             || state.request.expected_output_schema != output_schema
         {
             return Err(MemoryEngineError::Storage(
@@ -2117,7 +2132,7 @@ fn decode_workflow_task(
             input.policy.prompt_version,
             SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
         ),
-        TaskType::MemoryUnitPass => ("memory_unit_pass", 1, MEMORY_UNITS_RESULT_SCHEMA_VERSION),
+        TaskType::MemoryUnitPass => ("memory_unit_pass", 2, MEMORY_UNITS_RESULT_SCHEMA_VERSION),
         _ => unreachable!("task type was checked above"),
     };
     let expected_attempts = run
@@ -2128,10 +2143,15 @@ fn decode_workflow_task(
         })
         .map(|state| state.attempts as usize)
         .sum::<usize>();
+    let prompt_version_matches = if task_type == TaskType::MemoryUnitPass {
+        matches!(task.prompt_version, 1 | 2)
+    } else {
+        task.prompt_version == expected_prompt_version
+    };
     if task.schema_version != PENDING_TASK_SCHEMA_VERSION
         || task.created_at != input.created_at
         || task.prompt_id != expected_prompt_id
-        || task.prompt_version != expected_prompt_version
+        || !prompt_version_matches
         || task.role_hint != ModelRole::Balanced
         || task.expected_output_schema != expected_output_schema
         || task.attempts.len() != expected_attempts
@@ -2273,12 +2293,23 @@ fn build_transactional_memory_units(
         .map(|event| event.event_id.clone())
         .collect::<HashSet<_>>();
     result.validate_source_event_ids(&allowed)?;
+    let attribution_events = input
+        .events
+        .iter()
+        .map(AttributionEvent::from)
+        .collect::<Vec<_>>();
     result
         .memory_units
         .into_iter()
         .enumerate()
         .map(|(index, draft)| {
             let thesis = normalize_whitespace(&draft.thesis);
+            let subject = resolve_attributed_subject(
+                &draft.source_event_ids,
+                draft.subject_hint,
+                draft.speaker_id.as_deref(),
+                &attribution_events,
+            );
             let label = format!("memory_unit:{index}:{thesis}");
             Ok(MemoryUnit {
                 schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
@@ -2294,6 +2325,7 @@ fn build_transactional_memory_units(
                 created_at: now.to_string(),
                 updated_at: now.to_string(),
                 thesis,
+                subject,
                 source_event_ids: draft.source_event_ids,
                 evidence: normalize_optional_string(draft.evidence.as_deref()),
                 tags: draft.tags,

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{Id, Link, Quote, TimeRange, Timestamp, WeightedFact};
+use crate::types::{Id, Link, Quote, Speaker, TimeRange, Timestamp, WeightedFact};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -106,6 +106,11 @@ pub struct MemoryUnit {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub thesis: String,
+    /// Canonical person this unit describes when the engine can prove
+    /// attribution from the cited source events. `None` preserves legacy and
+    /// non-personal memory semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Speaker>,
     #[serde(default)]
     pub source_event_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,6 +132,13 @@ pub struct MemoryUnit {
     /// Additive in memory_unit.v1 so older records remain readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reflection_operation_id: Option<Id>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonalSignalSubjectHint {
+    SelfStatement,
+    AboutOther,
 }
 
 impl ArchiveEntry {
@@ -197,6 +209,18 @@ pub struct PersonalSignal {
     pub text: String,
     pub category: String,
     pub confidence: f64,
+    /// Canonical subject derived by the engine from the cited user events.
+    /// Model output is never trusted to populate this field directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Speaker>,
+    /// Semantic intent proposed by the model. The engine verifies it against
+    /// source-event authorship before automatic Core promotion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_hint: Option<PersonalSignalSubjectHint>,
+    /// Stable speaker id proposed by the model. A mismatch with the sole
+    /// source speaker fails closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
     #[serde(default)]
     pub source_event_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

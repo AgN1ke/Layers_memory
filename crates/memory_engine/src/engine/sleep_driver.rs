@@ -268,7 +268,7 @@ pub(super) fn build_memory_unit_task_with_id(
         created_at: now.to_string(),
         updated_at: now.to_string(),
         prompt_id: "memory_unit_pass".to_string(),
-        prompt_version: 1,
+        prompt_version: 2,
         role_hint: ModelRole::Balanced,
         expected_output_schema: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
         inputs: json!({
@@ -302,7 +302,7 @@ pub(super) fn build_memory_unit_repair_task(
         created_at: now.to_string(),
         updated_at: now.to_string(),
         prompt_id: "memory_unit_pass".to_string(),
-        prompt_version: 1,
+        prompt_version: 2,
         role_hint: ModelRole::Reasoning,
         expected_output_schema: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
         inputs: json!({
@@ -360,6 +360,7 @@ pub(super) fn evidence_event_from_stored(
         timestamp: event.timestamp.clone(),
         event_type: event.event_type.clone(),
         source: event.source.clone(),
+        speaker: event.speaker.clone(),
         role,
         text: truncate_chars(
             &event_text(event).unwrap_or_else(|| event.payload.to_string()),
@@ -401,6 +402,11 @@ pub(super) fn estimate_evidence_pack_tokens(pack: &EvidencePack) -> usize {
             + event.timestamp.chars().count()
             + event.event_type.chars().count()
             + event.source.chars().count()
+            + event
+                .speaker
+                .as_ref()
+                .map(|speaker| speaker.id.chars().count() + speaker.name.chars().count())
+                .unwrap_or(0)
             + event.text.chars().count()
             + event
                 .tags
@@ -716,7 +722,7 @@ pub(super) fn ensure_consolidator_request_with_id(
             task_id: run.sleep_task_id.clone(),
             role_hint: ModelRole::Balanced,
             prompt_id: "sleep_consolidator".to_string(),
-            prompt_version: 1,
+            prompt_version: 2,
             prompt_inputs: json!({
                 "sleep_task": sleep_task_input_from_run(run),
                 "emotional_pass": run.emotional_pass.clone().unwrap_or_else(|| json!({ "emotional_markers": [] })),

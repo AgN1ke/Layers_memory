@@ -45,6 +45,7 @@ fn memory_unit_reflection_markers_are_additive() {
 
     let unit: MemoryUnit = serde_json::from_value(raw).expect("read legacy memory unit");
     assert_eq!(unit.reflection_count, 0);
+    assert!(unit.subject.is_none());
     assert!(unit.last_reflected_at.is_none());
     assert!(unit.last_reflection_operation_id.is_none());
 }
@@ -91,7 +92,34 @@ fn reflection_personality_scope_fields_are_additive() {
     let candidate: CandidateBelief =
         serde_json::from_value(legacy_candidate).expect("deserialize legacy candidate");
     assert!(candidate.source_session_ids.is_empty());
+    assert!(candidate.subject.is_none());
     assert!(candidate.reinforcements.is_empty());
+}
+
+#[test]
+fn personal_signal_subject_fields_are_additive() {
+    let legacy: PersonalSignal = serde_json::from_value(json!({
+        "text": "The user lives in Kyiv.",
+        "category": "location",
+        "confidence": 0.95,
+        "source_event_ids": ["event_legacy"]
+    }))
+    .expect("deserialize legacy personal signal");
+    assert!(legacy.subject.is_none());
+    assert!(legacy.subject_hint.is_none());
+    assert!(legacy.speaker_id.is_none());
+
+    let attributed: PersonalSignal = serde_json::from_value(json!({
+        "text": "Alice lives in Kyiv.",
+        "category": "location",
+        "confidence": 0.95,
+        "subject": { "id": "user_alice", "name": "Alice" },
+        "subject_hint": "self_statement",
+        "speaker_id": "user_alice",
+        "source_event_ids": ["event_alice"]
+    }))
+    .expect("deserialize attributed personal signal");
+    assert_eq!(attributed.subject.expect("subject").id, "user_alice");
 }
 
 #[test]
@@ -379,6 +407,9 @@ fn archive_entry_serializes_reserved_embedding_fields() {
             text: "Користувач має кішку.".to_string(),
             category: "relationships_with_pets".to_string(),
             confidence: 0.9,
+            subject: None,
+            subject_hint: None,
+            speaker_id: None,
             source_event_ids: vec!["event_01J00000000000000000000001".to_string()],
             evidence: Some("Пряма заява користувача.".to_string()),
         }],
