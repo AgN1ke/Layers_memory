@@ -1,5 +1,52 @@
 # DEVLOG
 
+## Запис 170 — 2026-08-24 — Smartest validation став поетапним дослідницьким протоколом
+
+Власник перевірив першу версію ТЗ через практичні питання: чи однозначно
+вказана версія після одинадцяти production fixes, чи команда розуміє, що саме
+треба спочатку залогувати, чи пояснені мета й гіпотези, і чи тест шукає живі
+проблеми всієї системи замість буквального виконання чекліста.
+
+### Що виправлено
+
+`smartest-v2-production-validation-2026-08.md` переписано у чотири фази:
+
+1. instrumentation qualification на одному Sleep run;
+2. кілька днів пасивного production-спостереження;
+3. аналіз і контрольний replay повного/economy profiles;
+4. висновок по production integration, v0.5 і входу у v0.6.
+
+Перший етап тепер є окремим готовим завданням для Smartest на 2026-08-25.
+Команда фіксує build/config, додає пʼять structured streams — provider calls,
+Sleep outcomes, reflection snapshots, chat-context turns і runtime health —
+та повертає один малий redacted sample. Кількаденний збір починається після
+qualification цього sample, щоб не втратити вікно через неправильні joins,
+відсутнє поле cache/billing або витік приватного тексту.
+
+### Дослідницька рамка
+
+Документ отримав вихідну експозицію з реального baseline Smartest, сім
+перевірюваних гіпотез і рішення, які підтримує кожна з них. Окремо дозволено
+адаптувати реалізацію логування до інфраструктури Smartest, зберігаючи
+семантику метрик, privacy boundary і правила порівняння. Невідомі поля
+позначаються `null`, зміни конфігурації створюють новий cohort, а несподіваний
+вузький прохід є повноцінним результатом.
+
+Пасивне вікно тепер перевіряє ширший живий цикл: provider cost/cache,
+per-track yield, MemoryUnit/Core/reply quality, групову атрибуцію, fidelity і
+reflection funnel, repairs/restarts/pending work, structured dialogue geometry,
+storage growth, latency та optional vectors. Видалення і scope isolation
+перевіряються на disposable copy, без дій учасників чатів.
+
+### Версійна межа
+
+Приймальний замір вимагає `main` від `1aa427b` або descendant із `6dd6b68` в
+ancestry та фактично завантаженим Python extension hash. Старі дані 22–23
+серпня лишаються baseline; вони не замінюють перевірку нової реалізації.
+
+Roadmap, wiki home/index і wiki log синхронізовано. Runtime-поведінка цим
+кроком не змінювалася, тому HISTORY не оновлювався.
+
 ## Запис 169 — 2026-08-24 — Smartest отримав production-validation ТЗ, а вхід у v0.6 став доказовим
 
 Після закриття одинадцяти продакшен-зауважень власник визначив наступний

@@ -62,9 +62,9 @@ crate/host README files stay outside the wiki.
     provider input, structured chat context, Core/reflection diagnostics and
     graceful run budgets.
 - [Smartest v2 Production Validation 2026-08](pages/planning/smartest-v2-production-validation-2026-08.md)
-  - operator-facing specification for redacted provider ledgers, Sleep cost,
-    memory quality, group attribution, reflection calibration and the v0.6
-    entry decision.
+  - phased operator protocol: qualify logging first, then collect redacted
+    production evidence, run controlled comparisons and decide the v0.5/v0.6
+    boundary from explicit hypotheses.
 
 ## Releases
 

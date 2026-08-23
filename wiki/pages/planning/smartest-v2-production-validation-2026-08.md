@@ -1,4 +1,4 @@
-# Smartest v2 Production Validation — 2026-08
+# Smartest v2 Production Validation Protocol — 2026-08
 
 ## Related pages
 
@@ -7,169 +7,318 @@
 - [Roadmap](roadmap.md) - active ordering from production validation into
   autonomous reflection and v0.6.
 - [Autonomous Reflection v0.5](autonomous-reflection-v0.5.md) - trigger,
-  evidence and live-acceptance rules that this run must calibrate.
+  evidence and live-acceptance rules calibrated by this run.
 - [Reflective Belief System](reflective-belief-system.md) - the v0.6 reasoning
   phase that opens after this evidence gate.
 - [LLM Integration Resources](../integration/llm-integration-resources.md) -
-  provider execution, model roles, keys and shared-prefix responsibilities.
+  provider execution, model roles and key ownership.
 - [Contracts](../foundation/contracts.md) - exact Sleep, context, reflection
   and telemetry shapes.
 
-## Status and audience
+## Status, audience and current phase
 
-Status: **approved production-validation specification; execution pending**.
+Status: **owner-approved production protocol; Phase 1 instrumentation handoff
+is ready for 2026-08-25**.
 
 This document is addressed to the Smartest v2 engineer or operator who can
-inspect provider usage ledgers, Memory Engine runtime records, application
-configuration and logs. Chat participants do not need to perform scripted
-actions. The test uses naturally occurring large Ukrainian group chats.
+change application logging and inspect provider usage, Memory Engine outputs,
+runtime state and configuration. Chat participants continue using the product
+normally. They do not need to perform scripted conversations or know that a
+measurement is running.
 
-The requested return is a reproducible operational report. It must contain
-aggregated measurements and identifiers/hashes. It must not contain API keys,
-Telegram tokens, full prompts, raw chat text, memory theses, participant names
-or other personal data.
+The work is split into four phases:
 
-## Purpose
+1. add and qualify logging on one short run;
+2. collect several days of passive production evidence;
+3. analyze the full profile and run controlled replays where useful;
+4. decide which integration settings are safe and whether v0.6 may begin.
 
-The run has three goals:
+Smartest should complete only Phase 1 first and return its small redacted
+sample. Long measurement starts after the Memory Engine maintainer confirms
+that the records are complete and internally consistent.
 
-1. verify that the production integration uses the compact shared Sleep source
-   and receives real provider-cache benefit where the provider supports it;
-2. verify that cost controls preserve complete, attributable and observable
-   memory on long group conversations;
-3. collect the live reflection funnel and outcomes needed to close v0.5 and
-   decide whether v0.6 hierarchical reasoning may begin.
+### Assignment for 2026-08-25
 
-This is a product measurement, not a public benchmark. Any result belongs to
-the tested Smartest version, traffic window, provider configuration and model.
+For the first handoff, Smartest implements only **Phase 1** below: install the required build,
+add five structured log streams, run one short sample and return the seven
+redacted artifacts. Phases 2–4 explain why these fields are collected and what
+will happen after qualification; they are not first-day implementation work.
 
-## Required tested build
+## Why this validation exists
 
-Record all of the following before the first measured message:
+The 22–23 August Smartest sample exposed the largest real cost and observability
+gaps in Memory Engine. One measured Sleep run compressed 16 messages containing
+8,081 characters of live text but issued six calls with 87,913 input tokens.
+The effective amplification was about 24 times. Across that traffic window,
+memory work accounted for 61% of the bot's provider input. Smartest identified
+that 46% of the repeated event block came from its own host payload and is
+correcting that part separately.
 
-- Memory Engine commit: `6dd6b68` or a descendant containing
-  `Address production integration feedback`;
-- Smartest host commit/build identifier;
-- loaded Python extension path and SHA-256;
-- prompt repository commit and multi-pass Sleep prompt version `3`;
-- provider and exact model for `fast`, `balanced`, `reasoning` and chat roles;
-- enabled Sleep tracks, total call limit and attempts per pass;
-- fidelity and reflection configuration;
-- vector state/model/dimension for each tested scope, when vectors are enabled;
-- confirmation that Smartest's own repeated event payload has been removed or
-  separated from the measurement.
+Memory Engine then implemented eleven production-facing corrections. The main
+changes are one compact shared Sleep source, provider-cache-friendly ordering,
+selectable tracks, call and retry budgets, completion from available results,
+structured role-aware chat context, empty-session semantics, explanatory Core
+bridge reports, a visible fidelity/reflection funnel and durable recovered
+attempt telemetry.
 
-Keep the full six-track historical profile for the first measurement window.
-This isolates the compact-source/cache change from a memory-quality change.
-An economy profile may be evaluated later on an isolated replay or a separately
-labelled cohort.
+Laboratory tests prove the contracts and failure handling. Smartest is the
+first environment that can show how they behave under long Ukrainian group
+conversations, real provider filtering, multiple speakers, restarts and actual
+billing metadata.
+
+The project question is:
+
+> Does the complete memory lifecycle preserve useful, correctly attributed
+> long-term memory while reducing the token and provider cost paid by the
+> integrating product?
+
+## Hypotheses and decisions
+
+The operator may change how a metric is collected to match Smartest's
+infrastructure. The meaning of each hypothesis and measurement must remain the
+same.
+
+| ID | Hypothesis | Evidence that answers it | Decision supported |
+|---|---|---|---|
+| H1 | One compact shared source materially reduces repeated Sleep input when provider prefix caching is available. | Provider-reported prompt and cached tokens, shared-context identity, source size and billable input. | Keep the shared-prefix integration and establish a real cost baseline. |
+| H2 | Call budgets, retries and early completion preserve successful paid work and leave every run terminal and explainable. | Per-attempt records, pass reports, completion modes, pending tasks and restart evidence. | Set production budgets and retry limits without silent Archive loss. |
+| H3 | Compact input and an economy track profile can preserve the useful memory produced by the full six-track profile. | Per-track output, MemoryUnit quality, Core routing, later recall and controlled replay. | Choose the least expensive profile that preserves required product behavior. |
+| H4 | Signal-level attribution keeps group memory attached to the correct participant and routes hearsay to review. | Local review of units and every automatic Core promotion, grouped by subject and bridge reason. | Accept group memory or return a concrete attribution defect to the engine. |
+| H5 | The active → fidelity-valid → eligible funnel produces enough reliable evidence for meaningful autonomous reflection. | Reflection snapshots and outcomes across several Sleep cycles. | Close v0.5 live acceptance, tune a measured bottleneck, or record insufficient data. |
+| H6 | Structured prompt plans preserve role order, current-message uniqueness and host payload while keeping memory within its budget. | Per-turn prompt-plan diagnostics and a local response sample. | Adopt the structured path without host-side string parsing. |
+| H7 | The runtime remains self-healing over real provider failures and process restarts. | Recovered errors, repairs, task backlog, collection warnings and storage health snapshots. | Accept long-running operation or isolate a recovery defect. |
+
+A failed hypothesis is a useful result. Thresholds and profiles are changed
+only after the failing stage is identified. The protocol has no predetermined
+cache percentage, reflection rate or preferred model.
+
+## Investigator latitude
+
+The fields below define evidence semantics, not a mandatory logging framework.
+Smartest may use its existing structured logger, database, tracing platform or
+provider ledger.
+
+The operator should:
+
+- preserve stable join keys between provider call, Sleep run, Session and
+  reflection evaluation;
+- preserve exact provider-reported usage separately from engine estimates;
+- use `null` for unavailable values and state why they are unavailable;
+- document any renamed field or equivalent calculation;
+- pause the long collection when joins, units or accounting are clearly wrong;
+- create a new labelled cohort after changing models, prompts, track profile,
+  budgets or instrumentation semantics;
+- report an unexpected bottleneck even when this document did not predict it.
+
+Literal compliance that produces misleading data is a failure of the test.
+The hypotheses, privacy boundary and comparability rules are the authority.
 
 ## Privacy and handling
 
-The operator may inspect private content locally to judge attribution and
-fidelity. The package returned to Memory Engine maintainers contains only:
+The operator may inspect private content locally to judge support and
+attribution. The package returned to Memory Engine maintainers contains only:
 
 - randomly remapped chat, run, event, unit, candidate and fact identifiers;
-- SHA-256 hashes of shared contexts and queries;
+- keyed HMAC-SHA-256 fingerprints for private contexts or queries, using a
+  secret salt retained by Smartest;
 - counts, durations, token usage, statuses, reasons and local quality labels;
 - short operator-written anomaly descriptions with personal details removed.
 
-Do not upload `memory/`, `sessions/`, provider request bodies, bot logs with
-message previews or unredacted archive/Core files. Keep the original evidence
-under the Smartest product's own access controls.
+Do not return API keys, Telegram tokens, participant names, raw chat text,
+memory theses, provider request bodies, full prompts, runtime directories or
+unredacted Archive/Core files. A plain unsalted hash of a short user query is
+also excluded because it can be guessed. Keep source evidence under Smartest's
+own access controls.
 
-## Observation window
+## Version and comparison boundary
 
-Preferred minimum:
+The acceptance window must use:
 
-- at least 20 completed Sleep runs;
-- at least three large group chats;
-- at least two calendar days;
-- at least 300 user/assistant events in total;
-- enough natural traffic for several post-Sleep reflection evaluations.
+- Memory Engine `main` commit `1aa427b` or a later descendant;
+- the Python extension built from that source, with its loaded path and
+  SHA-256 recorded;
+- production-feedback implementation commit `6dd6b68` present in ancestry;
+- multi-pass Sleep prompt version `3` or a compatible later version;
+- Smartest's own repeated event payload fix enabled or separately measured.
 
-If the product test ends earlier, return every available run and state the
-shortfall. Do not manufacture medical, personal or contradictory dialogue to
-fill a quota. Naturally occurring provider filtering is sufficient.
+The older 22–23 August build remains a historical baseline. It cannot serve as
+the acceptance build because it lacks parts of the new control and reporting
+surface. Monetary comparison with that baseline is valid only after removing
+Smartest's own payload using the same accounting rule. Otherwise the report
+states `not_comparable` and gives new absolute measurements.
 
-## What to verify before collecting metrics
+Record exact providers and models assigned to chat, `fast`, `balanced` and
+`reasoning` roles. One model may fill several roles; the protocol evaluates the
+actual configuration rather than prescribing a provider.
 
-For one Sleep run, inspect the engine-to-host boundary and record these boolean
-checks:
+---
 
-- the batch has one `shared_context`;
-- every selected pass references `source = shared_context`;
-- pass-specific inputs contain no inline event array or full `sleep_task`;
-- `shared_context.content` is placed before the pass instruction;
-- every request in the run has the same shared-context ID and SHA-256;
-- batch-level session/archive/scope values appear once in the compact source;
-- the durable workflow input remains sufficient for provenance and recovery;
-- role-aware chat assembly uses `memory_prompt_plan.v1` or an equivalent
-  structured package path and performs no regular-expression parsing of
-  `render_memory_view`.
+## Phase 1 — Instrumentation qualification
 
-Any failed check blocks cost conclusions. Return the failed item and the host
-code location that assembled the request.
+### Phase 1 goal
 
-## Data to collect for every provider call
+Prove that Smartest can produce a complete, privacy-safe and joinable record
+before several days of traffic are measured. One natural Sleep run or one
+isolated replay is sufficient.
 
-Write one machine-readable record per call. Use `null` when the provider does
-not expose a field; never infer provider-reported numbers from character count.
+Phase 1 ends with a small sample returned to the Memory Engine maintainer. Do
+not start the formal observation window until this sample is reviewed.
+
+### Step 1. Record the tested build and configuration
+
+Create `smartest_validation_build.json` containing:
 
 ```json
 {
+  "schema_version": "smartest_validation_build.v1",
+  "engine_commit": "1aa427b-or-descendant",
+  "host_commit": "...",
+  "loaded_extension_path": "redacted-or-relative-path",
+  "loaded_extension_sha256": "sha256:...",
+  "prompt_commit": "...",
+  "sleep_prompt_version": 3,
+  "provider_models": {
+    "chat": "exact-provider/model",
+    "fast": "exact-provider/model",
+    "balanced": "exact-provider/model",
+    "reasoning": "exact-provider/model"
+  },
+  "sleep_tracks": [
+    "memory_unit",
+    "emotional",
+    "topic_thread",
+    "personal_signal",
+    "relational",
+    "consolidator"
+  ],
+  "max_provider_calls": null,
+  "max_pass_attempts": 3,
+  "host_payload_fix_active": true,
+  "vectors_enabled": false,
+  "vector_model": null,
+  "fidelity_config_digest": "hmac-sha256:...",
+  "reflection_config_digest": "hmac-sha256:..."
+}
+```
+
+Configuration digests prove that a cohort kept one configuration without
+exporting private or operational secrets. Preserve the full configuration
+inside Smartest's protected records. Keep the selected source-event IDs and
+their protected runtime data available for a later isolated replay; only
+anonymized IDs leave Smartest.
+
+### Step 2. Add five structured log streams
+
+The names are recommendations. Equivalent tables or tracing events are valid
+when they can be exported into these shapes. These are study-export schemas,
+not new public Memory Engine API contracts.
+
+| Stream | Write point | Canonical source inside Smartest |
+|---|---|---|
+| `provider_calls` | Immediately after every provider attempt, including failures. | Host provider executor plus exact provider usage metadata. |
+| `sleep_runs` | Once after a terminal Sleep outcome. | `SleepOutcome`, its Archive entry, Core summary, pass reports and post-processing summaries. |
+| `reflection_snapshots` | After post-Sleep fidelity and after any reflection submit. | `reflection_status` plus the structured reflection outcome. |
+| `chat_context_turns` | Once for every ordinary chat-generation call. | `core_context_package`, its budget report, `memory_prompt_plan.v1` and provider usage. |
+| `memory_health` | At startup, after Sleep and once daily. | Engine/storage status, warnings, pending work and directory sizes where available. |
+
+Fields that do not apply to a workflow are `null`. For example, an ordinary
+chat call has no Sleep `run_id` or shared context.
+
+#### 2.1 Provider calls
+
+Write one record for every chat, Sleep, fidelity and reflection model call.
+Local embedding work may use the same stream with `provider = local`.
+
+```json
+{
+  "schema_version": "smartest_provider_call.v1",
+  "timestamp": "RFC3339",
+  "workflow": "sleep",
+  "chat_id": "anon_chat_001",
   "run_id": "anon_run_001",
   "request_id": "anon_request_001",
+  "task_id": "anon_task_001",
   "prompt_id": "memory_unit_pass",
   "attempt": 1,
   "model_role": "balanced",
   "provider": "gemini",
   "model": "exact-model-id",
   "shared_context_id": "sleep:anon_archive_001",
-  "shared_context_sha256": "sha256:...",
-  "shared_context_estimated_tokens": 1234,
+  "shared_context_fingerprint": "hmac-sha256:...",
+  "shared_context_first": true,
+  "shared_context_chars": 8423,
+  "shared_context_estimated_tokens": 4212,
+  "instruction_chars": 1400,
   "prompt_tokens": 1500,
   "cached_input_tokens": 1200,
+  "billable_input_tokens": 300,
   "output_tokens": 220,
   "thoughts_tokens": 0,
   "total_tokens": 1720,
-  "billable_input_tokens": 300,
+  "input_cost": null,
+  "cached_input_cost": null,
+  "output_cost": null,
+  "currency": null,
+  "pricing_version_date": null,
   "latency_ms": 840,
   "status": "ok",
   "error_kind": null
 }
 ```
 
-`cached_input_tokens` and `billable_input_tokens` should come from provider
-usage/billing metadata when available. If billing exposes price directly, add
-`input_cost`, `cached_input_cost`, `output_cost`, currency and pricing-version
-date. Preserve the raw provider usage object inside Smartest's protected logs;
-return only the numeric fields above.
+Take token and cache fields from provider usage metadata. Keep character-based
+engine estimates in their separate `*_estimated_tokens` fields. When the
+provider does not expose cache or billing fields, write `null`; do not estimate
+them silently. Preserve raw provider usage inside Smartest and return only the
+normalized numeric fields.
 
-## Data to collect for every Sleep run
+Map provider errors to stable categories such as `rate_limit`, `timeout`,
+`content_filter`, `invalid_response`, `transport` and `unknown`. Raw provider
+error text stays in protected logs.
 
-Write one record per run:
+#### 2.2 Sleep runs
+
+Write one record after every terminal Sleep outcome:
 
 ```json
 {
+  "schema_version": "smartest_sleep_run.v1",
   "run_id": "anon_run_001",
   "chat_id": "anon_chat_001",
+  "session_id": "anon_session_001",
   "started_at": "RFC3339",
   "finished_at": "RFC3339",
   "source_event_count": 16,
-  "source_text_chars": 8081,
+  "source_memory_text_chars": 8081,
+  "source_memory_text_estimated_tokens": 4041,
+  "source_token_estimator": "unicode_chars_div_2_ceil_text_v1",
   "shared_context_chars": 8423,
   "shared_context_estimated_tokens": 4212,
-  "enabled_tracks": ["memory_unit", "emotional", "topic_thread", "personal_signal", "relational", "consolidator"],
+  "enabled_tracks": [
+    "memory_unit",
+    "emotional",
+    "topic_thread",
+    "personal_signal",
+    "relational",
+    "consolidator"
+  ],
   "provider_calls_issued": 6,
   "max_provider_calls": null,
   "budget_exhausted": false,
   "completion_mode": "consolidated",
   "failed_passes": [],
   "skipped_passes": [],
-  "recovered_passes": 0,
-  "memory_units": 4,
-  "core_created": 2,
+  "pass_reports": [],
+  "output_counts": {
+    "memory_units": 4,
+    "emotional_markers": 1,
+    "topic_items": 2,
+    "personal_signals": 2,
+    "relational_tone": 1,
+    "gist_present": 1,
+    "narrative_present": 1
+  },
+  "core_created": 1,
   "core_updated": 0,
   "core_skipped": 1,
   "core_review_candidates": 1,
@@ -179,21 +328,30 @@ Write one record per run:
   "fidelity_rejected": 0,
   "fidelity_needs_revision": 0,
   "fidelity_failed": 0,
+  "memory_unit_repairs": 0,
+  "embedding_requests": 0,
   "pending_tasks_after_run": 0
 }
 ```
 
-Also retain each `pass_report`: attempts, errors, terminal status and
-`recovered_after_retry`. A run with a successful retry must still show the
-earlier provider failure.
+`source_memory_text_chars` counts only the memory text supplied for the
+conversation, excluding Smartest's operational payload.
+`unicode_chars_div_2_ceil_text_v1` means `ceil(Unicode scalar count / 2)` over
+that concatenated text and is intentionally separate from the engine's JSON
+budget estimator. Keep every
+`pass_report`: attempts, errors by stable category, terminal status and
+`recovered_after_retry`. A successful retry still records the earlier failure.
 
-## Reflection record after every Sleep
+#### 2.3 Reflection snapshots
 
-Capture the reflection trigger status immediately after post-Sleep fidelity:
+Capture `reflection_status` immediately after post-Sleep fidelity and record
+the optional reflection result when a task runs:
 
 ```json
 {
+  "schema_version": "smartest_reflection_snapshot.v1",
   "run_id": "anon_run_001",
+  "reflection_scope": "anon_scope_001",
   "active_units": 12,
   "valid_units": 7,
   "unchecked_units": 4,
@@ -201,38 +359,190 @@ Capture the reflection trigger status immediately after post-Sleep fidelity:
   "eligible_units": 4,
   "accumulated_salience": 2.8,
   "salience_remaining": 0.0,
+  "salience_threshold": 2.5,
   "due": true,
   "reason": "accumulated_salience",
   "task_started": true,
   "task_status": "completed",
-  "action_type": "new_candidate",
-  "candidate_count_delta": 1
+  "action_types": ["new_candidate"],
+  "new_candidate_count": 1,
+  "reinforcement_count": 0,
+  "core_challenge_count": 0,
+  "no_insight_reason": null,
+  "cited_unit_count": 3,
+  "source_session_count": 2
 }
 ```
 
-For completed reflection tasks record only action type, counts, anonymized IDs,
-number of cited units/sessions and final candidate/Core statuses. Keep candidate
-text and evidence text inside Smartest.
+Keep candidate and evidence text inside Smartest. Returned records contain
+only action types, counts, anonymized IDs and final statuses.
 
-For v0.5 calibration, preserve the configured values and report their observed
-distribution before proposing changes. A useful live gate includes several
-Sleep cycles and at least:
+#### 2.4 Chat context turns
 
-- one evidence-backed new candidate or reinforcement from repeated stable
-  evidence;
-- one structured `no_insight` for episodic material;
-- one attribution-sensitive case where another participant's statement stays
-  outside automatic Core;
-- a restart or process recovery with no duplicate reflection side effect.
+Write one record for ordinary response generation. This measures the actual
+token-facing product path as well as Sleep:
 
-When natural traffic does not produce one of these cases, mark it
-`not_observed`. Use an isolated copied runtime only for a missing fault or
-contradiction case and label it `synthetic_isolated`.
+```json
+{
+  "schema_version": "smartest_chat_context_turn.v1",
+  "timestamp": "RFC3339",
+  "turn_id": "anon_turn_001",
+  "chat_id": "anon_chat_001",
+  "session_id": "anon_session_001",
+  "prompt_plan_schema": "memory_prompt_plan.v1",
+  "conversation_state": "ongoing",
+  "core_fact_count": 12,
+  "archive_item_count": 4,
+  "associative_item_count": 0,
+  "dialogue_event_count": 18,
+  "dialogue_payload_event_count": 18,
+  "current_message_occurrences": 1,
+  "role_order_valid": true,
+  "estimated_memory_tokens": {
+    "total": 2100,
+    "current": 1300,
+    "compressed": 600,
+    "core": 200,
+    "associative": 0,
+    "domain_state": 0
+  },
+  "dropped_by_budget": {
+    "session_recent": 0,
+    "session_trace": 0,
+    "archive": 0,
+    "core": 0,
+    "associative": 0
+  },
+  "budget_exceeded": false,
+  "provider_prompt_tokens": 3400,
+  "provider_output_tokens": 250,
+  "latency_ms": 930,
+  "response_status": "ok"
+}
+```
 
-## Local quality review
+Counts and estimates come from `core_context_package`, its budget report and
+`memory_prompt_plan.v1`. `current_message_occurrences` must be exactly one.
+`dialogue_payload_event_count` proves that role-aware assembly preserved host
+payload without a second Session read. No dialogue text is exported.
 
-The operator should inspect a sample of at least 30 produced MemoryUnits, or all
-units when fewer exist. Return counts under these labels:
+#### 2.5 Runtime health snapshots
+
+At process start, after every Sleep and once daily, record:
+
+```json
+{
+  "schema_version": "smartest_memory_health.v1",
+  "timestamp": "RFC3339",
+  "chat_id": "anon_chat_001",
+  "sessions": 4,
+  "complete_archives": 12,
+  "active_memory_units": 31,
+  "core_facts": 14,
+  "review_candidates": 2,
+  "pending_tasks": 0,
+  "pending_sleep_runs": 0,
+  "collection_warnings": 0,
+  "vector_state": "disabled",
+  "vector_rows": 0,
+  "storage_bytes": {
+    "sessions": 0,
+    "archive": 0,
+    "core": 0,
+    "vectors": 0,
+    "tasks_and_runs": 0
+  }
+}
+```
+
+Filesystem sizes are optional when Smartest stores or mounts runtime data in a
+way that makes them expensive to calculate. Mark unavailable fields `null`.
+
+### Step 3. Verify joins and privacy on one run
+
+Before returning the Phase 1 sample, confirm:
+
+- the loaded extension descends from `1aa427b`;
+- one Sleep batch has one `shared_context`;
+- every selected pass references that context and has the same fingerprint;
+- the shared source is placed before each pass instruction;
+- pass-specific input contains no inline event array or full `sleep_task`;
+- provider-call records join to exactly one Sleep run and pass report;
+- the Sleep record joins to a reflection snapshot after fidelity;
+- one chat turn uses `memory_prompt_plan.v1` or an equivalent structured plan;
+- the current message occurs once and dialogue roles are ordered;
+- the exported sample contains no secrets or private text.
+
+A natural retry is not required for Phase 1 qualification. The logging path
+must support it; observed retry behavior is measured in Phase 2.
+
+### Step 4. Return the Phase 1 sample
+
+Return:
+
+1. `smartest_validation_build.json`;
+2. 3–10 redacted `smartest_provider_call.v1` records;
+3. one `smartest_sleep_run.v1` record;
+4. one `smartest_reflection_snapshot.v1` record;
+5. one `smartest_chat_context_turn.v1` record;
+6. one `smartest_memory_health.v1` record;
+7. `smartest_instrumentation_notes.md` describing field sources, unavailable
+   fields, deviations and the local privacy check.
+
+Send this compact handoff in chat:
+
+```text
+Smartest Phase 1 instrumentation sample
+Engine commit:
+Host build:
+Loaded extension hash:
+Prompt version:
+Provider/models by role:
+
+One shared Sleep context: PASS/FAIL
+Shared context first: PASS/FAIL
+Provider usage available: yes/partial/no
+Cached-token field available: yes/no
+Call -> run -> reflection joins: PASS/FAIL
+Structured chat plan: PASS/FAIL
+Current message exactly once: PASS/FAIL
+Privacy check: PASS/FAIL
+
+Unavailable fields:
+Deviations from the proposed schemas:
+Sample artifact names or paths:
+Operator questions:
+```
+
+Phase 1 result is `QUALIFIED`, `CHANGES_REQUIRED` or `BLOCKED`. Begin Phase 2
+only after `QUALIFIED`.
+
+---
+
+## Phase 2 — Passive production observation
+
+### Observation window
+
+Preferred minimum after Phase 1 qualification:
+
+- at least 20 terminal Sleep runs;
+- at least three large group chats;
+- at least two calendar days;
+- at least 300 user/assistant events in total;
+- enough natural traffic for several post-Sleep reflection evaluations.
+
+If the window ends earlier, return all evidence and state the shortfall. Do not
+manufacture medical, personal or contradictory dialogue. Natural provider
+filtering and ordinary group traffic are the relevant evidence.
+
+Keep the full six-track profile during this window. This isolates the compact
+source/cache correction from a change in memory semantics. Every configuration
+or model change starts a separately labelled cohort.
+
+### Local quality review
+
+The operator reviews at least 30 produced MemoryUnits, or all units when fewer
+exist. Return counts under these labels:
 
 - `supported_and_attributed`;
 - `supported_but_too_broad`;
@@ -241,30 +551,79 @@ units when fewer exist. Return counts under these labels:
 - `duplicate`;
 - `routine_but_acceptable`.
 
-Inspect every automatic Core promotion in the window and return counts for:
+Review every automatic Core promotion in the window and count:
 
 - correct self-statement and correct subject;
-- stable fact that should remain in Archive;
+- stable fact that should have remained in Archive;
 - about-other claim incorrectly promoted;
 - duplicate or conflicting active fact;
 - correct review routing.
 
-These are operator labels, not benchmark scores. Include the sampling rule and
-reviewer identity/role, while omitting memory text.
+Also sample up to 30 ordinary replies that visibly rely on remembered
+information. Count `correct_memory_use`, `wrong_person`, `unsupported_memory`,
+`relevant_memory_ignored` and `memory_not_needed`. This is the product-facing
+check that token savings preserved useful conversation behavior.
 
-## Required aggregate calculations
+Record the sampling rule and reviewer role. Private evidence and prose stay
+inside Smartest.
+
+### What else to debug during the window
+
+Create one redacted anomaly row for every occurrence of:
+
+- terminal or recovered provider block;
+- budget exhaustion or host-requested early finish;
+- Complete Archive with zero MemoryUnits;
+- memory-unit repair;
+- pending task or Sleep run left after completion/restart;
+- empty Core with personal signals present;
+- wrong or ambiguous participant attribution;
+- duplicate current message or broken role order;
+- missing host payload in a structured dialogue event;
+- malformed Session or collection warning;
+- reflection remaining below threshold despite multiple valid units;
+- unexpected growth in memory files or latency;
+- vector index mismatch, corruption or irrelevant high-similarity result when
+  vectors are enabled.
+
+Each row needs anonymized run/turn ID, stage, symptom, engine/host status,
+recovery result and a short operator diagnosis.
+
+### Reflection evidence required for v0.5
+
+Across several Sleep cycles, seek natural evidence of:
+
+- an evidence-backed new candidate or reinforcement from repeated stable
+  material;
+- structured `no_insight` for episodic or already represented material;
+- an attribution-sensitive case where another participant's statement stays
+  outside automatic Core;
+- a process restart with no duplicate reflection effect.
+
+When natural traffic does not produce one of these cases, mark it
+`not_observed`. An isolated copied runtime may fill a missing restart or
+contradiction check and must be labelled `synthetic_isolated`.
+
+---
+
+## Phase 3 — Analysis and controlled replay
+
+### Required aggregate calculations
 
 Provide totals and median/p95 by run for:
 
-- source events and source text characters;
+- source events and source memory-text characters;
 - shared-context tokens;
 - provider prompt/output/thought tokens;
-- cached input tokens and cache-hit ratio;
+- cached and billable input tokens;
 - provider calls, retries and latency;
 - calls and tokens by pass;
-- MemoryUnits per run and fidelity outcomes;
+- per-track output counts;
+- MemoryUnits and fidelity outcomes;
 - Core promotions, review routes and skip reasons;
-- reflection funnel counts and trigger reasons.
+- reflection funnel counts and trigger reasons;
+- chat memory-context tokens and their share of total prompt tokens;
+- storage growth and pending-work high-water marks.
 
 Calculate:
 
@@ -272,17 +631,45 @@ Calculate:
 input amplification = total provider prompt tokens / estimated source-text tokens
 cache ratio = cached input tokens / provider prompt tokens
 effective uncached amplification = (prompt tokens - cached input tokens) / estimated source-text tokens
+memory context share = estimated memory-context tokens / provider prompt tokens for chat calls
+cost per terminal Sleep = total memory provider cost / terminal Sleep runs
 ```
 
-Compare with the 22–23 August baseline only when the old host payload can be
-removed using the same accounting rule. Otherwise label the monetary comparison
-`not_comparable` and still report the new absolute measurements.
+When provider billing fields are unavailable, report token quantities and mark
+money-based calculations unavailable.
 
-## Economy-profile experiment
+### Interpretation map
 
-Run this only after the full-profile window is complete.
+Use the first matching explanation as a starting point, then inspect the joined
+records:
 
-Recommended comparison profile:
+- identical shared fingerprints with low cache use: provider cache policy,
+  request ordering or model-level cache support;
+- large shared source before provider calls: host payload or compact rendering
+  integration problem;
+- many units with few valid units: thesis quality or fidelity configuration;
+- valid units with no eligible units: checkpoint/session membership or status
+  filtering;
+- eligible salience that never triggers: reflection scheduling or threshold
+  configuration;
+- reflection triggers with only duplicates: selection or candidate-comparison
+  quality;
+- personal signals with no Core and explicit skip reasons: evaluate the stated
+  reasons before changing thresholds;
+- wrong-subject Core promotion: engine attribution defect and immediate stop
+  condition;
+- successful retries with missing attempt history: host telemetry defect;
+- budget-finished runs with missing successful outputs: completion defect;
+- clean stored memory with poor remembered replies: chat-context assembly or
+  response-model use of memory.
+
+This map is guidance. The operator should report a better evidence-backed
+explanation when the data points elsewhere.
+
+### Economy-profile replay
+
+Run after the full-profile production window, preferably on an isolated copy of
+the same inputs:
 
 ```json
 {
@@ -292,97 +679,105 @@ Recommended comparison profile:
 }
 ```
 
-Use an isolated replay of the same input windows when possible. Compare token
-cost, Core promotions, MemoryUnit quality, fidelity routing, repair activity and
-later recall. State explicitly that this profile omits emotional forgetting
-protection, topic structure and relational archive metadata. Adoption is a
-product decision after the quality comparison.
+Compare provider cost, MemoryUnit quality, Core routing, fidelity, repair,
+reflection input and later recall. This profile omits emotional forgetting
+protection, topic structure and relational archive metadata. Adoption requires
+an explicit product decision after the quality comparison.
 
-## Failure and anomaly report
+### Isolated product integration checks
 
-Create one redacted row for every occurrence of:
+These checks use disposable copied data and do not require participant action:
 
-- terminal or recovered provider block;
-- budget exhaustion or host-requested early finish;
-- Complete archive with zero MemoryUnits;
-- memory-unit repair;
-- pending task left after completion/restart;
-- empty Core with personal signals present;
-- wrong or ambiguous participant attribution;
-- duplicate current message or broken role order in the chat prompt;
-- malformed Session or collection warning;
-- reflection remaining permanently below threshold despite multiple valid
-  units.
+- `delete_session` makes the live Session empty while preserving durable scope
+  memory;
+- `purge_scope` removes one disposable scope and leaves a neighbouring scope
+  intact;
+- a scheduled process restart leaves no duplicate Sleep/reflection outcome;
+- vectors, when enabled, return only the tested scope and survive rebuild.
 
-Each row needs run ID, stage, observable symptom, engine/host status, recovery
-result and a short redacted operator diagnosis.
+Erasure and vector checks are useful integration evidence. They do not block
+the v0.6 cognitive decision when Smartest does not expose those product actions
+in this test window.
 
-## What to return to Memory Engine maintainers
+---
 
-Return three artifacts:
+## Phase 4 — Return package and decisions
 
-1. `smartest_validation_summary.md` - human conclusion and configuration;
-2. `smartest_sleep_runs.jsonl` - one redacted record per Sleep run;
-3. `smartest_provider_calls.jsonl` - one redacted record per provider call.
+Return:
 
-Optional: `smartest_anomalies.csv` and a pricing export containing only usage
-and cost fields.
+1. `smartest_validation_summary.md` - context, hypotheses, configuration,
+   conclusions and deviations;
+2. `smartest_validation_build.json`;
+3. `smartest_provider_calls.jsonl`;
+4. `smartest_sleep_runs.jsonl`;
+5. `smartest_reflection_snapshots.jsonl`;
+6. `smartest_chat_context_turns.jsonl`;
+7. `smartest_memory_health.jsonl`;
+8. optional `smartest_anomalies.csv` and pricing export containing only usage
+   and cost fields.
 
-In chat, send this exact compact handoff:
+Use this final chat handoff:
 
 ```text
 Smartest production validation
 Engine commit:
-Host commit/build:
-Prompt commit/version:
+Host build:
+Prompt version:
 Observation window:
-Chats / events / Sleep runs:
+Chats / events / terminal Sleep runs:
 Provider and role models:
 Sleep profile and limits:
-Host payload fix active: yes/no
 
-Shared-prefix contract: PASS/FAIL
-Provider cache observed: yes/no/unavailable
-Prompt tokens total:
-Cached input tokens total:
-Input amplification:
-Effective uncached amplification:
-Previous baseline comparable: yes/no
+H1 shared-prefix economy: CONFIRMED/REJECTED/INSUFFICIENT_DATA
+H2 budget/recovery: CONFIRMED/REJECTED/INSUFFICIENT_DATA
+H3 memory quality under tested profile: CONFIRMED/REJECTED/INSUFFICIENT_DATA
+H4 participant attribution: CONFIRMED/REJECTED/INSUFFICIENT_DATA
+H5 reflection funnel: CONFIRMED/REJECTED/INSUFFICIENT_DATA
+H6 structured chat context: CONFIRMED/REJECTED/INSUFFICIENT_DATA
+H7 long-run recovery: CONFIRMED/REJECTED/INSUFFICIENT_DATA
 
-Complete / budget-finished / terminal-failed runs:
-Recovered provider failures:
-Pending tasks after restart:
-Units reviewed / supported / too broad / wrong speaker / unsupported / duplicate:
-Core correct / wrong-subject / about-other leak / review-routed:
+Prompt tokens / cached input / billable input:
+Input amplification / effective uncached amplification:
+Complete / budget-finished / failed runs:
+Recovered provider failures / repairs / pending tasks:
+Units reviewed and quality counts:
+Core attribution and routing counts:
+Reflection evaluations / due / completed / action types:
+Reply memory-use sample counts:
+Storage growth and latency summary:
 
-Reflection evaluations / due / completed:
-New candidate / reinforcement / no-insight / Core challenge:
 v0.5 live gate: PASS/FAIL/INSUFFICIENT_DATA
-
-Anomalies:
-Artifact paths or attachment names:
+Recommended production profile:
+Blocking defects:
+Unexpected findings:
+Artifact names or paths:
 Privacy check: PASS/FAIL
 Operator conclusion:
 ```
 
 ## Acceptance and v0.6 entry gate
 
-The production-feedback slice is accepted when:
+Production integration receives PASS when:
 
-- the shared-prefix contract passes;
-- every run reaches a terminal, recoverable state and paid successful work is
-  represented in the final archive;
-- provider retries and Core skip decisions are observable;
-- group attribution review finds no about-other automatic Core promotion;
-- the report includes complete usage accounting or clearly marks unavailable
-  provider fields;
-- the returned artifacts contain no private text or secrets.
+- Phase 1 instrumentation is qualified;
+- the shared-prefix contract is present and usage is measured or explicitly
+  unavailable from the provider;
+- every run reaches a terminal recoverable state and successful paid work is
+  represented in the final Archive;
+- retries, Core bridge decisions and memory repairs are observable;
+- local review finds no about-other automatic Core promotion;
+- structured chat context preserves roles, payload and one current message;
+- returned artifacts contain no private text or secrets.
 
-There is no predetermined percentage claim for cache savings. The measured
-ledger becomes the evidence.
+There is no universal cache-savings or accuracy percentage attached to this
+PASS. The report states measured values and confidence for this Smartest build.
 
-v0.6 Phase 3 may start after the Smartest report also closes the v0.5 live
-gate: the valid-unit funnel is understood, at least one non-degenerate
-reflection action is observed, replay/restart produces no duplicate effect and
-no unresolved attribution or data-integrity defect remains. Vector enrichment
-is optional for v0.6; non-vector structural selection remains complete.
+v0.6 Phase 3 may begin after the report also closes the v0.5 live gate: the
+valid-unit funnel is understood, at least one non-degenerate reflection action
+is observed, restart produces no duplicate effect and no unresolved
+attribution or data-integrity defect remains. Vector enrichment is optional;
+the structural non-vector path is the required baseline.
+
+If the natural window lacks enough repeated evidence, the result is
+`INSUFFICIENT_DATA`. Collection can continue without changing thresholds. A
+failing stage is repaired and re-measured as a new labelled cohort.

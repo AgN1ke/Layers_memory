@@ -59,9 +59,10 @@ The project has already proved the main foundation:
 
 The active sequence is production validation on Smartest v2, closure of the
 v0.5 live reflection gate, then v0.6 hierarchical reasoning. Smartest's large
-group chats measure shared-prefix cost, memory quality, attribution and the
-active → valid → eligible reflection funnel without asking chat participants to
-perform scripted tests. Autonomous reflection already has durable scope-safe
+group chats first qualify logging on one short run, then measure shared-prefix
+cost, memory quality, attribution and the active → valid → eligible reflection
+funnel without asking chat participants to perform scripted tests. Autonomous
+reflection already has durable scope-safe
 apply/review and the first internal graph-storage slice: journaled candidate
 migration, MemoryUnit evidence edges and scope-exact inspection. Hierarchical
 reasoning starts after the redacted Smartest report confirms a non-degenerate

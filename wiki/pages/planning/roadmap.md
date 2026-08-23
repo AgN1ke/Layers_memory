@@ -65,8 +65,11 @@ unit-focused prompt projection замість змішаного денного 
 Поточна operational-віха — production validation на Smartest v2 за
 [окремим ТЗ](smartest-v2-production-validation-2026-08.md). Воно перевіряє
 shared-prefix економіку, повний memory outcome, групову атрибуцію і живий
-reflection funnel на великих чатах. Chibigochi product work і Google Play
-server track поставлені власником на паузу 2026-08-24.
+reflection funnel на великих чатах. Протокол розділено на qualification
+логування, пасивне production-спостереження, контрольний replay та рішення.
+Phase 1 готова до передачі Smartest 2026-08-25; довге вікно починається після
+перевірки одного redacted sample. Chibigochi product work і Google Play server
+track поставлені власником на паузу 2026-08-24.
 
 Кодові й deterministic gates v0.4 зелені; unit-focused live acceptance також
 проходив. Фінальний re-run calibrated associative threshold `0.47` та release
@@ -389,10 +392,19 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [ ] Заміряти реальну provider cache hit-rate і ціну на навантаженні Smartest
   v2 після переходу інтеграції на shared-prefix contract. Це product benchmark,
   а не library claim.
-- [ ] Виконати
-  [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md):
-  мінімум 20 Sleep runs у великих групових чатах, redacted provider ledger,
-  unit/Core quality review, reflection funnel і restart/replay evidence.
+- [x] Переписати
+  [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md)
+  як дослідницький протокол: контекст, сім гіпотез, operator latitude,
+  privacy boundary, qualification логування, пасивне вікно, replay,
+  interpretation map і decision gates. — 2026-08-24.
+- [ ] Smartest Phase 1: встановити `1aa427b` або descendant, додати пʼять
+  structured log streams, виконати один короткий run і повернути redacted
+  instrumentation sample для qualification.
+- [ ] Після `QUALIFIED` виконати Smartest Phase 2: мінімум 20 terminal Sleep
+  runs у великих групових чатах, provider ledger, unit/Core/reply quality
+  review, reflection funnel і runtime health evidence.
+- [ ] Phase 3: на ізольованому replay порівняти повний і economy Sleep profiles,
+  звести H1–H7 та сформувати production recommendation.
 - [ ] За результатом Smartest закрити live gate v0.5 або зафіксувати точну
   причину `INSUFFICIENT_DATA`/`FAIL`; лише PASS відкриває v0.6 Phase 3.
 

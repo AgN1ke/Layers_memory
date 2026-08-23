@@ -8,6 +8,24 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-24] planning | Smartest protocol split into qualification and evidence phases
+
+Reworked [Smartest v2 Production Validation](pages/planning/smartest-v2-production-validation-2026-08.md)
+from a single collection checklist into a four-phase research protocol.
+Smartest now qualifies five structured log streams on one short run before the
+multi-day observation window begins. Later phases cover passive evidence,
+controlled full/economy replay and explicit production/v0.5/v0.6 decisions.
+
+Added the measured August baseline, seven falsifiable hypotheses, investigator
+latitude, version and privacy boundaries, per-stream example records, a Phase 1
+return package, broader live-system diagnostics and an interpretation map. The
+acceptance build is `1aa427b` or a descendant; older traffic remains comparison
+evidence only.
+
+Updated the [Roadmap](pages/planning/roadmap.md), [Wiki home](README.md) and
+[Wiki index](index.md). This is a planning and instrumentation-specification
+change, so HISTORY remains unchanged. See [DEVLOG Entry 170](../DEVLOG.md).
+
 ## [2026-08-24] planning | Smartest validation and v0.6 entry gate
 
 Added [Smartest v2 Production Validation](pages/planning/smartest-v2-production-validation-2026-08.md)
