@@ -19,6 +19,11 @@ Status: **accepted strategic plan; S1 reference contracts implemented; S2.A
 and S2.B externally accepted; S2.C transactional Sleep lifecycle implemented with external
 acceptance pending**.
 
+**Owner scheduling update 2026-08-24:** implementation is paused. Existing
+S1/S2 reference slices stay in regression coverage. PostgreSQL, authenticated
+runtime, workers and launch acceptance resume only after a separate owner
+decision; they do not block Smartest validation or v0.6 cognitive work.
+
 This document is the implementation authority for taking Memory Engine from a
 single-process/local storage library to the centralized service required by a
 Google Play release with thousands of players. It deliberately runs beside the

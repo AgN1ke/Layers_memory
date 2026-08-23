@@ -1,5 +1,65 @@
 # DEVLOG
 
+## Запис 169 — 2026-08-24 — Smartest отримав production-validation ТЗ, а вхід у v0.6 став доказовим
+
+Після закриття одинадцяти продакшен-зауважень власник визначив наступний
+робочий контур. Перевірку має виконувати інженер або оператор Smartest v2,
+який бачить конфігурацію, provider ledger, runtime records і логи. Учасникам
+великих групових чатів не потрібно розігрувати тестові діалоги або знати
+внутрішню будову Memory Engine.
+
+### Що зафіксовано для Smartest
+
+Створено
+`wiki/pages/planning/smartest-v2-production-validation-2026-08.md`. Документ
+описує:
+
+- точну версію engine, host, prompts, провайдерів і моделей, яку треба записати
+  перед вимірюванням;
+- мінімальне вікно спостереження: 20 Sleep runs, три великі групові чати, два
+  дні й 300 подій;
+- provider-call і run-level записи для оцінки shared-prefix cache, викликів,
+  повторів, вартості, завершення архівів, fidelity, Core та reflection;
+- локальну перевірку якості MemoryUnits і кожної автоматичної Core promotion;
+- анонімізацію і заборону передавати ключі, тексти чатів, тези памʼяті, імена,
+  повні prompts або runtime-каталоги;
+- три артефакти та готовий короткий шаблон відповіді, за яким результат можна
+  відтворити й оцінити без доступу до приватного листування.
+
+Перший вимір зберігає повний шестипрохідний Sleep-профіль, щоб окремо побачити
+ефект компактного shared source і provider cache. Економний профіль дозволено
+порівнювати після цього на ізольованому replay або окремо позначеній вибірці.
+
+### Чи готовий фундамент до v0.6
+
+Storage/schema/migration/API foundation графа гіпотез уже реалізований і має
+детерміноване acceptance. Технічного блокера з боку Chibigochi або Google Play
+для reasoning-фази v0.6 немає. Водночас v0.6 має спиратися на живий доказ, що
+поточний v0.5 reflection funnel отримує достатньо валідних units і породжує
+невироджені candidate, reinforcement або no-insight outcomes без помилок
+атрибуції та повторних effects після restart.
+
+Тому нормативний порядок тепер такий: Smartest production validation → оцінка
+і закриття live gate v0.5 → v0.6 Phase 3 hierarchical reasoning. Якщо даних
+бракує, результат позначається `INSUFFICIENT_DATA`, а пороги не підганяються
+під бажаний висновок.
+
+### Зміна активної черги
+
+Chibigochi product UX/packaging і Google Play server track поставлені власником
+на паузу. Їхні реалізовані Godot, HTTP, Storage v2 та server reference paths
+лишаються regression fixtures. Активним production host стає Smartest v2.
+
+Roadmap, wiki home/index, документи v0.5/v0.6, LLM resources, production
+feedback, Chibigochi bridge і server-scale plan синхронізовано з цим рішенням.
+Окремий HISTORY-запис не створювався: цей крок змінює план перевірки й порядок
+робіт, а не runtime-поведінку бібліотеки.
+
+### Репозиторій
+
+Гілка з реалізацією production feedback та цим validation-планом призначена
+для звичайного fast-forward merge у `main`. Переписування історії не потрібне.
+
 ## Запис 168 — 2026-08-24 — Продакшен-витрати Sleep стали керованими, а контекст для хостів — структурованим
 
 Smartest v2 передав звіт із реального групового Telegram-трафіку за 22–23

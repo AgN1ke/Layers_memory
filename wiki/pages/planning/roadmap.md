@@ -53,7 +53,7 @@ Memory Engine має бути **довготривалою памʼяттю, щ�
 
 ---
 
-## Поточний стан (2026-08-16)
+## Поточний стан (2026-08-24)
 
 Після v0.3: ліцензію повернуто на non-commercial; Chibigochi має async
 product loop і реальну Godot-інтеграцію; prompt view має derived time labels.
@@ -62,25 +62,31 @@ ordinary Recall Stage 2 уже реалізовані. Stage 2 ранжує arch
 max cosine конкретних `MemoryUnit`, зберігає winning unit provenance і повертає
 unit-focused prompt projection замість змішаного денного summary.
 
-Поточна release-віха — `v0.4.0`: кодові й deterministic conformance gates
-зелені, але живий Chibigochi acceptance саме unit-focused коміту `d5d5f40` ще
-не зафіксований. До цього default scoring weights не змінюються і manifests не
-піднімаються. Після v0.4 наступні recall-напрями: natural-language time intent,
-unit-level recall feedback/deep-scoring calibration і лише потім, за живими
-даними, Core-anchored contextual expansion Phase 2.
+Поточна operational-віха — production validation на Smartest v2 за
+[окремим ТЗ](smartest-v2-production-validation-2026-08.md). Воно перевіряє
+shared-prefix економіку, повний memory outcome, групову атрибуцію і живий
+reflection funnel на великих чатах. Chibigochi product work і Google Play
+server track поставлені власником на паузу 2026-08-24.
+
+Кодові й deterministic gates v0.4 зелені; unit-focused live acceptance також
+проходив. Фінальний re-run calibrated associative threshold `0.47` та release
+документ можна закрити на Smartest, якщо в його scope увімкнені vectors, або на
+ізольованому replay. Default scoring weights до вимірювання не змінюються.
 
 Окремо від v0.4 closure розпочато v0.5 autonomous reflection. Phase A–C і
 integrity Phase C.1 реалізовані: scope ізольований, apply/review мають frozen
 journal intent, evidence revalidation та restart replay без повторних side
-effects. v0.5 лишається в роботі до живого Chibigochi acceptance і release
-синхронізації. Наступна когнітивна віха після цього — не кращий flat candidate
-dedup, а v0.6 hypothesis graph із рівнями узагальнення. Storage foundation
-Phase 2 уже реалізовано окремо від live gate v0.5: schema, journaled migration,
-scope-safe export і compatibility projection не змінюють chat/reflection
-поведінку. Невироджений disposable Chibigochi host-path fixture закрив
-migration/provenance/idempotence/projection gate; owner storage лишився
-недоторканим і без legacy candidates. Phase 3 reasoning ще не реалізований, а
-live v0.5 reflection calibration лишається окремим behavioral gate.
+effects. Живий gate і калібрування v0.5 тепер виконує Smartest v2. Його великі
+групові чати мають показати active → valid → eligible funnel, природні
+candidate/reinforcement/no-insight outcomes та відсутність повторних effects
+після restart.
+
+Наступна когнітивна віха після Smartest gate — v0.6 hypothesis graph із
+рівнями узагальнення. Storage foundation Phase 2 уже реалізовано: schema,
+journaled migration, scope-safe export і compatibility projection. Phase 3
+reasoning відкривається після звіту Smartest, якщо в ньому є щонайменше одна
+невироджена reflection action і немає незакритого attribution/data-integrity
+дефекту. Chibigochi та Google Play для цього entry gate не потрібні.
 
 Local/reference core тепер підтримує атрибутовану памʼять групового чату:
 кожен self-statement перевіряється за авторами source events, Core і candidates
@@ -383,12 +389,24 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [ ] Заміряти реальну provider cache hit-rate і ціну на навантаженні Smartest
   v2 після переходу інтеграції на shared-prefix contract. Це product benchmark,
   а не library claim.
+- [ ] Виконати
+  [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md):
+  мінімум 20 Sleep runs у великих групових чатах, redacted provider ledger,
+  unit/Core quality review, reflection funnel і restart/replay evidence.
+- [ ] За результатом Smartest закрити live gate v0.5 або зафіксувати точну
+  причину `INSUFFICIENT_DATA`/`FAIL`; лише PASS відкриває v0.6 Phase 3.
 
 ### Адаптери
 
 - [x] Godot-адаптер через GDExtension (`crates/godot_adapter/`). Перший хост, що **не** Telegram-бот. — 2026-06-10, thin JSON-boundary GDExtension crate compiles with `cargo check -p godot_adapter`; live Godot runtime acceptance tracked in Host conformance above.
-- [~] Chibigochi-інтеграція: героїня використовує memory engine для довготривалої особистості. Перший headless product-host spike є в `hosts/chibigochi_spike/`: Godot host object проходить `user text -> context -> reply -> sleep -> restart -> persisted Core/context recall` через `tests/host_conformance/host_conformance.py --host chibigochi-spike`. Мінімальна Godot scene/UI wrapper також є (`main_scene.tscn`, `main_scene.gd`) і проходить `--host chibigochi-ui`. Production-shaped LLM bridge теж є: `chibigochi_http_llm_bridge.gd` виконує chat/sleep/fidelity через HTTP `LlmRequest -> text` proxy і проходить `--host chibigochi-llm-bridge`; реальний Gemini executor є в `chibigochi_gemini_proxy.py`. Async product-loop smoke є як `--host chibigochi-product-loop`: сцена використовує async HTTP bridge, UI busy/error states і restart recall. Відкритими лишаються polished gameplay/character UX і production packaging.
-- [ ] Третій проєкт: природний кандидат — груповий Telegram-чат (див. «Мультиспікерна геометрія» нижче); він доводить universality сильніше за ще один лінійний хост.
+- [?] Chibigochi-інтеграція: memory host, Godot UI, HTTP LLM bridge, real
+  Gemini executor і async product loop реалізовані та лишаються regression
+  fixtures. Polished gameplay/character UX і production packaging поставлені
+  власником на паузу 2026-08-24.
+- [~] Третій проєкт — Smartest v2, комерційний груповий Telegram-бот. Реальний
+  PyO3/LLM шлях і великі чати вже дають production evidence; formal acceptance
+  чекає redacted звіту за
+  [ТЗ Smartest](smartest-v2-production-validation-2026-08.md).
 - [ ] MCP-facade як alternative обгортка над тим самим ядром. Для зовнішніх агентів (Claude Code, OpenAI Agents SDK), що хочуть користуватись memory як tool.
 - [ ] Стабілізувати JSON contracts: зафіксувати v1 для всіх schemas, прописати migration policy для v2+.
 
@@ -475,6 +493,11 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 ---
 
 ## Production track S0-S7 — Google Play server scale
+
+**Статус 2026-08-24:** поставлено власником на паузу. Реалізовані S1/S2
+reference slices зберігаються й проходять regression gates; PostgreSQL,
+runtime, workers і launch work не є активною чергою до окремого рішення
+власника.
 
 Мета: не створити другу памʼять для гри, а безпечно запустити той самий Rust
 core як централізований сервіс для тисяч гравців. Нормативний порядок,
@@ -740,7 +763,8 @@ Core-anchored contextual expansion Phase 2 і Recall Stage 3. Це наступ�
   Phase C як deterministic release contract. — 2026-08-01.
 - [ ] Live-calibration початкових
   `2.5 / 0.95 / 7 days / 2 units / 40 new / 20 related / related score 2 / 20 candidates`
-  defaults на кількох sleep cycles Chibigochi.
+  defaults на кількох production Sleep cycles Smartest v2 за
+  [redacted telemetry spec](smartest-v2-production-validation-2026-08.md).
 - [ ] Створити `v0.5.0-acceptance.md`, синхронно підняти manifests за SemVer і
   тегувати тільки після deterministic + live PASS.
 
@@ -753,6 +777,12 @@ Core-anchored contextual expansion Phase 2 і Recall Stage 3. Це наступ�
 Мета: reflection формує не плоский список схожих текстів, а пояснювану мережу
 вузьких і широких гіпотез із прямими evidence links. Це внутрішній простір між
 Archive і Core, не четвертий prompt-visible memory layer.
+
+**Entry gate Phase 3:** current production-feedback branch у `main`; Smartest
+shared-prefix/quality report отримано; v0.5 live gate має PASS; є хоча б одна
+невироджена reflection action із кількома source units або sessions; restart не
+створює duplicate effect; attribution/data-integrity blockers відсутні.
+Chibigochi packaging і Google Play server track не входять у цю залежність.
 
 - [x] Версіоновані hypothesis node, evidence link і relation contracts;
   journaled restart-safe migration `candidate_belief.v1` без вигаданих

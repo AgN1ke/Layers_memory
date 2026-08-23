@@ -9,6 +9,9 @@
 - [Contextual memory expansion](../research/contextual-memory-expansion-2026-07-05.md) - current plan that depends on query embeddings and model resources.
 - [Production Integration Feedback](../planning/production-feedback-2026-08.md)
   - selectable Sleep work, provider-call budgets and observable retries.
+- [Smartest v2 Production Validation](../planning/smartest-v2-production-validation-2026-08.md)
+  - production reporting for exact provider/model roles, shared-prefix usage,
+    retries and redacted token ledgers.
 
 ## Для чого існує цей документ
 

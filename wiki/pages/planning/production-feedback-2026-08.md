@@ -11,6 +11,8 @@
 - [Information Flow Integrity](information-flow-integrity.md) - canonical path
   from a host event to prompt-facing memory.
 - [Roadmap](roadmap.md) - current implementation state.
+- [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md)
+  - operator-facing measurement and reporting specification for large chats.
 
 ## Purpose
 

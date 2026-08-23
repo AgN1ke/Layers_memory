@@ -8,6 +8,30 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-24] planning | Smartest validation and v0.6 entry gate
+
+Added [Smartest v2 Production Validation](pages/planning/smartest-v2-production-validation-2026-08.md)
+for the engineer or operator who owns production logs and configuration. The
+page defines a privacy-preserving return package for large group chats:
+version/model provenance, shared-prefix and provider-usage ledgers, terminal
+Sleep outcomes, MemoryUnit/Core quality review, the reflection funnel,
+restart evidence, aggregate calculations and a compact handoff template.
+
+Updated the [Roadmap](pages/planning/roadmap.md),
+[Autonomous Reflection v0.5](pages/planning/autonomous-reflection-v0.5.md),
+[Reflective Belief System](pages/planning/reflective-belief-system.md),
+[LLM integration resources](pages/integration/llm-integration-resources.md),
+[Production Integration Feedback](pages/planning/production-feedback-2026-08.md),
+[Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md),
+[Chibigochi LLM Bridge](pages/integration/chibigochi-llm-bridge.md), and both
+wiki entry pages.
+
+The active sequence is now Smartest production validation, v0.5 live-gate
+closure, then v0.6 hierarchical reasoning. Chibigochi product work and the
+Google Play server track are paused; their implemented paths remain regression
+fixtures. This is a planning and evidence-boundary update, so HISTORY is
+unchanged. See [DEVLOG Entry 169](../DEVLOG.md).
+
 ## [2026-08-24] implementation | Production Sleep cost controls and structured host context
 
 Added [Production Integration Feedback](pages/planning/production-feedback-2026-08.md)

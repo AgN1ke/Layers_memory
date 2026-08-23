@@ -13,6 +13,11 @@
 This document defines the current production-shaped LLM boundary for the
 Chibigochi Godot spike.
 
+**Status update 2026-08-24:** product UX, packaging and Google Play deployment
+work are paused by the owner. The existing Godot/HTTP/Gemini paths remain
+supported conformance fixtures. Current live calibration moves to Smartest v2;
+this document remains the integration contract for a future Chibigochi resume.
+
 “Production-shaped” here means the provider/prompt responsibility seam, not
 that this local proxy is the production multi-user server. The Google Play
 client will call the authenticated public game backend; its internal Memory

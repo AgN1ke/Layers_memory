@@ -29,6 +29,8 @@ whole chat history.
 - [Production Integration Feedback](pages/planning/production-feedback-2026-08.md) -
   the implemented response to real Sleep cost, context-shape, Core,
   reflection and provider-observability findings.
+- [Smartest v2 Production Validation](pages/planning/smartest-v2-production-validation-2026-08.md) -
+  what the production log owner must measure and return before v0.6 reasoning.
 - [LLM integration resources](pages/integration/llm-integration-resources.md) - what model/key resources an application must provide.
 
 ## What This Project Is
@@ -55,17 +57,17 @@ The project has already proved the main foundation:
   memory units;
 - project documentation now lives in this wiki with checked internal links.
 
-The active design direction has two ordered tracks. Contextual memory expansion
-keeps ordinary chat context small and activates old details only for the
-current topic. Autonomous reflection has a durable scope-safe apply/review
-foundation and now also has the first internal graph-storage slice: journaled
-candidate migration, MemoryUnit evidence edges and scope-exact inspection.
-Its non-degenerate Chibigochi fixture has passed mapping, provenance,
-idempotence and graph-only fallback without migrating owner memory.
-Hierarchical reasoning over that graph remains the next phase between Archive
-and Core, separate from the still-open v0.5 live reflection calibration.
+The active sequence is production validation on Smartest v2, closure of the
+v0.5 live reflection gate, then v0.6 hierarchical reasoning. Smartest's large
+group chats measure shared-prefix cost, memory quality, attribution and the
+active → valid → eligible reflection funnel without asking chat participants to
+perform scripted tests. Autonomous reflection already has durable scope-safe
+apply/review and the first internal graph-storage slice: journaled candidate
+migration, MemoryUnit evidence edges and scope-exact inspection. Hierarchical
+reasoning starts after the redacted Smartest report confirms a non-degenerate
+reflection action and no data-integrity blocker.
 
-A separate production track is now explicit. The current `FileStorage` and
+A separate server-scale track remains documented. The current `FileStorage` and
 in-process locks are the local/reference deployment, not proof of centralized
 multi-user scale. Google Play hosting requires an authenticated Memory Runtime,
 one server-derived vault per account, transactional PostgreSQL/pgvector,
@@ -80,7 +82,9 @@ publishes canonical MemoryUnits and Complete coverage, while cancel releases
 the sources unchanged. External acceptance is pending. Post-finalize
 Core/derived routing, fidelity, forgetting, reflection/vector workflows,
 PostgreSQL, the authenticated game API and production-scale acceptance remain
-open.
+open. Chibigochi product UX/packaging and the Google Play server track are
+paused by the owner as of 2026-08-24; their implemented paths remain regression
+fixtures.
 
 ## How To Read The Wiki
 
@@ -97,6 +101,7 @@ For current work, read:
 - [Roadmap](pages/planning/roadmap.md)
 - [Information Flow Integrity](pages/planning/information-flow-integrity.md)
 - [Production Integration Feedback](pages/planning/production-feedback-2026-08.md)
+- [Smartest v2 Production Validation](pages/planning/smartest-v2-production-validation-2026-08.md)
 - [Reflective Belief System](pages/planning/reflective-belief-system.md)
 - [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md)
 - [Storage v2 Work-Unit Inventory](pages/planning/storage-v2-work-unit-inventory.md)

@@ -47,11 +47,9 @@ crate/host README files stay outside the wiki.
   hierarchical evidence graph, temporal contradiction, and opt-in native
   clarification.
 - [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md) -
-  accepted production track, provisional launch envelope, implemented S1
-  identity/ordered-turn reference, externally accepted S2.A/S2.B logical
-  reference, implemented transactional S2.C Sleep lifecycle pending external
-  acceptance, and
-  planned PostgreSQL, durable worker, migration and launch acceptance phases.
+  accepted but currently paused Google Play track, with implemented S1/S2
+  reference slices retained as regression coverage and the remaining
+  PostgreSQL, worker, migration and launch phases awaiting an owner decision.
 - [Storage v2 Work-Unit Inventory](pages/planning/storage-v2-work-unit-inventory.md)
   - complete audit of current storage call chains, externally accepted
     ingest/Core/Stage 1 recall reference, restartable transactional Sleep with
@@ -63,6 +61,10 @@ crate/host README files stay outside the wiki.
   - production observations and implemented controls for Sleep cost, compact
     provider input, structured chat context, Core/reflection diagnostics and
     graceful run budgets.
+- [Smartest v2 Production Validation 2026-08](pages/planning/smartest-v2-production-validation-2026-08.md)
+  - operator-facing specification for redacted provider ledgers, Sleep cost,
+    memory quality, group attribution, reflection calibration and the v0.6
+    entry decision.
 
 ## Releases
 

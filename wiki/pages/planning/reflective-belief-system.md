@@ -10,6 +10,8 @@
   яких починається міграція.
 - [Autonomous Reflection v0.5](autonomous-reflection-v0.5.md) — поточний цикл
   запуску reflection і його release boundary.
+- [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md)
+  — живий evidence gate між реалізованим v0.5 і reasoning-фазою v0.6.
 - [Roadmap](roadmap.md) — місце фаз у послідовності релізів.
 - [Generative Agents Memory Stream review](../research/generative-agents-memory-stream-2026-07-06.md)
   — зовнішні референси та висновки, з яких виріс цей план.
@@ -263,6 +265,16 @@ Phase 3.
 
 Мета — дозволити системі формувати кілька рівнів розуміння без перетворення
 перефразувань на нескінченні дублікати.
+
+**Entry decision 2026-08-24.** Phase 2 storage/migration/API prerequisites
+already hold. Phase 3 starts after the
+[Smartest v2 production validation](smartest-v2-production-validation-2026-08.md)
+closes the v0.5 live gate: at least one non-degenerate reflection action is
+observed, the valid-unit funnel is understood, replay creates no duplicate
+effect and no attribution/data-integrity blocker remains. Chibigochi packaging
+and the Google Play server track are paused and are not dependencies of this
+cognitive phase. Optional vector enrichment may follow measured evidence;
+structural non-vector selection is the required baseline.
 
 Input builder більше не бере просто останні N candidates. Він збирає bounded
 підграф, пов'язаний із trigger evidence: structural selector є обов'язковим,

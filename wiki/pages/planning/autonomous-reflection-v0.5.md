@@ -6,6 +6,8 @@
 - [Architecture](../foundation/architecture.md) - Core/Session/Archive boundaries and PendingTask orchestration.
 - [Contracts](../foundation/contracts.md) - public shapes and persisted reflection state.
 - [Roadmap](roadmap.md) - release ordering and remaining phases.
+- [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md)
+  - current live-calibration and reporting gate on large group chats.
 - [Reflective Belief System](reflective-belief-system.md) - post-v0.5 plan for
   reliable reflection, hierarchical hypotheses, contradiction, and native
   clarification.
@@ -38,8 +40,17 @@ found non-recoverable multi-file apply/review, wildcard-like absent scope and
 unsafe review transitions. Phase C.1 now closes those deterministic defects:
 reflection apply and owner review are journal-backed and replayable, absent
 scope is isolated, evidence is revalidated before the first side effect, and
-review cannot change scope or revisit a terminal candidate. Live Chibigochi
-acceptance remains open; the integrity gate is no longer the blocker.
+review cannot change scope or revisit a terminal candidate. At the time of
+that implementation, live acceptance remained open; the current host assignment
+is recorded below.
+
+**Live-host update 2026-08-24.** The owner paused Chibigochi product work and
+assigned the open v0.5 live gate to Smartest v2. The deterministic reflection
+contract is unchanged. Smartest's large production-shaped group chats now
+provide the active → valid → eligible funnel, repeated evidence, attribution
+pressure, provider failures and restart evidence required by the gate. The
+redacted return format is normative in
+[Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md).
 
 ## Strategic Decision
 
@@ -286,18 +297,20 @@ Deterministic acceptance must prove:
 - non-vector mode has identical trigger and lifecycle behavior;
 - no memory text is written to persistent trigger telemetry.
 
-Live Chibigochi acceptance must span several sleep cycles. A repeated durable
+Live production acceptance must span several sleep cycles. A repeated durable
 interest should become one evidence-backed candidate; a temporary mood should
 remain episodic; repeated support should not create duplicate beliefs; a real
 contradiction should enter review without silently rewriting Core.
 
 ### Live Phase C procedure
 
-Acceptance runs through Chibigochi owner-memory orchestration, not the Telegram
-demo. The report must identify the library commit, loaded release module path
-and hash, `core_scope`, task IDs, expected/output schemas, action types,
-candidate IDs, cited unit IDs, candidate counts before/after, and Core statuses.
-Persistent logs must be checked for absence of memory/query text.
+Acceptance runs through Smartest v2 production-shaped owner-memory
+orchestration. The report must identify the library commit, loaded release
+module path and hash, anonymized `core_scope`/task/candidate/unit IDs,
+expected/output schemas, action types, candidate counts before/after and Core
+statuses. Persistent exported logs must be checked for absence of memory/query
+text. Chibigochi remains a deterministic regression host while product work is
+paused.
 
 Use naturally occurring owner evidence. Do not inject a false personality fact
 into the owner store merely to satisfy a scenario; when a real Core conflict is
