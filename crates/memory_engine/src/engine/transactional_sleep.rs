@@ -201,19 +201,6 @@ impl SleepWorkflowInput {
             content_digest: self.content_digest.clone(),
         }
     }
-
-    fn task_inputs(&self, task_type: TaskType) -> Value {
-        let hints = match task_type {
-            TaskType::MemoryUnitPass => &self.memory_unit_hints,
-            _ => &self.sleep_hints,
-        };
-        json!({
-            "session_id": self.session_id,
-            "preliminary_archive_id": self.archive_id,
-            "events": self.events,
-            "hints": hints,
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -789,6 +776,7 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                         request_ids[3].clone(),
                         request_ids[4].clone(),
                     ],
+                    SleepRunOptions::default(),
                 )?;
                 let workflow_input = SleepWorkflowInput::new(SleepWorkflowInputSeed {
                     sleep_task_id: sleep_task_id.clone(),
@@ -1280,6 +1268,11 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                     fidelity_requests: Vec::new(),
                     embedding_requests: Vec::new(),
                     failed_passes: run.failed_passes.clone(),
+                    skipped_passes: run.skipped_passes.clone(),
+                    pass_reports: sleep_pass_reports(&run),
+                    provider_calls_issued: run.provider_calls_issued,
+                    max_provider_calls: run.max_provider_calls,
+                    budget_exhausted: run.budget_exhausted,
                     completion_mode: run
                         .completion_mode
                         .clone()
@@ -1746,6 +1739,10 @@ fn task_type_name(task_type: TaskType) -> &'static str {
 
 fn normalize_run_input_references(run: &mut SleepRun, reference: &SleepInputReference) {
     run.input_reference = Some(reference.clone());
+    // Storage v2 keeps private source material in the single immutable input
+    // record. The provider-facing compact projection is hydrated only when a
+    // worker asks for the current batch.
+    run.shared_prompt_context = None;
     for state in &mut run.requests {
         state.request.prompt_inputs = json!({
             "sleep_input_ref": reference,
@@ -1770,6 +1767,11 @@ fn validate_run_input_reference(run: &SleepRun, input: &SleepWorkflowInput) -> R
     {
         return Err(MemoryEngineError::Storage(
             "transactional SleepRun does not match immutable workflow input".to_string(),
+        ));
+    }
+    if run.shared_prompt_context.is_some() {
+        return Err(MemoryEngineError::Storage(
+            "transactional SleepRun must not persist a duplicate prompt context".to_string(),
         ));
     }
     validate_transactional_run_shape(run, input)?;
@@ -1814,7 +1816,7 @@ fn validate_transactional_run_shape(run: &SleepRun, input: &SleepWorkflowInput) 
             SleepTrack::MemoryUnit => (
                 run.memory_unit_task_id.as_deref().unwrap_or_default(),
                 "memory_unit_pass",
-                2,
+                3,
                 MEMORY_UNITS_RESULT_SCHEMA_VERSION,
             ),
             SleepTrack::Emotional => (
@@ -1844,13 +1846,13 @@ fn validate_transactional_run_shape(run: &SleepRun, input: &SleepWorkflowInput) 
             SleepTrack::Consolidator => (
                 run.sleep_task_id.as_str(),
                 "sleep_consolidator",
-                2,
+                3,
                 CONSOLIDATOR_TEXT_SCHEMA_VERSION,
             ),
         };
         let prompt_version_matches = match state.track {
             SleepTrack::MemoryUnit | SleepTrack::Consolidator => {
-                matches!(state.request.prompt_version, 1 | 2)
+                matches!(state.request.prompt_version, 1..=3)
             }
             _ => state.request.prompt_version == prompt_version,
         };
@@ -1902,17 +1904,15 @@ fn hydrate_request(
     state: &SleepRequestState,
 ) -> LlmRequest {
     let mut request = state.request.clone();
-    let sleep_task = input.task_inputs(TaskType::SleepCompression);
     request.prompt_inputs = match state.track {
-        SleepTrack::MemoryUnit => {
-            json!({ "sleep_task": input.task_inputs(TaskType::MemoryUnitPass) })
-        }
+        SleepTrack::MemoryUnit => sleep_request_inputs(&input.archive_id),
         SleepTrack::Emotional
         | SleepTrack::TopicThread
         | SleepTrack::PersonalSignal
-        | SleepTrack::Relational => json!({ "sleep_task": sleep_task }),
+        | SleepTrack::Relational => sleep_request_inputs(&input.archive_id),
         SleepTrack::Consolidator => json!({
-            "sleep_task": sleep_task,
+            "source": "shared_context",
+            "archive_id": input.archive_id,
             "emotional_pass": run.emotional_pass.clone().unwrap_or_else(|| json!({ "emotional_markers": [] })),
             "topic_thread_pass": run.topic_thread_pass.clone().unwrap_or_else(|| json!({ "topic_thread": [] })),
             "personal_signal_pass": run.personal_signal_pass.clone().unwrap_or_else(|| json!({ "personal_signals": [] })),
@@ -1943,7 +1943,14 @@ fn current_transactional_batch(
         .filter(|state| !state.completed && state_stage(state.track) == run.stage)
         .map(|state| hydrate_request(run, input, state))
         .collect::<Vec<_>>();
-    Ok((!requests.is_empty()).then_some(LlmBatch { requests }))
+    Ok((!requests.is_empty()).then_some(LlmBatch {
+        shared_context: Some(render_sleep_prompt_context(
+            &input.session_id,
+            &input.archive_id,
+            &input.events,
+        )),
+        requests,
+    }))
 }
 
 fn advance_transactional_sleep_stage(
@@ -2144,7 +2151,7 @@ fn decode_workflow_task(
         .map(|state| state.attempts as usize)
         .sum::<usize>();
     let prompt_version_matches = if task_type == TaskType::MemoryUnitPass {
-        matches!(task.prompt_version, 1 | 2)
+        matches!(task.prompt_version, 1..=3)
     } else {
         task.prompt_version == expected_prompt_version
     };

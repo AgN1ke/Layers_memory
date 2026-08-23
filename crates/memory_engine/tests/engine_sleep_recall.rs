@@ -2263,10 +2263,7 @@ fn engine_sleep_run_driver_finishes_archive_and_seeds_core() {
     let batch = step.batch.expect("extraction batch");
     assert_eq!(batch.requests.len(), 5);
 
-    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
-        .as_str()
-        .expect("event id")
-        .to_string();
+    let event_id = first_sleep_event_id(&batch);
     let mut responses = Vec::new();
     for request in batch.requests {
         let text = match request.prompt_id.as_str() {
@@ -2462,10 +2459,7 @@ fn engine_sleep_run_persists_and_recovers_after_restart() {
     let step = engine.next_sleep_batch(run).expect("first batch");
     run = step.run;
     let batch = step.batch.expect("extraction batch");
-    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
-        .as_str()
-        .expect("event id")
-        .to_string();
+    let event_id = first_sleep_event_id(&batch);
     let archive_id = run.archive_id.clone();
 
     let memory_unit_request = batch
@@ -2669,11 +2663,7 @@ fn engine_repairs_complete_archive_without_memory_units() {
         .begin_sleep_run("live_session")
         .expect("begin sleep run");
     let mut step = engine.next_sleep_batch(run).expect("first batch");
-    let event_id = step.batch.as_ref().expect("batch").requests[0].prompt_inputs["sleep_task"]
-        ["events"][0]["event_id"]
-        .as_str()
-        .expect("event id")
-        .to_string();
+    let event_id = first_sleep_event_id(step.batch.as_ref().expect("batch"));
     let archive_id = step.run.archive_id.clone();
 
     while step.run.stage == SleepRunStage::Extraction {
@@ -2807,11 +2797,7 @@ fn engine_repair_falls_back_to_archive_tracks_when_provider_blocks() {
         .begin_sleep_run("live_session")
         .expect("begin sleep run");
     let mut step = engine.next_sleep_batch(run).expect("first batch");
-    let event_id = step.batch.as_ref().expect("batch").requests[0].prompt_inputs["sleep_task"]
-        ["events"][0]["event_id"]
-        .as_str()
-        .expect("event id")
-        .to_string();
+    let event_id = first_sleep_event_id(step.batch.as_ref().expect("batch"));
 
     while step.run.stage == SleepRunStage::Extraction {
         let batch = step.batch.expect("extraction batch");
@@ -2946,9 +2932,11 @@ fn engine_cancel_sleep_run_unblocks_unarchived_events() {
         .expect("begin sleep run after cancel");
     assert_ne!(next_run.sleep_task_id, run.sleep_task_id);
     assert_eq!(
-        next_run.requests[0].request.prompt_inputs["sleep_task"]["events"]
-            .as_array()
-            .expect("events")
+        next_run
+            .shared_prompt_context
+            .as_ref()
+            .expect("shared sleep prompt context")
+            .source_event_ids
             .len(),
         1
     );
@@ -2975,10 +2963,7 @@ fn engine_sleep_run_does_not_auto_route_low_weight_routine_unit() {
     let step = engine.next_sleep_batch(run).expect("first batch");
     run = step.run;
     let batch = step.batch.expect("extraction batch");
-    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
-        .as_str()
-        .expect("event id")
-        .to_string();
+    let event_id = first_sleep_event_id(&batch);
 
     let responses = batch
         .requests
@@ -3054,10 +3039,7 @@ fn engine_sleep_run_auto_routes_low_weight_core_path_unit() {
     let step = engine.next_sleep_batch(run).expect("first batch");
     run = step.run;
     let batch = step.batch.expect("extraction batch");
-    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
-        .as_str()
-        .expect("event id")
-        .to_string();
+    let event_id = first_sleep_event_id(&batch);
 
     let responses = batch
         .requests
@@ -3140,10 +3122,7 @@ fn engine_sleep_run_falls_back_when_consolidator_returns_empty_text() {
     let step = engine.next_sleep_batch(run).expect("first batch");
     run = step.run;
     let batch = step.batch.expect("extraction batch");
-    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
-        .as_str()
-        .expect("event id")
-        .to_string();
+    let event_id = first_sleep_event_id(&batch);
 
     let responses = batch
         .requests
@@ -3257,10 +3236,7 @@ fn engine_sleep_run_falls_back_when_consolidator_gist_is_rejected() {
     let step = engine.next_sleep_batch(run).expect("first batch");
     run = step.run;
     let batch = step.batch.expect("extraction batch");
-    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
-        .as_str()
-        .expect("event id")
-        .to_string();
+    let event_id = first_sleep_event_id(&batch);
 
     let responses = batch
         .requests
@@ -3456,6 +3432,17 @@ fn ingest_text(
     tags: Vec<&str>,
 ) {
     ingest_text_in_session(engine, "live_session", timestamp, text, tags);
+}
+
+fn first_sleep_event_id(batch: &memory_engine::LlmBatch) -> String {
+    batch
+        .shared_context
+        .as_ref()
+        .expect("shared sleep prompt context")
+        .source_event_ids
+        .first()
+        .expect("sleep event id")
+        .clone()
 }
 
 fn ingest_text_in_session(

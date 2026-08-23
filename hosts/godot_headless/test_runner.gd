@@ -155,7 +155,7 @@ func _response_for_request(run: Dictionary, request: Dictionary) -> Dictionary:
             ),
         }
 
-    var events := _sleep_events(request)
+    var events := _sleep_events(run, request)
     var user_events := []
     for event in events:
         if _event_kind(event) == "user_message":
@@ -193,7 +193,12 @@ func _response_for_request(run: Dictionary, request: Dictionary) -> Dictionary:
 
     return {"status": "ok", "request_id": request["request_id"], "text": _dumps(payload)}
 
-func _sleep_events(request: Dictionary) -> Array:
+func _sleep_events(run: Dictionary, request: Dictionary) -> Array:
+    var shared_context: Variant = run.get("shared_prompt_context")
+    if shared_context is Dictionary:
+        var shared_events := _events_from_shared_context(shared_context)
+        if not shared_events.is_empty():
+            return shared_events
     var inputs: Dictionary = request.get("prompt_inputs", {})
     var sleep_task = inputs.get("sleep_task")
     if sleep_task is Dictionary and sleep_task.get("events") is Array:
@@ -202,6 +207,29 @@ func _sleep_events(request: Dictionary) -> Array:
         return inputs["events"]
     _fail("request has no sleep events")
     return []
+
+func _events_from_shared_context(shared_context: Dictionary) -> Array:
+    var content: Variant = shared_context.get("content")
+    if not (content is String):
+        return []
+    var events := []
+    for line in content.split("\n"):
+        if not line.begins_with("["):
+            continue
+        var closing: int = line.find("] ")
+        if closing <= 1:
+            continue
+        var fields: PackedStringArray = line.substr(1, closing - 1).split("|")
+        if fields.size() < 4:
+            continue
+        events.append({
+            "event_id": fields[0],
+            "timestamp": fields[1],
+            "type": fields[2],
+            "source": fields[3],
+            "text": line.substr(closing + 2),
+        })
+    return events
 
 func _memory_units_for_events(events: Array) -> Array:
     var units := []

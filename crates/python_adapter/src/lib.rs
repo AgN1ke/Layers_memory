@@ -28,7 +28,7 @@ use ::memory_engine::core_store::{
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::forgetting::ForgetReviewResult;
 use ::memory_engine::hypothesis::HypothesisGraphExportRequest;
-use ::memory_engine::llm::{LlmResponse, SleepRun};
+use ::memory_engine::llm::{LlmResponse, SleepRun, SleepRunOptions};
 use ::memory_engine::recall::RecallQuery;
 use ::memory_engine::reflection::{
     ReflectionActionsResult, ReflectionAnalyzeResult, ReflectionOpportunity,
@@ -61,7 +61,8 @@ impl PyMemoryEngine {
         reflection_max_trigger_units=40,
         reflection_max_related_units=20,
         reflection_min_related_score=2,
-        reflection_max_existing_candidates=20
+        reflection_max_existing_candidates=20,
+        fidelity_auto_validate_weight_threshold=0.85
     ))]
     // PyO3 exposes these as optional keyword configuration on one stable
     // constructor; grouping them into a Rust-only options object would make
@@ -81,6 +82,7 @@ impl PyMemoryEngine {
         reflection_max_related_units: usize,
         reflection_min_related_score: usize,
         reflection_max_existing_candidates: usize,
+        fidelity_auto_validate_weight_threshold: f64,
     ) -> PyResult<Self> {
         if stage2_candidate_limit == 0 {
             return Err(PyValueError::new_err(
@@ -105,6 +107,13 @@ impl PyMemoryEngine {
         if !reflection_salience_threshold.is_finite() || reflection_salience_threshold <= 0.0 {
             return Err(PyValueError::new_err(
                 "reflection_salience_threshold must be finite and greater than zero",
+            ));
+        }
+        if !fidelity_auto_validate_weight_threshold.is_finite()
+            || !(0.0..=1.0).contains(&fidelity_auto_validate_weight_threshold)
+        {
+            return Err(PyValueError::new_err(
+                "fidelity_auto_validate_weight_threshold must be finite and between 0.0 and 1.0",
             ));
         }
         if !reflection_critical_unit_weight.is_finite()
@@ -136,6 +145,7 @@ impl PyMemoryEngine {
         options.vectors.stage2_candidate_limit = stage2_candidate_limit;
         options.vectors.stage2_vector_weight = stage2_vector_weight;
         options.vectors.contextual_expansion_min_sim = associative_memory_min_similarity;
+        options.fidelity.auto_validate_weight_threshold = fidelity_auto_validate_weight_threshold;
         options.reflection.salience_threshold = reflection_salience_threshold;
         options.reflection.critical_unit_weight = reflection_critical_unit_weight;
         options.reflection.max_interval_days = reflection_max_interval_days;
@@ -165,6 +175,19 @@ impl PyMemoryEngine {
         dump_json(&run, "sleep run")
     }
 
+    fn begin_sleep_run_with_options(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        options_json: &str,
+    ) -> PyResult<String> {
+        let options: SleepRunOptions = parse_json(options_json, "sleep run options")?;
+        let run = run_without_gil(py, || {
+            self.inner.begin_sleep_run_with_options(session_id, options)
+        })?;
+        dump_json(&run, "sleep run")
+    }
+
     fn next_sleep_batch(&self, py: Python<'_>, run_json: &str) -> PyResult<String> {
         let run: SleepRun = parse_json(run_json, "sleep run")?;
         let step = run_without_gil(py, || self.inner.next_sleep_batch(run))?;
@@ -186,6 +209,12 @@ impl PyMemoryEngine {
     fn finish_sleep_run(&self, py: Python<'_>, run_json: &str) -> PyResult<String> {
         let run: SleepRun = parse_json(run_json, "sleep run")?;
         let outcome = run_without_gil(py, || self.inner.finish_sleep_run(run))?;
+        dump_json(&outcome, "sleep outcome")
+    }
+
+    fn finish_sleep_run_with_available(&self, py: Python<'_>, run_json: &str) -> PyResult<String> {
+        let run: SleepRun = parse_json(run_json, "sleep run")?;
+        let outcome = run_without_gil(py, || self.inner.finish_sleep_run_with_available(run))?;
         dump_json(&outcome, "sleep outcome")
     }
 
@@ -496,6 +525,16 @@ impl PyMemoryEngine {
                 current_user_message,
             ))
         })
+    }
+
+    fn render_memory_prompt_plan(
+        &self,
+        package_json: &str,
+        current_user_message: &str,
+    ) -> PyResult<String> {
+        let package: CoreContextPackage = parse_json(package_json, "core context package")?;
+        let plan = ::memory_engine::render_memory_prompt_plan(&package, current_user_message);
+        dump_json(&plan, "memory prompt plan")
     }
 
     fn upsert_core_fact(&self, py: Python<'_>, fact_json: &str) -> PyResult<String> {

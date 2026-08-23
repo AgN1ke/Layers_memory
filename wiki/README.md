@@ -26,6 +26,9 @@ whole chat history.
   the canonical event-to-prompt path, personality/session boundary, one
   MemoryUnit truth, optional association, completed repairs and remaining
   transactional phases.
+- [Production Integration Feedback](pages/planning/production-feedback-2026-08.md) -
+  the implemented response to real Sleep cost, context-shape, Core,
+  reflection and provider-observability findings.
 - [LLM integration resources](pages/integration/llm-integration-resources.md) - what model/key resources an application must provide.
 
 ## What This Project Is
@@ -93,6 +96,7 @@ For current work, read:
 
 - [Roadmap](pages/planning/roadmap.md)
 - [Information Flow Integrity](pages/planning/information-flow-integrity.md)
+- [Production Integration Feedback](pages/planning/production-feedback-2026-08.md)
 - [Reflective Belief System](pages/planning/reflective-belief-system.md)
 - [Server-scale Memory Runtime](pages/planning/server-scale-memory-runtime.md)
 - [Storage v2 Work-Unit Inventory](pages/planning/storage-v2-work-unit-inventory.md)

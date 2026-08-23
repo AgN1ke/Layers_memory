@@ -33,6 +33,7 @@ def test_constructor_accepts_vector_tuning(tmp_path: Path):
         reflection_max_related_units=10,
         reflection_min_related_score=3,
         reflection_max_existing_candidates=5,
+        fidelity_auto_validate_weight_threshold=0.65,
     )
     state = json.loads(configured.vector_state("scope"))
     assert state["status"] == "disabled"
@@ -86,6 +87,11 @@ def test_constructor_rejects_invalid_stage2_tuning(tmp_path: Path):
         memory_engine.MemoryEngine(
             str(tmp_path / "bad_reflection_related_limit"),
             reflection_max_related_units=0,
+        )
+    with pytest.raises(ValueError, match="fidelity_auto_validate_weight_threshold"):
+        memory_engine.MemoryEngine(
+            str(tmp_path / "bad_fidelity_threshold"),
+            fidelity_auto_validate_weight_threshold=1.5,
         )
 
 
@@ -827,6 +833,103 @@ def test_render_memory_view_is_available_through_adapter(engine: memory_engine.M
     assert "<short_memory>" in view
     assert "user: Do you remember Irzha?" not in view
     assert "<current_user_message>\nDo you remember Irzha?\n</current_user_message>" in view
+
+
+def test_empty_session_payload_and_prompt_plan_are_available_through_adapter(
+    engine: memory_engine.MemoryEngine,
+):
+    empty = json.loads(engine.read_session("never_ingested"))
+    assert empty["metadata"]["event_count"] == 0
+    assert empty.get("events", []) == []
+
+    empty_package = json.loads(
+        engine.core_context_package(
+            json.dumps(
+                {
+                    "schema_version": "core_context_request.v1",
+                    "session_id": "never_ingested",
+                    "domain_state": {},
+                    "core_scope": "owner",
+                    "query_text": "hello",
+                    "recall_limit": 5,
+                    "session_recent_limit": 5,
+                    "session_trace_event_limit": 10,
+                    "include_core": True,
+                }
+            )
+        )
+    )
+    assert empty_package.get("session_recent", []) == []
+
+    _ingest(
+        engine,
+        "structured_prompt_session",
+        "Earlier message",
+        payload={"text": "Earlier message", "telegram_message_id": 101},
+    )
+    _ingest(
+        engine,
+        "structured_prompt_session",
+        "Current message",
+        timestamp="2026-05-18T10:01:00.000Z",
+        payload={"text": "Current message", "telegram_message_id": 102},
+    )
+    package = json.loads(
+        engine.core_context_package(
+            json.dumps(
+                {
+                    "schema_version": "core_context_request.v1",
+                    "session_id": "structured_prompt_session",
+                    "domain_state": {},
+                    "core_scope": "owner",
+                    "query_text": "Current message",
+                    "recall_limit": 5,
+                    "session_recent_limit": 5,
+                    "session_trace_event_limit": 10,
+                    "include_core": True,
+                }
+            )
+        )
+    )
+    assert package["session_recent"][0]["payload"]["telegram_message_id"] == 101
+    plan = json.loads(
+        engine.render_memory_prompt_plan(json.dumps(package), "Current message")
+    )
+    assert plan["schema_version"] == "memory_prompt_plan.v1"
+    assert [event["text"] for event in plan["dialogue_events"]] == [
+        "Earlier message"
+    ]
+    assert plan["dialogue_events"][0]["payload"]["telegram_message_id"] == 101
+
+
+def test_sleep_budget_and_early_finish_are_available_through_adapter(
+    engine: memory_engine.MemoryEngine,
+):
+    _ingest(engine, "zero_budget_session", "Archive this without a provider call.")
+    run = json.loads(
+        engine.begin_sleep_run_with_options(
+            "zero_budget_session",
+            json.dumps({"max_provider_calls": 0}),
+        )
+    )
+    step = json.loads(engine.next_sleep_batch(json.dumps(run)))
+    assert step.get("batch") is None
+    assert step["run"]["stage"] == "ready_to_finish"
+    assert step["run"]["budget_exhausted"] is True
+    outcome = json.loads(engine.finish_sleep_run(json.dumps(step["run"])))
+    assert outcome["archive_entry"]["status"] == "complete"
+    assert outcome["provider_calls_issued"] == 0
+    assert outcome["completion_mode"] == "budget_exhausted"
+
+    _ingest(engine, "early_finish_session", "Keep this paid work window recoverable.")
+    run = json.loads(engine.begin_sleep_run("early_finish_session"))
+    step = json.loads(engine.next_sleep_batch(json.dumps(run)))
+    assert step["batch"] is not None
+    outcome = json.loads(
+        engine.finish_sleep_run_with_available(json.dumps(step["run"]))
+    )
+    assert outcome["archive_entry"]["status"] == "complete"
+    assert outcome["completion_mode"] == "host_budget_stop"
 
 
 def test_patch_core_fact_updates_and_deprecates_fact(engine: memory_engine.MemoryEngine):

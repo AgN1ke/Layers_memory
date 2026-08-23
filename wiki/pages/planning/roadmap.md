@@ -21,12 +21,14 @@
   migration and launch acceptance.
 - [Server Memory Runtime research](../research/server-memory-runtime-2026-08-01.md)
   - GitHub/PostgreSQL/Google evidence behind that production track.
+- [Production Integration Feedback](production-feedback-2026-08.md) - accepted
+  correction set from a live commercial group bot.
 
 Цей документ — **жива дорожня карта** проєкту. Він не дублює стратегію (`wiki/pages/foundation/strategy.md`) чи архітектуру (`wiki/pages/foundation/architecture.md`). Він відповідає на одне питання: **куди ми йдемо і де зараз стоїмо**.
 
 Документ оновлюється у двох випадках: коли пункт стає зробленим (відмітка `[x]` + дата + посилання на коміт або файл), і коли з'являється нова велика мета, яку треба зафіксувати раніше реалізації. Дрібні правки і робочий процес живуть у `DEVLOG.md`, не тут.
 
-Версія документа: 2026-08-16.
+Версія документа: 2026-08-24.
 
 ---
 
@@ -87,6 +89,14 @@ Local/reference core тепер підтримує атрибутовану па
 Також FileStorage отримав два різні людські шляхи очищення: видалення журналу
 окремої розмови зі збереженням довгоживучої памʼяті та повне незворотне
 стирання scope з crash recovery. Server-side per-vault deletion лишається S6.
+
+Продакшен-інтеграційний зріз 2026-08-24 закрив виміряні проблеми вартості й
+спостережуваності Sleep: один compact source на run, стабільний provider-cache
+prefix, selectable passes, whole-run call budget, контрольований early finish,
+retry reports і пояснення Core bridge. Chat API отримав структурований prompt
+plan з typed dialogue та host payload; нова порожня Session читається як
+порожня, а fidelity/reflection status пояснює весь unit funnel. Повний
+історичний профіль лишається default для сумісності.
 
 Google Play додає незалежний release blocker: current `FileStorage` безпечно
 координує тільки один writer process на runtime directory й не є production
@@ -355,6 +365,24 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [?] Telegram-live smoke driver має перевіряти тільки транспорт і один короткий live-LLM шлях, не повний memory acceptance руками. Відкладено з v0.3 close: `telegram-local` вже покриває реальний `bot.py` memory path без Telegram API, тому live smoke є regression/operations task, не acceptance gate.
 - [x] Godot-headless driver має пройти той самий conformance scenario до будь-якого polished Godot UI. — 2026-06-10: `tests/host_conformance/host_conformance.py --host godot-headless` passed with real Godot 4.6 stable console, `memory_units=3`, `core_facts=3`.
 - [x] v0.3 close: кожен прийнятий host проходить однаковий scenario і доводить, що memory policy лишається в Rust core. Accepted scope: direct/local, Telegram-local, Godot-headless. — 2026-06-10, `wiki/pages/releases/v0.3-acceptance.md`, `tests/host_conformance/host_conformance.py`.
+
+### Production integration cost and observability
+
+- [x] Provider-facing Sleep source передається як один compact shared prefix;
+  batch constants не дублюються у кожній події та кожному pass request.
+  Durable input лишається lossless. — 2026-08-24,
+  `crates/memory_engine/tests/production_feedback.rs`.
+- [x] Публічний run options API обирає tracks, whole-run provider-call budget і
+  retry ceiling; budget stop зберігає отримані результати й завершує Archive.
+  — 2026-08-24.
+- [x] `memory_prompt_plan.v1` віддає окремі core/long/associative sections та
+  typed dialogue events із payload для role-aware chat APIs. — 2026-08-24.
+- [x] Sleep outcome пояснює skipped/recovered/failed work і Archive-to-Core
+  рішення; reflection status розкладає active/valid/unchecked/excluded units.
+  — 2026-08-24.
+- [ ] Заміряти реальну provider cache hit-rate і ціну на навантаженні Smartest
+  v2 після переходу інтеграції на shared-prefix contract. Це product benchmark,
+  а не library claim.
 
 ### Адаптери
 

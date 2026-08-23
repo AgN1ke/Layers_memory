@@ -237,7 +237,12 @@ class ChibigochiGeminiProxy:
         request = payload.get("request")
         if not isinstance(request, dict):
             return {"error": "memory_request payload missed request"}
-        return self._execute_llm_request(request)
+        run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+        shared_context = run.get("shared_prompt_context")
+        return self._execute_llm_request(
+            request,
+            shared_context if isinstance(shared_context, dict) else None,
+        )
 
     def _memory_fidelity_pass(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = payload.get("request")
@@ -245,7 +250,11 @@ class ChibigochiGeminiProxy:
             return {"error": "memory_fidelity_pass payload missed request"}
         return self._execute_llm_request(request)
 
-    def _execute_llm_request(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _execute_llm_request(
+        self,
+        request: dict[str, Any],
+        shared_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         request_id = clean_string(request.get("request_id"))
         prompt_id = clean_string(request.get("prompt_id"))
         role_hint = clean_string(request.get("role_hint")) or "balanced"
@@ -253,10 +262,30 @@ class ChibigochiGeminiProxy:
             prompt_path = PROMPTS_DIR / f"{prompt_id}.md"
             prompt_text = prompt_path.read_text(encoding="utf-8")
             selection = self.llm_config.for_role(role_hint)
-            prompt_payload = json.dumps(request.get("prompt_inputs", {}), ensure_ascii=False, indent=2)
+            request_inputs = json.dumps(
+                request.get("prompt_inputs", {}), ensure_ascii=False, separators=(",", ":")
+            )
+            shared_content = clean_string(
+                shared_context.get("content") if isinstance(shared_context, dict) else ""
+            )
+            if shared_content:
+                system_instruction = (
+                    "You execute a versioned Memory Engine task. The user message starts with "
+                    "the complete source context shared by this batch and ends with the "
+                    "pass-specific instruction. Use only that source and return the requested format."
+                )
+                prompt_payload = (
+                    f"{shared_content}\n\n<TASK_INSTRUCTION>\n{prompt_text}\n"
+                    f"</TASK_INSTRUCTION>\n<REQUEST_INPUTS>{request_inputs}</REQUEST_INPUTS>"
+                )
+            else:
+                system_instruction = prompt_text
+                prompt_payload = json.dumps(
+                    request.get("prompt_inputs", {}), ensure_ascii=False, indent=2
+                )
             response = self.gemini.generate_text(
                 model=selection.model,
-                system_instruction=prompt_text,
+                system_instruction=system_instruction,
                 prompt=prompt_payload,
                 response_mime_type=response_mime_type_for_prompt(prompt_id),
                 operation=prompt_id,

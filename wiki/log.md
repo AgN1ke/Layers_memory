@@ -8,6 +8,31 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-24] implementation | Production Sleep cost controls and structured host context
+
+Added [Production Integration Feedback](pages/planning/production-feedback-2026-08.md)
+as the canonical resolution of eleven observations from Smartest v2 traffic.
+Updated [Architecture](pages/foundation/architecture.md),
+[Contracts](pages/foundation/contracts.md),
+[LLM integration resources](pages/integration/llm-integration-resources.md),
+[Local development](pages/integration/local-development.md), the
+[Roadmap](pages/planning/roadmap.md), prompt contracts and both wiki entry
+pages.
+
+The wiki now documents one compact shared Sleep source, provider-prefix order,
+track and call-budget controls, completion from available results, structured
+role-aware prompt plans with host payload, empty-Session semantics, Core bridge
+decision reports, reflection eligibility counts and recovered provider-attempt
+telemetry. It also records the Storage v2 privacy detail: immutable workflow
+input remains the single persisted private source and shared prompt context is
+hydrated only at the worker boundary.
+
+The production measurements remain evidence from one integration. Cache
+hit-rate and billing changes require a new Smartest v2 ledger after migration.
+Behavioral corrections are recorded in [HISTORY](../HISTORY.md), with the
+implementation narrative and acceptance results in
+[DEVLOG Entry 168](../DEVLOG.md).
+
 ## [2026-08-16] implementation | Verified participant memory and recoverable local erasure
 
 Updated [Architecture](pages/foundation/architecture.md),

@@ -323,6 +323,24 @@ Defaults:
 
 Sleep у bot host запускається вручну через `/sleep`, при token/context budget pressure або від scheduled idle sleep, наприклад нічного запуску о 04:00.
 
+Для перевірки економного Sleep-профілю можна задати environment variables до
+запуску host-а:
+
+```powershell
+$env:MEMORY_BOT_SLEEP_TRACKS = "memory_unit,personal_signal,consolidator"
+$env:MEMORY_BOT_SLEEP_MAX_PROVIDER_CALLS = "5"
+$env:MEMORY_BOT_SLEEP_MAX_PASS_ATTEMPTS = "2"
+$env:MEMORY_BOT_FIDELITY_WEIGHT_THRESHOLD = "0.65"
+.\hosts\telegram_gemini_bot\run_dev_bot.ps1
+```
+
+Відсутні змінні залишають повний шестипрохідний профіль і чинний fidelity
+threshold `0.85`. `MEMORY_BOT_SLEEP_MAX_PROVIDER_CALLS=0` завершує Sleep
+детермінованим fallback без provider call; це корисно для перевірки бюджетного
+stop. Startup log друкує ефективні options, а sleep summary містить calls,
+skipped passes, retry recovery і причини, через які personal signals не
+потрапили в Core.
+
 Runtime memory host-бота:
 
 ```text
@@ -408,7 +426,13 @@ Offset зберігається після кожного обробленого
 - Telegram host записує і читає Core-факти зі scope `telegram_<chat_id>`, щоб факти різних чатів не змішувались;
 - Core можна перевірити командою `/core`, явно додати факт командою `/remember text`, оновити через `/core_update id text`, або прибрати з активного контексту через `/core_forget id`;
 - archive memory створюється через `/sleep`, token-pressure sleep або scheduled idle sleep;
-- Telegram host за замовчуванням виконує multi-pass sleep: compact memory pass, emotional pass, topic thread pass, personal signal pass, relational pass і consolidator. `compact_memory_pass` створює короткі тези для prompt, а решта проходів створює повний audit/archive. Для debug старий single-pass режим можна увімкнути env `MEMORY_BOT_SLEEP_MODE=single`.
+- Telegram host за замовчуванням виконує multi-pass sleep: memory-unit pass,
+  emotional pass, topic thread pass, personal signal pass, relational pass і
+  consolidator. Усі отримують один спільний compact event prefix; окремі
+  requests містять тільки pass-specific inputs. `memory_unit_pass` створює
+  короткі тези для prompt, а інші tracks наповнюють Archive, Core bridge,
+  fidelity/reflection та forgetting metadata. Набір і загальна кількість
+  provider calls налаштовуються змінними вище.
 - активний чат-промпт Telegram host-а лежить у `prompts/telegram_chat_system.md`, а не захардкоджений у Python.
 
 ## Поточний Очікуваний Результат

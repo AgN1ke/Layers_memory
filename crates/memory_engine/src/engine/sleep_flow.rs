@@ -15,6 +15,14 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub fn begin_sleep_run(&self, session_id: &str) -> Result<SleepRun> {
+        self.begin_sleep_run_with_options(session_id, SleepRunOptions::default())
+    }
+
+    pub fn begin_sleep_run_with_options(
+        &self,
+        session_id: &str,
+        options: SleepRunOptions,
+    ) -> Result<SleepRun> {
         if session_id.trim().is_empty() {
             return Err(MemoryEngineError::Validation(
                 "sleep session_id must not be empty".to_string(),
@@ -24,7 +32,7 @@ impl<S: Storage> MemoryEngine<S> {
 
         self.with_resource_lock(session_lock_key(session_id), || {
             let sleep_result = self.sleep_stage1_unlocked(session_id)?;
-            let run = sleep_run_from_stage1(sleep_result)?;
+            let run = sleep_run_from_stage1_with_options(sleep_result, options)?;
             self.storage.save_sleep_run(&run)?;
             Ok(run)
         })
@@ -73,17 +81,47 @@ impl<S: Storage> MemoryEngine<S> {
 
     pub fn next_sleep_batch(&self, mut run: SleepRun) -> Result<SleepRunStep> {
         validate_sleep_run(&run)?;
-        advance_sleep_run_stage(&mut run)?;
+        migrate_legacy_sleep_prompt_context(&mut run)?;
+
+        let batch = loop {
+            advance_sleep_run_stage(&mut run)?;
+            if matches!(
+                run.stage,
+                SleepRunStage::ReadyToFinish | SleepRunStage::Finished
+            ) {
+                break None;
+            }
+
+            let pending = run
+                .requests
+                .iter()
+                .filter(|state| !state.completed && state_stage(state.track) == run.stage)
+                .map(|state| state.request.clone())
+                .collect::<Vec<_>>();
+            if pending.is_empty() {
+                continue;
+            }
+
+            let remaining = run
+                .max_provider_calls
+                .map(|limit| limit.saturating_sub(run.provider_calls_issued))
+                .unwrap_or(u32::MAX) as usize;
+            if remaining == 0 {
+                run.budget_exhausted = true;
+                fallback_unfinished_sleep_requests(&mut run, "budget_exhausted");
+                continue;
+            }
+
+            let requests = pending.into_iter().take(remaining).collect::<Vec<_>>();
+            run.provider_calls_issued = run
+                .provider_calls_issued
+                .saturating_add(requests.len() as u32);
+            break Some(LlmBatch {
+                shared_context: run.shared_prompt_context.clone(),
+                requests,
+            });
+        };
         self.storage.save_sleep_run(&run)?;
-
-        let requests = run
-            .requests
-            .iter()
-            .filter(|state| !state.completed && state_stage(state.track) == run.stage)
-            .map(|state| state.request.clone())
-            .collect::<Vec<_>>();
-
-        let batch = (!requests.is_empty()).then_some(LlmBatch { requests });
         Ok(SleepRunStep { run, batch })
     }
 
@@ -191,12 +229,34 @@ impl<S: Storage> MemoryEngine<S> {
                 fidelity_requests,
                 embedding_requests,
                 failed_passes: run.failed_passes.clone(),
+                skipped_passes: run.skipped_passes.clone(),
+                pass_reports: sleep_pass_reports(&run),
+                provider_calls_issued: run.provider_calls_issued,
+                max_provider_calls: run.max_provider_calls,
+                budget_exhausted: run.budget_exhausted,
                 completion_mode: run
                     .completion_mode
                     .clone()
                     .unwrap_or_else(|| "consolidated".to_string()),
             })
         })
+    }
+
+    /// Finalizes a run with every result already obtained and deterministic
+    /// fallbacks for the remainder. This is the safe host-side budget stop:
+    /// paid work is retained and selected events still become archived.
+    pub fn finish_sleep_run_with_available(&self, mut run: SleepRun) -> Result<SleepOutcome> {
+        validate_sleep_run(&run)?;
+        migrate_legacy_sleep_prompt_context(&mut run)?;
+        while !matches!(
+            run.stage,
+            SleepRunStage::ReadyToFinish | SleepRunStage::Finished
+        ) {
+            fallback_unfinished_sleep_requests(&mut run, "host_budget_stop");
+            advance_sleep_run_stage(&mut run)?;
+        }
+        self.storage.save_sleep_run(&run)?;
+        self.finish_sleep_run(run)
     }
 
     pub fn pending_sleep_runs(&self) -> Result<Vec<SleepRun>> {
@@ -567,18 +627,26 @@ impl<S: Storage> MemoryEngine<S> {
             let category = normalize_category_name(&signal.category);
             let has_user_source = personal_signal_has_user_source(signal, &attribution_events);
 
-            if text.is_empty()
-                || category.is_empty()
-                || signal.confidence < 0.85
-                || !has_user_source
-            {
-                summary.skipped += 1;
+            if text.is_empty() || category.is_empty() {
+                record_core_signal_skip(&mut summary, "invalid_signal");
+                continue;
+            }
+            if signal.confidence < 0.85 {
+                record_core_signal_skip(&mut summary, "below_confidence_threshold");
+                continue;
+            }
+            if !has_user_source {
+                record_core_signal_skip(&mut summary, "no_user_authored_source");
                 continue;
             }
 
             if !personal_signal_is_auto_core_eligible(signal, &attribution_events) {
-                self.route_personal_signal_to_review_candidate(archive, signal, &category, &text)?;
-                summary.skipped += 1;
+                if self
+                    .route_personal_signal_to_review_candidate(archive, signal, &category, &text)?
+                {
+                    summary.review_candidates += 1;
+                }
+                record_core_signal_skip(&mut summary, "requires_attribution_review");
                 continue;
             }
 
@@ -612,7 +680,7 @@ impl<S: Storage> MemoryEngine<S> {
                 .map(Some)
             })?;
             let Some(result) = result else {
-                summary.skipped += 1;
+                record_core_signal_skip(&mut summary, "near_duplicate");
                 continue;
             };
             if result.created {
@@ -631,7 +699,7 @@ impl<S: Storage> MemoryEngine<S> {
         signal: &crate::archive::PersonalSignal,
         category: &str,
         text: &str,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let core_scope = Some(archive.effective_personality_scope_id().to_string());
         let duplicate_exists = self
             .storage
@@ -648,7 +716,7 @@ impl<S: Storage> MemoryEngine<S> {
                     && normalize_match_text(&candidate.text) == normalize_match_text(text)
             });
         if duplicate_exists {
-            return Ok(());
+            return Ok(false);
         }
 
         let now = now_rfc3339()?;
@@ -695,7 +763,8 @@ impl<S: Storage> MemoryEngine<S> {
             links: Vec::new(),
             reinforcements: Vec::new(),
         };
-        self.storage.write_candidate_belief(&candidate)
+        self.storage.write_candidate_belief(&candidate)?;
+        Ok(true)
     }
 
     pub(super) fn auto_route_memory_fidelity_requests(

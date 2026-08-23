@@ -47,9 +47,10 @@ pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;
 pub use llm::{
     CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmErrorKind, LlmRequest, LlmResponse,
-    SleepOutcome, SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
+    LlmSharedContext, SleepOutcome, SleepPassReport, SleepRequestState, SleepRun, SleepRunOptions,
+    SleepRunStage, SleepRunStep, SleepTrack,
 };
-pub use prompt_view::render_memory_view;
+pub use prompt_view::{render_memory_prompt_plan, render_memory_view, MemoryPromptPlan};
 pub use server_runtime::{
     AccountId, AccountLinkDecision, AccountVaultMembership, AuthenticatedPrincipal,
     ClientRequestId, ExternalIdentityProvider, LocalVaultHandle, MembershipStatus, PrincipalKind,

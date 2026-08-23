@@ -75,11 +75,14 @@ impl<S: Storage> MemoryEngine<S> {
         let created_at = now_rfc3339()?;
         let archived_event_ids = self.archived_event_ids_for_session(&request.session_id)?;
         let session = self.storage.read_session(&request.session_id)?;
-        let personality_scope_id = session.metadata.personality_scope_id.clone();
-        let effective_personality_scope_id = session
-            .metadata
-            .effective_personality_scope_id()
-            .to_string();
+        let personality_scope_id = session.metadata.personality_scope_id.clone().or_else(|| {
+            (session.metadata.event_count == 0 && session.events.is_empty())
+                .then(|| request.core_scope.clone())
+                .flatten()
+        });
+        let effective_personality_scope_id = personality_scope_id
+            .clone()
+            .unwrap_or_else(|| request.session_id.clone());
         let recent_limit = if request.session_recent_limit == 0 {
             self.options.context.default_session_recent_limit
         } else {

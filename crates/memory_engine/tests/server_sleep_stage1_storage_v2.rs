@@ -172,7 +172,7 @@ fn transactional_sleep_start_commits_one_coherent_workflow_and_replays_exactly()
     );
     let first_batch = first.batch.as_ref().expect("hydrated extraction batch");
     assert_eq!(first_batch.requests.len(), 5);
-    let frozen_event = &first_batch.requests[0].prompt_inputs["sleep_task"]["events"][0];
+    let frozen_event = &immutable_input.payload["events"][0];
     assert_eq!(frozen_event["schema_version"], "sleep_input_event.v1");
     assert_eq!(frozen_event["source"], "test");
     assert_eq!(frozen_event["received_at"], T1);
@@ -181,8 +181,18 @@ fn transactional_sleep_start_commits_one_coherent_workflow_and_replays_exactly()
     assert_eq!(frozen_event["emotional_tone"], "neutral");
     assert_eq!(frozen_event["importance_hint"], "high");
     assert_eq!(frozen_event["processing_mode"], "defer_to_sleep");
+    let shared = first_batch
+        .shared_context
+        .as_ref()
+        .expect("compact shared provider context");
+    assert!(shared.content.contains("two"));
+    assert_eq!(shared.source_event_ids, archive.source_event_ids);
+    assert!(first_batch.requests[0]
+        .prompt_inputs
+        .get("sleep_task")
+        .is_none());
     assert_eq!(
-        first_batch.requests[0].prompt_inputs["sleep_task"]["preliminary_archive_id"],
+        first_batch.requests[0].prompt_inputs["archive_id"],
         archive.archive_id
     );
 
@@ -249,12 +259,7 @@ fn transactional_sleep_start_uses_shared_selection_policy_and_preserves_active_t
         )
         .unwrap();
     let archive = read_archive(&storage, &context, &result.run.archive_id);
-    let selected_text = result.batch.unwrap().requests[0].prompt_inputs["sleep_task"]["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|event| event["payload"]["text"].as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
+    let selected_text = shared_context_event_texts(&result.batch.unwrap());
     assert_eq!(selected_text, vec!["event-1", "event-3", "event-5"]);
     assert_eq!(archive.source_event_ids.len(), 3);
     assert!(!selected_text.contains(&"event-8".to_string()));
@@ -295,12 +300,7 @@ fn sleep_selection_and_active_tail_use_receive_order_not_untrusted_client_time()
             sleep_request(&engine, "sleep_receive_order", "session_owner"),
         )
         .unwrap();
-    let selected_text = result.batch.unwrap().requests[0].prompt_inputs["sleep_task"]["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|event| event["payload"]["text"].as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
+    let selected_text = shared_context_event_texts(&result.batch.unwrap());
     assert_eq!(selected_text, vec!["event-5", "event-6", "event-7"]);
 }
 
@@ -1670,6 +1670,17 @@ fn ready_transactional_run_after_ingest(
         .submit_sleep_batch_transactional(context, consolidation)
         .unwrap()
         .run
+}
+
+fn shared_context_event_texts(batch: &memory_engine::llm::LlmBatch) -> Vec<String> {
+    batch
+        .shared_context
+        .as_ref()
+        .expect("transactional batch shared context")
+        .content
+        .lines()
+        .filter_map(|line| line.split_once("] ").map(|(_, text)| text.to_string()))
+        .collect()
 }
 
 fn sleep_request<S>(

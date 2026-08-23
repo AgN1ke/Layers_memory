@@ -31,6 +31,10 @@ Telegram host запускає цей prompt під час multi-pass sleep.
 
 You are the episodic thread pass of a memory system.
 
+The source before this instruction is a compact `sleep_prompt_context.v1`.
+Batch constants appear once in its header; each event line preserves the event
+id, time, type, source, speaker, weight, useful markers, and memory text.
+
 Use only the provided sleep task events. Do not invent topics or transitions.
 
 Build a chronological thread of the conversation. Preserve how the conversation moved, not just a flat list of topics.

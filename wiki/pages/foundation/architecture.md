@@ -18,6 +18,8 @@
   reusable adapters.
 - [Local development](../integration/local-development.md) - practical commands
   for building and checking the architecture locally.
+- [Production Integration Feedback](../planning/production-feedback-2026-08.md)
+  - cost, observability and host-API corrections from a live group bot.
 
 ## Для чого існує цей документ
 
@@ -25,7 +27,7 @@
 
 Документ написаний так, щоб людина або ШІ, які прочитали стратегію і відкривають його вперше, могли зрозуміти задум без жодного зовнішнього контексту. Він є основою для двох наступних артефактів: контрактів даних (точні JSON-схеми) і архітектури Rust-модулів. Без нього ці артефакти писати рано.
 
-Версія документа v0.2, синхронізована 2026-06-10 після post-v0.2 audit. Будь-яка зміна архітектурних рішень нижче має проходити через `HISTORY.md`.
+Версія документа v0.2, синхронізована 2026-08-24 після production-integration review. Будь-яка зміна архітектурних рішень нижче має проходити через `HISTORY.md`.
 
 ---
 
@@ -378,7 +380,13 @@ LLM-facing render цього пакета має бути структурно �
 
 **Компактне prompt-facing представлення.** Канонічні файли памʼяті мають бути повними, аудитними і зручними для відлагодження: там допустимі довгі `event_id`, `archive_id`, `core_fact_id`, `task_id`, schema versions, source metadata і звʼязки. Але LLM prompt — це інша межа. У prompt не можна без потреби тягнути довгі технічні ідентифікатори, дубльовані schema-поля, службові source names або числові хвости, які не допомагають моделі відповісти. Такі поля витрачають token budget і працюють проти головної мети стиснення. Принцип: **storage/debug view може бути повним; prompt view має бути семантично достатнім і компактним**. Технічні ID потрапляють у prompt тільки якщо вони потрібні для команди користувача, audit/debug режиму або конкретної операції на кшталт `/core_update <id>`.
 
-На v0.1 compact projection перед chat prompt є спільним контрактом ядра: `render_memory_view(package, current_user_message)` прибирає службові ID, schema/source/debug metadata і повертає LLM-facing блоки `core_memory`, `long_memory`, `short_memory`, `current_user_message` та `assistant_response_slot`. Повний `core_context_package` лишається API/debug формою. Хости не повинні дублювати projection policy; вони передають пакет у ядро, отримують memory view і склеюють його зі своїм system prompt та provider call.
+Compact projection перед chat prompt є спільним контрактом ядра.
+`render_memory_view(package, current_user_message)` повертає один текстовий блок
+для text-only API. `render_memory_prompt_plan(...)` повертає ті самі окремо
+відрендерені memory sections і хронологічні `dialogue_events` для role-aware
+Chat API. Події містять host-owned `payload`, тож інтеграція не перечитує
+Session і не парсить XML-подібний текст регулярними виразами. Повний
+`core_context_package` лишається API/debug формою.
 
 **Token telemetry.** Host має логувати не тільки факт, що prompt вклався в 11k, а й реальну вартість звернень до моделей. Для Gemini Telegram host пише provider `usageMetadata` по кожному LLM-виклику, estimated prompt/output tokens, baseline "raw history without compression" для chat turn, savings estimate і raw→stored archive / raw→prompt archive / raw→compact memory ratios для sleep. Це потрібно, щоб довести економію від стиснення, а не просто заявляти її.
 
@@ -396,7 +404,18 @@ Explicit path обовʼязково має задавати `scope`, якщо h
 
 **Heuristic tagging path** — активний у v0.1, але не пише в Core Store. Хост може додати event-теги (`personal_fact_signal`, `name_reference`, `age_reference`, `preference_signal`, `explicit_memory_request`) і підняти `importance_hint`, щоб sleep/reflection пізніше уважніше переглянули подію. Це мʼякий сигнал, не рішення "це Core-факт".
 
-**Archive personal-signal bridge** — активний у v0.1. Після успішного sleep LLM personal-signal pass виділяє стабільні self-statements і user-specific facts. У мультиспікерній сесії модель повертає лише підказку `self_statement` / `about_other` та можливий `speaker_id`; канонічний `subject` ядро виводить із фактичних `source_event_ids` і `StoredEvent.speaker`. Автоматично в Core проходить тільки self-statement з рівно одним автором і узгодженим id. Чуже твердження, змішані джерела або неправдива підказка стають reflection-кандидатом для ручного review. Далі діють звичайні правила: `confidence >= 0.85`, вільна категорія нормалізується до `snake_case`, а near-duplicate перевірка враховує scope і subject. Це bridge із Archive в Core, а не regex extraction.
+**Archive personal-signal bridge** — активний у `finish_sleep_run`. Після
+успішного sleep LLM personal-signal pass виділяє стабільні self-statements і
+user-specific facts. У мультиспікерній сесії модель повертає лише підказку
+`self_statement` / `about_other` та можливий `speaker_id`; канонічний `subject`
+ядро виводить із фактичних `source_event_ids` і `StoredEvent.speaker`.
+Автоматично в Core проходить тільки self-statement з рівно одним автором і
+узгодженим id. Чуже твердження, змішані джерела або неправдива підказка стають
+reflection-кандидатом для ручного review. Далі діють звичайні правила:
+`confidence >= 0.85`, вільна категорія нормалізується до `snake_case`, а
+near-duplicate перевірка враховує scope і subject. `SleepOutcome.core_summary`
+показує створені, оновлені, review-routed і пропущені сигнали з причинами, тому
+порожній Core діагностується з результату run-а.
 
 **Reflection-based promotion path** — активний у v0.2. Ядро переглядає validated memory units і активний Core, знаходить повторювані теми й потенційні висновки, створює `CandidateBelief`, перевіряє source provenance і суперечності, після чого власник підтверджує або відхиляє промоцію в Core Store. Цей шлях потрібен для висновків типу "користувач постійно повертається до теми X", а не для прямих профільних фактів.
 
@@ -560,7 +579,15 @@ Sleep — процес консолідації сесії у архівний �
 
 ### 8.2 Стадія 2: LLM-доробка через PendingTask
 
-Хост виконує `sleep_compression` через свого LLM-провайдера, використовуючи промпти із `prompts/`. Мінімальний baseline — один `sleep_compression.md`; Telegram host у v0.1 за замовчуванням виконує multi-pass sleep із окремими prompt-файлами для emotional/topic/personal/relational/consolidator проходів. Результат — повноцінний архівний спогад: емоційний наратив, відібрані цитати, уточнені факти, скоригована вага і multi-track поля.
+Хост виконує задачі через свого LLM-провайдера, використовуючи промпти із
+`prompts/`. Один durable Sleep input зберігає повні події. Для provider calls
+кожний `LlmBatch` несе один компактний `sleep_prompt_context.v1`: batch
+constants стоять у заголовку, події мають короткі рядки з provenance і
+змістом. FileStorage може зберігати цю проєкцію з run, а Storage v2 гідрує її
+з immutable input лише на worker boundary і не дублює приватний текст у
+workflow record. Хост ставить
+спільний source першим, prompt instruction другим і малий request payload
+останнім, утворюючи стабільний префікс для provider cache.
 
 Паралельно хост виконує `memory_unit_pass` над тим самим raw sleep input. Агент повертає змінну кількість атомарних тез із source provenance, ядро валідує `MemoryUnit` і детерміновано рендерить із них `ArchiveEntry.compact_memory`. Одна тема може дати один unit, кілька різних епізодів — кілька, рутина може не дати окремого. Legacy `compact_memory_pass` лишається compatibility API, але основний sleep-run не створює його як Stage 1 task.
 
@@ -614,6 +641,14 @@ compatibility API для старих host flows, не основною орке
 Проблема одного проходу: модель природно стискає розмову як тематичний звіт. Вона добре памʼятає "великі" теми на кшталт літаків або колонізації, але може втратити тихий особистий епізод, який для живої памʼяті важливіший за енциклопедичну тему. Це не виправляється хардкодом доменів. Потрібна інша структура sleep.
 
 Multi-pass sleep у v0.2 оркеструється ядром через pull-based driver: ядро створює preliminary archive, durable `SleepRun`, extraction/consolidation batches і typed `LlmRequest`-и; host тільки виконує prompt → text і повертає responses. Спеціалізовані LLM-проходи створюють emotional/topic/personal/relational/memory-unit material, а ядро детерміновано збирає archive result і накладає consolidator prose overlay.
+
+Повний профіль містить шість проходів. Інтеграція може передати
+`SleepRunOptions`: обрати потрібні tracks, обмежити provider calls для всього
+run-а і задати число спроб. Вичерпаний бюджет або явний
+`finish_sleep_run_with_available` переводить незавершені tracks у
+детерміновані fallback-и, зберігає вже оплачені результати і завершує Archive.
+Outcome окремо показує skipped/failed/recovered passes і реальну кількість
+виданих provider calls.
 
 Це завершує колишній host-level multi-pass борг: graph/order/retry/fail-soft/fallback живуть у Rust core, prompt loading і provider calls лишаються в host.
 
@@ -709,6 +744,12 @@ Promotion у Core має бути багаторівневою:
 `begin_reflection_if_due(...)` атомарно повторює перевірку під per-scope lock і
 створює `reflection_analyze` PendingTask тільки для due-стану. Один scope не
 може мати дві pending/submitted reflection-задачі.
+
+Статус окремо показує всі active units, fidelity-valid, unchecked,
+fidelity-excluded та ще не осмислені eligible units, а також накопичену й
+відсутню до порога salience. До reflection допускаються лише Valid units.
+Інтеграція керує обсягом автоматичної fidelity-перевірки через
+`fidelity_auto_validate_weight_threshold`, приймаючи відповідну вартість.
 
 Reflection input не читає raw session і не повинен необмежено рости. Phase A
 дала автоматичній задачі bounded batch нових validated units. Phase B робить
@@ -959,6 +1000,11 @@ role_hint: balanced
 ```
 
 **Як промпти виконуються.** Ядро системи не знає `prompts_dir` і не читає prompt-файли. Воно створює `LlmRequest` / durable task із `prompt_id`, `prompt_version`, `role_hint`, `prompt_inputs` і очікуваною schema/formою відповіді. Хост при виконанні задачі сам читає файл `<prompts_dir>/<prompt_id>.md`, підставляє inputs, вибирає provider/model/key і викликає свого LLM-провайдера. Потім хост повертає в ядро тільки `LlmResponse` (`text` або structured error). Це зберігає provider boundary: orchestration живе в ядрі, prompt loading і мережевий I/O — в хості.
+
+Для multi-pass Sleep `LlmBatch.shared_context` є окремою частиною контракту.
+Хост не серіалізує durable event JSON повторно: він ставить наданий core-owned
+compact source перед текстом конкретного prompt-файлу. Провайдерська explicit
+cache API, TTL і billing telemetry залишаються відповідальністю інтеграції.
 
 **Принцип "не вигадувати наперед" зі стратегії.** У `prompts/` живуть тільки ті файли, які реально викликає код: Telegram chat system prompt, sleep/memory-unit/fidelity/reflection/forgetting prompts та інші активні LLM tasks. Нові промпти створюються тільки тоді, коли відповідна функція реально їх використовує.
 

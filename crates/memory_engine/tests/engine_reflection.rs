@@ -1193,6 +1193,54 @@ fn automatic_reflection_is_due_for_critical_memory_and_checkpoints_zero_candidat
 }
 
 #[test]
+fn reflection_status_explains_units_excluded_by_fidelity() {
+    let root = unique_temp_dir("reflection_fidelity_visibility");
+    let storage = FileStorage::with_host_id(&root, "reflection_test");
+    let storage_probe = storage.clone();
+    let engine = MemoryEngine::new(storage);
+    seed_valid_unit(
+        &engine,
+        "2026-07-01T10:00:00.000Z",
+        "A validated memory.",
+        "Validated detail -> supported by source.",
+        0.40,
+    );
+    let (unchecked_id, _) = seed_valid_unit(
+        &engine,
+        "2026-07-01T11:00:00.000Z",
+        "An unchecked memory.",
+        "Unchecked detail -> waiting for validation.",
+        0.70,
+    );
+    let mut unchecked = storage_probe
+        .read_memory_unit_by_id(&unchecked_id)
+        .expect("read second unit");
+    unchecked.fidelity_status = FidelityStatus::Unchecked;
+    unchecked.fidelity_review = None;
+    storage_probe
+        .write_memory_unit(&unchecked)
+        .expect("restore unchecked fixture state");
+
+    let status = engine
+        .reflection_status(
+            "live_session",
+            Some("live_session".to_string()),
+            ReflectionOpportunity::AfterSleep,
+        )
+        .expect("reflection status");
+    assert_eq!(status.active_memory_unit_count, 2);
+    assert_eq!(status.valid_memory_unit_count, 1);
+    assert_eq!(status.unchecked_memory_unit_count, 1);
+    assert_eq!(status.fidelity_excluded_memory_unit_count, 1);
+    assert_eq!(status.eligible_memory_unit_count, 1);
+    assert_eq!(status.accumulated_salience, 0.40);
+    assert_eq!(status.salience_remaining, 2.10);
+    assert_eq!(status.reason, ReflectionTriggerReason::NotDue);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn automatic_reflection_uses_accumulated_salience_and_scheduled_safety_net() {
     let root = unique_temp_dir("automatic_reflection_accumulated_and_scheduled");
     let storage = FileStorage::with_host_id(&root, "reflection_test");

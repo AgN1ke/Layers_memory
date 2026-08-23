@@ -7,6 +7,8 @@
 - [Configuration](../../../config/README.md) - example provider/model config shape.
 - [Provider landscape](../research/provider-landscape.md) - research behind provider choices.
 - [Contextual memory expansion](../research/contextual-memory-expansion-2026-07-05.md) - current plan that depends on query embeddings and model resources.
+- [Production Integration Feedback](../planning/production-feedback-2026-08.md)
+  - selectable Sleep work, provider-call budgets and observable retries.
 
 ## Для чого існує цей документ
 
@@ -99,6 +101,18 @@ Memory Engine зберігає і шукає вектори, але не рах�
 - обробляти помилки провайдера і таймаути;
 - логувати використання без запису секретів у git.
 
+Для multi-pass Sleep програма також отримує один спільний compact source у
+`LlmBatch.shared_context`. Його треба передати провайдеру першим, далі додати
+інструкцію конкретного проходу і малий `prompt_inputs`. Такий порядок робить
+префікс однаковим для всіх проходів і дає провайдеру можливість застосувати
+prefix caching. Якщо провайдер має explicit cache API, створення cache,
+ідентифікатор, TTL і облік ціни належать цьому шару виконання.
+
+Програма обирає вартість одного Sleep run-а через
+`begin_sleep_run_with_options`: перелік потрібних проходів, загальну кількість
+provider calls і число спроб кожного проходу. Результат повертає детальний звіт
+про пропущені, остаточно невдалі та відновлені повтором проходи.
+
 На практиці це означає таку інфраструктуру в продукті:
 
 - config або UI налаштувань, де власник продукту вибирає провайдерів і моделі;
@@ -166,6 +180,16 @@ Claude, четвертому DeepSeek, а пам'ять при цьому лиш
 Спільний шар провайдерів для OpenAI, Anthropic, DeepSeek, Kimi та інших
 провайдерів ще треба оформити окремою роботою: єдиний інтерфейс виконання,
 приклади config-файлів, тести і документація для кожного провайдера.
+
+Reference Telegram host уже показує product controls для вартості Sleep:
+
+- `MEMORY_BOT_SLEEP_TRACKS`;
+- `MEMORY_BOT_SLEEP_MAX_PROVIDER_CALLS`;
+- `MEMORY_BOT_SLEEP_MAX_PASS_ATTEMPTS`;
+- `MEMORY_BOT_FIDELITY_WEIGHT_THRESHOLD`.
+
+Це приклад використання публічного API бібліотеки. Інші застосунки можуть
+зберігати ті самі рішення у власному config або UI.
 
 ## Практичний висновок для розробника
 

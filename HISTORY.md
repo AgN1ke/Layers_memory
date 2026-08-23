@@ -46,6 +46,71 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-08-24 — Sleep gains provider-cost controls and structured host context
+
+Context. Production traces from Smartest v2 showed that each analytical Sleep
+pass received a full repeated event object, host applications had no bounded
+completion control, role-aware chat integrations had to parse a monolithic
+prompt string, and successful retries erased evidence of their first failed
+attempt. The observed traffic and billing numbers describe that integration,
+not a library-wide benchmark.
+
+**What changed:**
+- `LlmBatch.shared_context` carries one compact `sleep_prompt_context.v1` apart
+  from pass-specific requests. Batch constants appear once, event lines retain
+  the provenance and semantic fields required by the prompts, and reference
+  hosts place this exact source first to permit provider prefix caching;
+- `SleepRunOptions` lets callers select analytical tracks, cap total provider
+  calls and cap attempts per pass. Budget exhaustion and explicit early finish
+  now publish a Complete archive from available results and deterministic
+  fallback data instead of discarding completed work;
+- Sleep outcomes report selected/skipped work, call-budget use, per-pass
+  attempt errors, retry recovery and Archive-to-Core skip reasons;
+- `memory_prompt_plan.v1` exposes memory sections and chronological typed
+  dialogue events separately. `CoreContextEvent.payload` preserves the
+  original host payload. The legacy text `render_memory_view` remains
+  available;
+- reading a truly absent Session now returns an empty virtual Session. An
+  existing malformed Session directory still fails visibly;
+- reflection status now separates active, fidelity-valid, unchecked and
+  fidelity-excluded units and reports the remaining trigger salience. The
+  automatic fidelity weight threshold is configurable through the Python
+  adapter;
+- Sleep analytical prompts use input contract version 3. Persisted older runs
+  remain readable and their inline event inputs are migrated or hydrated into
+  the shared provider-facing representation. Storage v2 retains one immutable
+  lossless private input and does not persist a duplicate compact copy.
+
+**What is retracted or clarified:**
+- the implicit contract that repeating full event JSON independently in every
+  pass request was an acceptable provider interface is withdrawn;
+- a successful final pass no longer implies that every provider attempt was
+  clean; recovered failures are now durable and observable;
+- an absent Session does not require a synthetic event before context can be
+  requested;
+- the production observation that Archive memory was not promoted because the
+  bridge was missing is corrected. The bridge already ran during
+  `finish_sleep_run`; the new report exposes why individual signals were
+  skipped.
+
+**What is still true:**
+- callers that omit Sleep options receive the historical six-track profile;
+- durable source events and immutable workflow input remain lossless;
+- model/provider/key selection, provider cache APIs and network calls remain
+  integration responsibilities outside the Rust core;
+- reflection still consumes only fidelity-valid memory units;
+- JSON output contracts of analytical passes remain stable, while the
+  consolidator continues to return its documented plain-text form;
+- no general cost-reduction percentage is claimed. Smartest v2 must measure
+  cache behavior and billing after adopting the new shared-prefix contract.
+
+**Reproducibility anchors:**
+- `crates/memory_engine/tests/production_feedback.rs`;
+- `crates/memory_engine/tests/living_memory_cycle.rs`;
+- `crates/memory_engine/tests/server_sleep_stage1_storage_v2.rs`;
+- `tests/host_conformance/host_conformance.py`;
+- `wiki/pages/planning/production-feedback-2026-08.md`.
+
 ## 2026-08-16 — Group memory gains verified subjects and FileStorage gains recoverable erasure
 
 Context. A multi-speaker Session previously disabled the entire automatic

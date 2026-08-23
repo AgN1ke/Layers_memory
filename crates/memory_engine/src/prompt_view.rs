@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, UtcOffset};
 
@@ -11,6 +12,24 @@ pub const OLDER_TRACE_LIMIT: usize = 20;
 pub const OLDER_TRACE_MAX_TEXT_CHARS: usize = 180;
 pub const RECENT_MAX_TEXT_CHARS: usize = 900;
 pub const CORE_FACT_MAX_TEXT_CHARS: usize = 260;
+pub const MEMORY_PROMPT_PLAN_SCHEMA_VERSION: &str = "memory_prompt_plan.v1";
+
+/// Provider-neutral prompt plan for chat APIs that carry dialogue roles
+/// natively. Memory sections remain rendered by the core; dialogue remains a
+/// typed event sequence, so a host never has to parse XML-like text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryPromptPlan {
+    pub schema_version: String,
+    pub conversation_state: String,
+    pub state: String,
+    pub core_memory: String,
+    pub long_memory: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub associative_memory: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dialogue_events: Vec<CoreContextEvent>,
+    pub current_user_message: String,
+}
 
 /// Prompt-facing time context. Relative labels ("yesterday", "3 days ago")
 /// are never stored; they are derived at render time from stored absolute
@@ -239,6 +258,125 @@ pub fn render_memory_view(package: &CoreContextPackage, current_user_message: &s
     lines.push("</memory_context>".to_string());
 
     lines.join("\n")
+}
+
+pub fn render_memory_prompt_plan(
+    package: &CoreContextPackage,
+    current_user_message: &str,
+) -> MemoryPromptPlan {
+    let time = TimeLabelContext::from_package(package);
+    let dialogue_events = structured_dialogue_events(package, current_user_message);
+    let ongoing = !dialogue_events.is_empty();
+    let conversation_state = if ongoing {
+        "ongoing"
+    } else {
+        "new_or_no_recent_context"
+    };
+
+    let mut state_lines = vec!["<state>".to_string()];
+    state_lines.push(format!("conversation_state: {conversation_state}"));
+    if !package.domain_state.is_null()
+        && !package
+            .domain_state
+            .as_object()
+            .is_some_and(serde_json::Map::is_empty)
+    {
+        state_lines.push("<current_state_json>".to_string());
+        state_lines.push(xml_escape(
+            &serde_json::to_string(&package.domain_state).unwrap_or_else(|_| "null".to_string()),
+        ));
+        state_lines.push("</current_state_json>".to_string());
+        state_lines.push(
+            "instruction: current_state_json is present host state, not a remembered user claim."
+                .to_string(),
+        );
+    }
+    state_lines.push(if ongoing {
+        "instruction: Continue the dialogue from the latest turn. Do not greet unless the current user message is a greeting."
+            .to_string()
+    } else {
+        "instruction: No prior active dialogue is visible; a short greeting is allowed if natural."
+            .to_string()
+    });
+    if let Some(line) = time.current_time_line() {
+        state_lines.push(line);
+    }
+    state_lines.push("</state>".to_string());
+
+    let core_memory = render_named_section("core_memory", render_core_facts(&package.core_facts));
+    let long_memory = render_named_section(
+        "long_memory",
+        render_archive_memories(&package.archive_relevant, &time),
+    );
+    let associative_memory = (!package.associative_memory.is_empty()).then(|| {
+        let mut lines = vec![
+            "instruction: Older memories activated by the current topic; treat them as past context, not as events in the live conversation."
+                .to_string(),
+        ];
+        lines.extend(render_associative_memories(
+            &package.associative_memory,
+            &time,
+        ));
+        render_named_section("associative_memory", lines)
+    });
+
+    MemoryPromptPlan {
+        schema_version: MEMORY_PROMPT_PLAN_SCHEMA_VERSION.to_string(),
+        conversation_state: conversation_state.to_string(),
+        state: state_lines.join("\n"),
+        core_memory,
+        long_memory,
+        associative_memory,
+        dialogue_events,
+        current_user_message: clean_string(current_user_message).to_string(),
+    }
+}
+
+fn structured_dialogue_events(
+    package: &CoreContextPackage,
+    current_user_message: &str,
+) -> Vec<CoreContextEvent> {
+    let mut seen = std::collections::HashSet::new();
+    let mut events = package
+        .session_trace
+        .iter()
+        .chain(package.session_recent.iter())
+        .filter(|event| {
+            event
+                .text
+                .as_deref()
+                .is_some_and(|text| !clean_string(text).is_empty())
+        })
+        .filter(|event| event.event_id.is_empty() || seen.insert(event.event_id.clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let current = clean_string(current_user_message);
+    if events.last().is_some_and(|event| {
+        event.event_type != "assistant_message"
+            && event
+                .text
+                .as_deref()
+                .is_some_and(|text| clean_string(text) == current)
+    }) {
+        events.pop();
+    }
+    events
+}
+
+fn render_named_section(name: &str, mut lines: Vec<String>) -> String {
+    if lines.is_empty() {
+        lines.push("(empty)".to_string());
+    }
+    let mut rendered = Vec::with_capacity(lines.len() + 2);
+    rendered.push(format!("<{name}>"));
+    rendered.extend(lines);
+    rendered.push(format!("</{name}>"));
+    rendered.join("\n")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -562,6 +700,7 @@ mod tests {
                     source: "bot".to_string(),
                     speaker: None,
                     text: Some("We talked about the cat Irzha.".to_string()),
+                    payload: serde_json::json!({}),
                     tags: vec![],
                     theme: None,
                 },
@@ -572,6 +711,7 @@ mod tests {
                     source: "user".to_string(),
                     speaker: None,
                     text: Some("Do you remember Irzha?".to_string()),
+                    payload: serde_json::json!({}),
                     tags: vec![],
                     theme: None,
                 },
@@ -675,6 +815,7 @@ mod tests {
                 source: "user".to_string(),
                 speaker: None,
                 text: Some("Fresh line.".to_string()),
+                payload: serde_json::json!({}),
                 tags: vec![],
                 theme: None,
             }],
@@ -686,6 +827,7 @@ mod tests {
                     source: "user".to_string(),
                     speaker: None,
                     text: Some("Older line.".to_string()),
+                    payload: serde_json::json!({}),
                     tags: vec![],
                     theme: None,
                 },
@@ -696,6 +838,7 @@ mod tests {
                     source: "user".to_string(),
                     speaker: None,
                     text: Some("Fresh line.".to_string()),
+                    payload: serde_json::json!({}),
                     tags: vec![],
                     theme: None,
                 },
@@ -824,6 +967,7 @@ mod tests {
                     name: "Жека".to_string(),
                 }),
                 text: Some("Купив мотоцикл!".to_string()),
+                payload: serde_json::json!({}),
                 tags: vec![],
                 theme: None,
             },
@@ -834,6 +978,7 @@ mod tests {
                 source: "bot".to_string(),
                 speaker: None,
                 text: Some("Вітаю з покупкою!".to_string()),
+                payload: serde_json::json!({}),
                 tags: vec![],
                 theme: None,
             },
@@ -847,6 +992,7 @@ mod tests {
                     name: "Антон".to_string(),
                 }),
                 text: Some("А клюло сьогодні на світанку?".to_string()),
+                payload: serde_json::json!({}),
                 tags: vec![],
                 theme: None,
             },

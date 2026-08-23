@@ -186,6 +186,10 @@ pub struct CoreContextEvent {
     pub speaker: Option<Speaker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Lossless host-owned event data. Prompt renderers ignore it; structured
+    /// chat hosts can recover role/tool metadata without reading Session twice.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub payload: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

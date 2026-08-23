@@ -15,6 +15,9 @@
 - [Server-scale Memory Runtime](../planning/server-scale-memory-runtime.md) -
   accepted vault, transaction and service contracts; S1 identity and additive
   S2 reference flows are implemented, while PostgreSQL remains pending.
+- [Production Integration Feedback](../planning/production-feedback-2026-08.md)
+  - production evidence and the compatible Sleep/context contracts added in
+  response.
 
 ## Для чого існує цей документ
 
@@ -95,12 +98,14 @@ Markdown-файли існують для людини. Вони не замін
 - `core_fact_upsert_result.v1`;
 - `core_context_request.v1`;
 - `core_context_package.v1`;
+- `memory_prompt_plan.v1`;
 - `candidate_belief.v1`;
 - `recall_query.v1`;
 - `recall_result.v1`;
 - `pending_task.v1`;
 - `evidence_pack.v1`;
 - `fidelity_review.v1`;
+- `sleep_prompt_context.v1`;
 - `sleep_compression_result.v1`;
 - `manifest.v1`;
 - `journal_operation.v1`;
@@ -855,6 +860,17 @@ structural recall; opt-in Stage 2 доступний через explicit `engine
 
 `session_recent` і `session_trace` у відповіді містять тільки active tail: події поточної сесії, які ще не покриті жодним Complete archive entry через `source_event_ids`. Preliminary entry не прибирає їх із живого контексту. Події, які вже завершили sleep, повертаються через `archive_relevant`, а не дублюються як raw session events. Default rolling sleep лишає приблизно 30% найсвіжіших unarchived events active, якщо window досяг `partial_sleep_min_events`.
 
+Кожний `CoreContextEvent` у цих масивах також містить lossless `payload`
+вихідної події. Prompt renderers його не показують, але role-aware host може
+відновити tool/message metadata без другого `read_session` і join за
+`event_id`.
+
+Якщо Session ще жодного разу не матеріалізувалась через ingest,
+`read_session` і `core_context_package` трактують її як порожню active Session.
+Явний `core_scope` тоді дозволяє отримати вже наявну довгоживучу памʼять до
+першої нової події. Каталог Session без `session.json` лишається storage error,
+бо це ознака пошкодження, а не нової розмови.
+
 `token_budget` необовʼязковий. Якщо host його не передає, ядро використовує default 11k/7k/3k/1k. Це budget для memory context package, а не повний budget усього LLM-запиту. На v0.1 token count — детермінована оцінка за conservative estimator, не provider-specific tokenizer.
 
 На v0.1 `core_facts` читаються з усіх файлів `memory/core/store/*.json`, а не з фіксованого списку категорій. Категорія є вільним normalized `snake_case` рядком, який приходить із LLM personal-signal pass або explicit host command. Старі категорії `profile/preferences/relationship` не є whitelist.
@@ -888,6 +904,10 @@ Core Context Package не обов'язково зберігається на д
       "type": "user_message",
       "source": "telegram_user_42",
       "text": "А що треба для початку риболовлі?",
+      "payload": {
+        "text": "А що треба для початку риболовлі?",
+        "telegram_message_id": 812
+      },
       "tags": ["telegram_message"],
       "theme": "telegram_conversation"
     }
@@ -1026,7 +1046,40 @@ Canonical prompt view рендерить прийняті hits окремим
 `<associative_memory>` блоком із явною позначкою, що це давні спогади,
 активовані поточною темою.
 
-Важливо: цей JSON-контракт є API/debug формою, а не обовʼязковим дослівним prompt payload. Для LLM має використовуватись компактне prompt-facing представлення: без `schema_version`, довгих `event_id` / `archive_id` / `core_fact_id`, службових `source`, зайвих timestamp/source полів і дубльованих технічних ключів, якщо вони не потрібні для конкретної відповіді або debug-команди. Канонічні storage-файли лишаються повними; prompt view має нести сенс, а не аудитну обвʼязку. На v0.1 Telegram host реалізує compact projection перед chat prompt через role transcript і compact memory theses; спільний engine-level `prompt_view` контракт лишається задачею v0.2.
+Важливо: цей JSON-контракт є API/debug формою, а не обовʼязковим дослівним prompt payload. Для LLM має використовуватись компактне prompt-facing представлення: без `schema_version`, довгих `event_id` / `archive_id` / `core_fact_id`, службових `source`, зайвих timestamp/source полів і дубльованих технічних ключів, якщо вони не потрібні для конкретної відповіді або debug-команди. Канонічні storage-файли лишаються повними; prompt view має нести сенс, а не аудитну обвʼязку. Ядро надає текстовий `render_memory_view` і структурований `render_memory_prompt_plan`; хост обирає форму відповідно до API провайдера.
+
+### 6.6 MemoryPromptPlan
+
+`render_memory_prompt_plan(package, current_user_message)` повертає
+`memory_prompt_plan.v1` для role-aware chat API:
+
+```json
+{
+  "schema_version": "memory_prompt_plan.v1",
+  "conversation_state": "ongoing",
+  "state": "<state>...</state>",
+  "core_memory": "<core_memory>...</core_memory>",
+  "long_memory": "<long_memory>...</long_memory>",
+  "associative_memory": null,
+  "dialogue_events": [
+    {
+      "event_id": "event_...",
+      "timestamp": "2026-08-23T12:00:00Z",
+      "type": "user_message",
+      "source": "telegram_user_42",
+      "speaker": {"id": "42", "name": "Микита"},
+      "text": "Попередня репліка",
+      "payload": {"telegram_message_id": 812}
+    }
+  ],
+  "current_user_message": "Поточна репліка"
+}
+```
+
+Memory sections залишаються core-rendered і проходять той самий budget/dedup,
+що й текстовий view. `dialogue_events` є хронологічною дедуплікованою
+структурою; поточне user-повідомлення винесене окремо. Хост може напряму
+перетворити події на native chat roles і не парсити `<recent_dialogue>`.
 
 ---
 
@@ -1761,6 +1814,59 @@ storing them.
 - `distorted`;
 - `missing_key_detail`;
 - `needs_revision`.
+
+### 9.4 Multi-pass Sleep provider contract
+
+`begin_sleep_run_with_options(session_id, options)` приймає:
+
+```json
+{
+  "enabled_tracks": ["memory_unit", "personal_signal", "consolidator"],
+  "max_provider_calls": 5,
+  "max_pass_attempts": 2
+}
+```
+
+Відсутні options зберігають повний історичний набір із шести проходів.
+`max_provider_calls` рахує всі видані provider requests, включно з retry та
+consolidator. При вичерпанні ліміту ядро завершує решту детермінованими
+fallback-ами, зберігає вже отримані результати й лишає run готовим до finalize.
+`finish_sleep_run_with_available` дає хосту такий самий контрольований stop до
+вичерпання engine-owned ліміту.
+
+`next_sleep_batch` повертає один спільний provider-facing source:
+
+```json
+{
+  "shared_context": {
+    "schema_version": "sleep_prompt_context.v1",
+    "context_id": "sleep:archive_...",
+    "content": "sleep_prompt_context.v1\nsession=...\narchive=...\nscope=...\nevents:\n[...] ...",
+    "source_event_ids": ["event_..."],
+    "event_count": 1,
+    "source_text_chars": 84,
+    "rendered_chars": 190,
+    "estimated_tokens": 95
+  },
+  "requests": [
+    {
+      "prompt_id": "memory_unit_pass",
+      "prompt_version": 3,
+      "prompt_inputs": {"source": "shared_context", "archive_id": "archive_..."}
+    }
+  ]
+}
+```
+
+Повні `sleep_input_event.v1` лишаються у durable task/workflow input. Хост
+подає `shared_context.content` першим, prompt-файл конкретного проходу другим,
+а `prompt_inputs` останніми. Analytical pass responses лишаються JSON;
+`sleep_consolidator` повертає задокументований plain-text overlay.
+
+`SleepOutcome` додає `skipped_passes`, `provider_calls_issued`,
+`max_provider_calls`, `budget_exhausted` і `pass_reports`. Кожний pass report
+містить число спроб, список помилок і `recovered_after_retry`, тому успішний
+повтор не стирає факт provider block/transport failure.
 
 ---
 

@@ -268,7 +268,7 @@ pub(super) fn build_memory_unit_task_with_id(
         created_at: now.to_string(),
         updated_at: now.to_string(),
         prompt_id: "memory_unit_pass".to_string(),
-        prompt_version: 2,
+        prompt_version: 3,
         role_hint: ModelRole::Balanced,
         expected_output_schema: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
         inputs: json!({
@@ -302,7 +302,7 @@ pub(super) fn build_memory_unit_repair_task(
         created_at: now.to_string(),
         updated_at: now.to_string(),
         prompt_id: "memory_unit_pass".to_string(),
-        prompt_version: 2,
+        prompt_version: 3,
         role_hint: ModelRole::Reasoning,
         expected_output_schema: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
         inputs: json!({
@@ -506,7 +506,10 @@ pub(super) fn archive_weight(events: &[&StoredEvent]) -> f64 {
         .clamp(0.0, 1.0)
 }
 
-pub(super) fn sleep_run_from_stage1(stage1: SleepStage1Result) -> Result<SleepRun> {
+pub(super) fn sleep_run_from_stage1_with_options(
+    stage1: SleepStage1Result,
+    options: SleepRunOptions,
+) -> Result<SleepRun> {
     sleep_run_from_stage1_with_request_ids(
         stage1,
         new_id("llm_req")?,
@@ -516,6 +519,7 @@ pub(super) fn sleep_run_from_stage1(stage1: SleepStage1Result) -> Result<SleepRu
             new_id("llm_req")?,
             new_id("llm_req")?,
         ],
+        options,
     )
 }
 
@@ -523,22 +527,30 @@ pub(super) fn sleep_run_from_stage1_with_request_ids(
     stage1: SleepStage1Result,
     memory_unit_request_id: String,
     track_request_ids: [String; 4],
+    options: SleepRunOptions,
 ) -> Result<SleepRun> {
     let mut requests = Vec::new();
     let sleep_task = stage1.pending_task;
+    let shared_prompt_context = sleep_shared_context_from_task_inputs(&sleep_task.inputs)?;
+    let enabled_tracks = unique_sleep_tracks(options.enabled_tracks);
+    let archive_id = stage1.archive_entry.archive_id.clone();
 
-    if let Some(memory_unit_task) = stage1.memory_unit_task.clone() {
+    if enabled_tracks.contains(&SleepTrack::MemoryUnit) {
+        let memory_unit_task = stage1.memory_unit_task.clone().ok_or_else(|| {
+            MemoryEngineError::Storage("sleep run has no memory-unit task".to_string())
+        })?;
         requests.push(SleepRequestState {
             track: SleepTrack::MemoryUnit,
             request: llm_request_from_task_with_id(
                 &memory_unit_task,
                 "memory_unit_pass",
-                json!({ "sleep_task": memory_unit_task.inputs }),
+                sleep_request_inputs(&archive_id),
                 memory_unit_request_id,
             )?,
             attempts: 0,
             completed: false,
             last_error: None,
+            attempt_errors: Vec::new(),
         });
     }
 
@@ -567,6 +579,9 @@ pub(super) fn sleep_run_from_stage1_with_request_ids(
     .into_iter()
     .zip(track_request_ids)
     {
+        if !enabled_tracks.contains(&track) {
+            continue;
+        }
         requests.push(SleepRequestState {
             track,
             request: LlmRequest {
@@ -575,14 +590,25 @@ pub(super) fn sleep_run_from_stage1_with_request_ids(
                 role_hint: sleep_task.role_hint,
                 prompt_id: prompt_id.to_string(),
                 prompt_version: sleep_task.prompt_version,
-                prompt_inputs: json!({ "sleep_task": sleep_task.inputs }),
+                prompt_inputs: sleep_request_inputs(&archive_id),
                 expected_output_schema: fallback_schema.to_string(),
             },
             attempts: 0,
             completed: false,
             last_error: None,
+            attempt_errors: Vec::new(),
         });
     }
+
+    let skipped_passes = default_sleep_tracks()
+        .into_iter()
+        .filter(|track| !enabled_tracks.contains(track))
+        .map(|track| sleep_track_prompt_id(track).to_string())
+        .collect::<Vec<_>>();
+    let max_pass_attempts = options
+        .max_pass_attempts
+        .unwrap_or(DEFAULT_SLEEP_PASS_MAX_ATTEMPTS)
+        .max(1);
 
     Ok(SleepRun {
         schema_version: SLEEP_RUN_SCHEMA_VERSION.to_string(),
@@ -590,11 +616,17 @@ pub(super) fn sleep_run_from_stage1_with_request_ids(
         archive_id: stage1.archive_entry.archive_id,
         sleep_task_id: sleep_task.task_id,
         input_reference: None,
+        shared_prompt_context: Some(shared_prompt_context),
         memory_unit_task_id: stage1.memory_unit_task.map(|task| task.task_id),
         stage: SleepRunStage::Extraction,
-        max_pass_attempts: DEFAULT_SLEEP_PASS_MAX_ATTEMPTS,
+        enabled_tracks,
+        max_pass_attempts,
+        max_provider_calls: options.max_provider_calls,
+        provider_calls_issued: 0,
+        budget_exhausted: false,
         requests,
         failed_passes: Vec::new(),
+        skipped_passes,
         memory_unit_result: None,
         emotional_pass: None,
         topic_thread_pass: None,
@@ -604,6 +636,54 @@ pub(super) fn sleep_run_from_stage1_with_request_ids(
         consolidator_narrative: None,
         completion_mode: None,
     })
+}
+
+pub(super) fn sleep_shared_context_from_task_inputs(inputs: &Value) -> Result<LlmSharedContext> {
+    let session_id = inputs
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            MemoryEngineError::Validation("sleep input has no session_id".to_string())
+        })?;
+    let archive_id = inputs
+        .get("preliminary_archive_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            MemoryEngineError::Validation("sleep input has no preliminary_archive_id".to_string())
+        })?;
+    let events: Vec<SleepInputEvent> =
+        serde_json::from_value(inputs.get("events").cloned().ok_or_else(|| {
+            MemoryEngineError::Validation("sleep input has no events".to_string())
+        })?)?;
+    Ok(render_sleep_prompt_context(session_id, archive_id, &events))
+}
+
+pub(super) fn sleep_request_inputs(archive_id: &str) -> Value {
+    json!({
+        "source": "shared_context",
+        "archive_id": archive_id,
+    })
+}
+
+pub(super) fn unique_sleep_tracks(tracks: Vec<SleepTrack>) -> Vec<SleepTrack> {
+    let mut unique = Vec::new();
+    for track in tracks {
+        if !unique.contains(&track) {
+            unique.push(track);
+        }
+    }
+    unique
+}
+
+pub(super) fn sleep_track_prompt_id(track: SleepTrack) -> &'static str {
+    match track {
+        SleepTrack::MemoryUnit => "memory_unit_pass",
+        SleepTrack::Emotional => "sleep_emotional_pass",
+        SleepTrack::TopicThread => "sleep_topic_thread_pass",
+        SleepTrack::PersonalSignal => "sleep_personal_signal_pass",
+        SleepTrack::Relational => "sleep_relational_pass",
+        SleepTrack::Consolidator => "sleep_consolidator",
+    }
 }
 
 pub(super) fn llm_request_from_task(
@@ -677,8 +757,14 @@ pub(super) fn advance_sleep_run_stage(run: &mut SleepRun) -> Result<()> {
                 .filter(|state| state_stage(state.track) == SleepRunStage::Extraction)
                 .all(|state| state.completed)
             {
-                run.stage = SleepRunStage::Consolidation;
-                ensure_consolidator_request(run)?;
+                if run.enabled_tracks.contains(&SleepTrack::Consolidator) {
+                    run.stage = SleepRunStage::Consolidation;
+                    ensure_consolidator_request(run)?;
+                } else {
+                    run.stage = SleepRunStage::ReadyToFinish;
+                    run.completion_mode
+                        .get_or_insert_with(|| "selected_passes".to_string());
+                }
             }
         }
         SleepRunStage::Consolidation => {
@@ -722,9 +808,10 @@ pub(super) fn ensure_consolidator_request_with_id(
             task_id: run.sleep_task_id.clone(),
             role_hint: ModelRole::Balanced,
             prompt_id: "sleep_consolidator".to_string(),
-            prompt_version: 2,
+            prompt_version: 3,
             prompt_inputs: json!({
-                "sleep_task": sleep_task_input_from_run(run),
+                "source": "shared_context",
+                "archive_id": run.archive_id,
                 "emotional_pass": run.emotional_pass.clone().unwrap_or_else(|| json!({ "emotional_markers": [] })),
                 "topic_thread_pass": run.topic_thread_pass.clone().unwrap_or_else(|| json!({ "topic_thread": [] })),
                 "personal_signal_pass": run.personal_signal_pass.clone().unwrap_or_else(|| json!({ "personal_signals": [] })),
@@ -735,24 +822,9 @@ pub(super) fn ensure_consolidator_request_with_id(
         attempts: 0,
         completed: false,
         last_error: None,
+        attempt_errors: Vec::new(),
     });
     Ok(())
-}
-
-pub(super) fn sleep_task_input_from_run(run: &SleepRun) -> Value {
-    run.requests
-        .iter()
-        .find(|state| {
-            matches!(
-                state.track,
-                SleepTrack::Emotional
-                    | SleepTrack::TopicThread
-                    | SleepTrack::PersonalSignal
-                    | SleepTrack::Relational
-            )
-        })
-        .and_then(|state| state.request.prompt_inputs.get("sleep_task").cloned())
-        .unwrap_or_else(|| json!({}))
 }
 
 pub(super) fn state_stage(track: SleepTrack) -> SleepRunStage {
@@ -793,6 +865,7 @@ pub(super) fn handle_sleep_pass_error(
     error: String,
 ) -> Result<()> {
     state.last_error = Some(error.clone());
+    state.attempt_errors.push(error.clone());
     if state.attempts < run.max_pass_attempts {
         state.request.prompt_inputs = add_retry_instruction(&state.request.prompt_inputs, &error);
         if state.track == SleepTrack::MemoryUnit && state.attempts + 1 >= run.max_pass_attempts {
@@ -807,6 +880,73 @@ pub(super) fn handle_sleep_pass_error(
         assign_sleep_track_result(run, state.track, fallback);
     }
     state.completed = true;
+    Ok(())
+}
+
+pub(super) fn fallback_unfinished_sleep_requests(run: &mut SleepRun, reason: &str) {
+    let pending = run
+        .requests
+        .iter()
+        .enumerate()
+        .filter(|(_, state)| !state.completed)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    for index in pending {
+        let track = run.requests[index].track;
+        let prompt_id = run.requests[index].request.prompt_id.clone();
+        let fallback = fallback_value_for_track(track, run);
+        if track != SleepTrack::Consolidator {
+            assign_sleep_track_result(run, track, fallback);
+        }
+        run.requests[index].completed = true;
+        run.requests[index].last_error = Some(reason.to_string());
+        run.requests[index].attempt_errors.push(reason.to_string());
+        push_unique(&mut run.skipped_passes, prompt_id);
+    }
+    run.completion_mode = Some(reason.to_string());
+}
+
+pub(super) fn sleep_pass_reports(run: &SleepRun) -> Vec<SleepPassReport> {
+    run.requests
+        .iter()
+        .map(|state| SleepPassReport {
+            track: state.track,
+            prompt_id: state.request.prompt_id.clone(),
+            attempts: state.attempts,
+            completed: state.completed,
+            recovered_after_retry: state.completed
+                && state.attempts > 0
+                && !state.attempt_errors.is_empty()
+                && !run.failed_passes.contains(&state.request.prompt_id),
+            errors: state.attempt_errors.clone(),
+        })
+        .collect()
+}
+
+pub(super) fn migrate_legacy_sleep_prompt_context(run: &mut SleepRun) -> Result<()> {
+    if run.shared_prompt_context.is_none() {
+        let inputs = run
+            .requests
+            .iter()
+            .find_map(|state| state.request.prompt_inputs.get("sleep_task"))
+            .cloned();
+        if let Some(inputs) = inputs {
+            run.shared_prompt_context = Some(sleep_shared_context_from_task_inputs(&inputs)?);
+        }
+    }
+    if run.shared_prompt_context.is_some() {
+        for state in &mut run.requests {
+            if let Value::Object(inputs) = &mut state.request.prompt_inputs {
+                inputs.remove("sleep_task");
+                inputs
+                    .entry("source".to_string())
+                    .or_insert_with(|| json!("shared_context"));
+                inputs
+                    .entry("archive_id".to_string())
+                    .or_insert_with(|| json!(run.archive_id));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1259,4 +1399,9 @@ pub(super) fn push_unique(target: &mut Vec<String>, value: String) {
     if !target.iter().any(|existing| existing == &value) {
         target.push(value);
     }
+}
+
+pub(super) fn record_core_signal_skip(summary: &mut CoreSignalSummary, reason: &str) {
+    summary.skipped += 1;
+    *summary.skip_reasons.entry(reason.to_string()).or_default() += 1;
 }

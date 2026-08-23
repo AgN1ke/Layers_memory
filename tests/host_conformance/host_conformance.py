@@ -355,7 +355,40 @@ def english_emotional_markers_for_events(events: list[dict[str, Any]]) -> list[d
     return markers
 
 
-def sleep_events_from_request(request: dict[str, Any]) -> list[dict[str, Any]]:
+def sleep_events_from_shared_context(run: dict[str, Any]) -> list[dict[str, Any]]:
+    shared = run.get("shared_prompt_context")
+    content = shared.get("content") if isinstance(shared, dict) else None
+    if not isinstance(content, str) or "\nevents:\n" not in content:
+        return []
+    events: list[dict[str, Any]] = []
+    for line in content.split("\nevents:\n", 1)[1].splitlines():
+        if not line.startswith("[") or "] " not in line:
+            continue
+        metadata_text, text = line[1:].split("] ", 1)
+        parts = metadata_text.split("|")
+        if len(parts) < 4:
+            continue
+        event: dict[str, Any] = {
+            "event_id": parts[0],
+            "timestamp": parts[1],
+            "type": parts[2],
+            "source": parts[3],
+            "memory_text": text,
+            "payload": {"text": text},
+        }
+        for part in parts[4:]:
+            if part.startswith("speaker=") and ":" in part:
+                speaker_id, speaker_name = part.removeprefix("speaker=").split(":", 1)
+                event["speaker"] = {"id": speaker_id, "name": speaker_name}
+            elif part.startswith("w="):
+                event["initial_weight"] = float(part.removeprefix("w="))
+        events.append(event)
+    return events
+
+
+def sleep_events_from_request(
+    request: dict[str, Any], run: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     inputs = request.get("prompt_inputs")
     if not isinstance(inputs, dict):
         raise ConformanceError(f"request has no prompt_inputs: {request!r}")
@@ -365,6 +398,10 @@ def sleep_events_from_request(request: dict[str, Any]) -> list[dict[str, Any]]:
     events = inputs.get("events")
     if isinstance(events, list):
         return [event for event in events if isinstance(event, dict)]
+    if isinstance(run, dict):
+        events = sleep_events_from_shared_context(run)
+        if events:
+            return events
     raise ConformanceError(f"request has no sleep events: {request!r}")
 
 
@@ -396,9 +433,13 @@ def chibigochi_llm_proxy_response(payload: dict[str, Any]) -> dict[str, Any]:
                     "and shared an interest in space through the HTTP LLM bridge path."
                 ),
             }
-        events = [event for event in sleep_events_from_request(request) if event_kind(event) == "user_message"]
+        events = [
+            event
+            for event in sleep_events_from_request(request, run)
+            if event_kind(event) == "user_message"
+        ]
         if not events:
-            events = sleep_events_from_request(request)
+            events = sleep_events_from_request(request, run)
         if prompt_id == "memory_unit_pass":
             response_payload = {
                 "schema_version": "memory_units_result.v1",
@@ -572,7 +613,7 @@ class DirectHostDriver:
                 ),
             }
 
-        events = self._sleep_events(request)
+        events = self._sleep_events(run, request)
         user_events = [event for event in events if event_kind(event) == "user_message"]
         if not user_events:
             user_events = events
@@ -610,17 +651,10 @@ class DirectHostDriver:
             "text": dumps(payload),
         }
 
-    def _sleep_events(self, request: dict[str, Any]) -> list[dict[str, Any]]:
-        inputs = request.get("prompt_inputs")
-        if not isinstance(inputs, dict):
-            raise ConformanceError(f"request has no prompt_inputs: {request!r}")
-        sleep_task = inputs.get("sleep_task")
-        if isinstance(sleep_task, dict) and isinstance(sleep_task.get("events"), list):
-            return [event for event in sleep_task["events"] if isinstance(event, dict)]
-        events = inputs.get("events")
-        if isinstance(events, list):
-            return [event for event in events if isinstance(event, dict)]
-        raise ConformanceError(f"request has no sleep events: {request!r}")
+    def _sleep_events(
+        self, run: dict[str, Any], request: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        return sleep_events_from_request(request, run)
 
     def _submit_valid_fidelity(self, request: dict[str, Any]) -> None:
         unit = request.get("prompt_inputs", {}).get("memory_unit", {})
@@ -661,7 +695,7 @@ class EnglishDirectHostDriver(DirectHostDriver):
                 ),
             }
 
-        events = self._sleep_events(request)
+        events = self._sleep_events(run, request)
         user_events = [event for event in events if event_kind(event) == "user_message"]
         if not user_events:
             user_events = events
@@ -740,6 +774,28 @@ class FakeGemini:
         return self.telegram_bot.GeminiTextResponse(text=text, usage={}, model=model, operation=operation)
 
     def _prompt_inputs(self, prompt: str) -> dict[str, Any]:
+        if prompt.startswith("sleep_prompt_context.v1"):
+            if "<REQUEST_INPUTS>" not in prompt or "</REQUEST_INPUTS>" not in prompt:
+                raise ConformanceError("fake Gemini sleep prompt missed REQUEST_INPUTS")
+            request_json = prompt.split("<REQUEST_INPUTS>", 1)[1].split(
+                "</REQUEST_INPUTS>", 1
+            )[0]
+            payload = json.loads(request_json)
+            prefix = prompt.split("\n\n<TASK_INSTRUCTION>", 1)[0]
+            events = sleep_events_from_shared_context(
+                {"shared_prompt_context": {"content": prefix}}
+            )
+            archive_id = ""
+            for line in prefix.splitlines():
+                if line.startswith("archive="):
+                    archive_id = line.removeprefix("archive=")
+                    break
+            payload["sleep_task"] = {
+                "preliminary_archive_id": archive_id,
+                "archive_id": archive_id,
+                "events": events,
+            }
+            return payload
         try:
             payload = json.loads(prompt)
         except json.JSONDecodeError as err:
@@ -1686,9 +1742,7 @@ def multispeaker_response_for_request(run: dict[str, Any], request: dict[str, An
             ),
         }
 
-    inputs = request.get("prompt_inputs", {})
-    sleep_task = inputs.get("sleep_task", {}) if isinstance(inputs, dict) else {}
-    events = sleep_task.get("events", []) if isinstance(sleep_task, dict) else []
+    events = sleep_events_from_request(request, run)
     events_by_text = {event_text(event): event_id(event) for event in events}
     zheka_id = events_by_text.get("Я нарешті купив мотоцикл!", "")
     anton_id = events_by_text.get("А я на рибалці був, клювало на світанку.", "")

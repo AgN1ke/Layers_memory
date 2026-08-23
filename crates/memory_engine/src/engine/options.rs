@@ -41,7 +41,7 @@ impl Default for SleepStage1Config {
             active_tail_ratio: 0.30,
             partial_sleep_min_events: 10,
             prompt_id: "sleep_compression".to_string(),
-            prompt_version: 2,
+            prompt_version: 3,
         }
     }
 }

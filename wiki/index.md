@@ -59,6 +59,10 @@ crate/host README files stay outside the wiki.
     and S2 exit gate.
 - [Audit 2026-06-10](pages/planning/audit-2026-06-10.md) - post-v0.2 audit,
   cleanup queue, risks, and resolved findings.
+- [Production Integration Feedback 2026-08](pages/planning/production-feedback-2026-08.md)
+  - production observations and implemented controls for Sleep cost, compact
+    provider input, structured chat context, Core/reflection diagnostics and
+    graceful run budgets.
 
 ## Releases
 

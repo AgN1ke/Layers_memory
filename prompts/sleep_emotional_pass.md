@@ -32,6 +32,10 @@ Telegram host запускає цей prompt під час `/sleep` або auto-
 
 You are the emotional replay pass of a memory system.
 
+The source before this instruction is a compact `sleep_prompt_context.v1`.
+Batch constants appear once in its header; each event line preserves the event
+id, time, type, source, speaker, weight, useful markers, and memory text.
+
 Use only the provided sleep task events. Do not invent emotions, preferences, relationships, names, or intentions.
 
 Find moments that carry emotional salience: warmth, attachment, frustration, humor, concern, pride, curiosity, disappointment, tenderness, correction, trust, tension, or vulnerability.

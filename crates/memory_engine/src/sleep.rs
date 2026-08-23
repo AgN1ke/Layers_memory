@@ -6,12 +6,134 @@ use crate::archive::{
     EmotionalMarker, PersonalSignal, PersonalSignalSubjectHint, RelationalTone, TopicThreadItem,
 };
 use crate::event::StoredEvent;
+use crate::llm::LlmSharedContext;
 use crate::types::{
     Id, ImportanceHint, Link, ProcessingMode, Quote, Speaker, Timestamp, WeightedFact,
+    SLEEP_PROMPT_CONTEXT_SCHEMA_VERSION,
 };
 
 pub const SLEEP_INPUT_EVENT_SCHEMA_VERSION: &str = "sleep_input_event.v1";
 pub const SLEEP_INPUT_REFERENCE_SCHEMA_VERSION: &str = "sleep_input_reference.v1";
+
+/// Renders the provider-facing Sleep source once per run. The durable
+/// `SleepInputEvent` remains lossless; this projection contains the fields the
+/// reasoning prompts use and places batch constants in one header.
+pub fn render_sleep_prompt_context(
+    session_id: &str,
+    archive_id: &str,
+    events: &[SleepInputEvent],
+) -> LlmSharedContext {
+    let scope = events
+        .iter()
+        .find_map(|event| event.personality_scope_id.as_deref())
+        .unwrap_or(session_id);
+    let mut lines = vec![
+        SLEEP_PROMPT_CONTEXT_SCHEMA_VERSION.to_string(),
+        format!("session={}", compact_prompt_atom(session_id)),
+        format!("archive={}", compact_prompt_atom(archive_id)),
+        format!("scope={}", compact_prompt_atom(scope)),
+        "events:".to_string(),
+    ];
+    let mut source_text_chars = 0usize;
+
+    for event in events {
+        let source_text = event
+            .memory_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| compact_payload_text(&event.payload));
+        source_text_chars += source_text.chars().count();
+
+        let mut metadata = vec![
+            compact_prompt_atom(&event.event_id),
+            compact_prompt_atom(&event.timestamp),
+            compact_prompt_atom(&event.event_type),
+            compact_prompt_atom(&event.source),
+        ];
+        if let Some(speaker) = &event.speaker {
+            metadata.push(format!(
+                "speaker={}:{}",
+                compact_prompt_atom(&speaker.id),
+                compact_prompt_atom(&speaker.name)
+            ));
+        }
+        metadata.push(format!("w={:.2}", event.initial_weight.clamp(0.0, 1.0)));
+        if !event.tags.is_empty() {
+            metadata.push(format!(
+                "tags={}",
+                event
+                    .tags
+                    .iter()
+                    .map(|tag| compact_prompt_atom(tag))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+        if let Some(theme) = event
+            .theme
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            metadata.push(format!("theme={}", compact_prompt_atom(theme)));
+        }
+        if let Some(tone) = event
+            .emotional_tone
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            metadata.push(format!("tone={}", compact_prompt_atom(tone)));
+        }
+        for link in &event.links {
+            if matches!(link.kind.as_str(), "reply" | "reply_to") {
+                metadata.push(format!("reply_to={}", compact_prompt_atom(&link.target)));
+            }
+        }
+
+        lines.push(format!(
+            "[{}] {}",
+            metadata.join("|"),
+            compact_prompt_text(&source_text)
+        ));
+    }
+
+    let content = lines.join("\n");
+    let rendered_chars = content.chars().count();
+    LlmSharedContext {
+        schema_version: SLEEP_PROMPT_CONTEXT_SCHEMA_VERSION.to_string(),
+        context_id: format!("sleep:{archive_id}"),
+        content,
+        source_event_ids: events.iter().map(|event| event.event_id.clone()).collect(),
+        event_count: events.len(),
+        source_text_chars,
+        rendered_chars,
+        estimated_tokens: rendered_chars.div_ceil(2),
+    }
+}
+
+fn compact_prompt_atom(value: &str) -> String {
+    value
+        .trim()
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(']', "\\]")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn compact_prompt_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn compact_payload_text(payload: &Value) -> String {
+    payload
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| serde_json::to_string(payload).unwrap_or_else(|_| "null".to_string()))
+}
 
 /// Durable pointer used by tasks and SleepRun. The private event projection is
 /// owned by one immutable workflow-input record instead of being copied into

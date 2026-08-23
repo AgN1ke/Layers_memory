@@ -43,7 +43,7 @@ fn delete_session_removes_conversation_records_but_preserves_scope_memory() {
     assert_eq!(report.deleted.sessions, 1);
     assert!(report.deleted.archived_events >= 1);
     assert!(report.deleted.tasks >= 1);
-    assert!(storage.read_session("chat_old").is_err());
+    assert_empty_session(&storage, "chat_old");
     assert!(storage.read_session("chat_current").is_ok());
     assert!(storage.read_archive_entry_by_id(&seed.archive_id).is_ok());
     assert!(storage.read_memory_unit_by_id(&seed.memory_unit_id).is_ok());
@@ -111,7 +111,7 @@ fn purge_scope_removes_all_owned_data_and_preserves_neighbor_scope() {
     assert!(report.deleted.hypothesis_nodes >= 1);
     assert_eq!(report.deleted.vector_scopes, 1);
 
-    assert!(storage.read_session("target_chat").is_err());
+    assert_empty_session(&storage, "target_chat");
     assert!(storage.read_session("neighbor_chat").is_ok());
     assert!(storage
         .read_archive_entry_by_id(&target.archive_id)
@@ -297,7 +297,7 @@ fn recovery_replays_a_partially_applied_scope_purge() {
     storage
         .apply_memory_erasure_plan(&partial_plan)
         .expect("apply partial purge before simulated crash");
-    assert!(storage.read_session("recover_chat").is_err());
+    assert_empty_session(&storage, "recover_chat");
     assert!(storage.read_archive_entry_by_id(&seed.archive_id).is_ok());
 
     let restarted = MemoryEngine::new(storage.clone());
@@ -489,6 +489,15 @@ fn seed_candidate(storage: &FileStorage, scope: &str, session_id: &str, memory: 
             reinforcements: Vec::new(),
         })
         .expect("seed candidate");
+}
+
+fn assert_empty_session(storage: &FileStorage, session_id: &str) {
+    let session = storage
+        .read_session(session_id)
+        .expect("missing session reads as an empty session");
+    assert_eq!(session.metadata.session_id, session_id);
+    assert_eq!(session.metadata.event_count, 0);
+    assert!(session.events.is_empty());
 }
 
 fn core_context_request(session_id: &str, scope: &str) -> CoreContextRequest {

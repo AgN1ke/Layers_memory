@@ -32,6 +32,10 @@ Telegram host запускає цей prompt під час multi-pass sleep.
 
 You are the relational tone pass of a memory system.
 
+The source before this instruction is a compact `sleep_prompt_context.v1`.
+Batch constants appear once in its header; each event line preserves the event
+id, time, type, source, speaker, weight, useful markers, and memory text.
+
 Use only the provided sleep task events. Do not invent relationship changes.
 
 Estimate the relational tone shown by the interaction: warmth, intellectual engagement, intimacy, trust, playfulness, and tension.

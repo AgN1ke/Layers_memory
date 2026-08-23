@@ -27,7 +27,17 @@ The Rust core does not execute this prompt. The host or adapter reads the prompt
 
 ### Multi-pass sleep prompts
 
-The Telegram host now uses these prompts by default during `/sleep` and auto-sleep. The Rust core still creates one `sleep_compression` task; the host performs multiple LLM passes around that task and returns one `sleep_compression_result.v1`.
+The Telegram host uses these prompts by default during `/sleep` and auto-sleep.
+The Rust core creates one durable lossless Sleep input and one compact
+`sleep_prompt_context.v1` projection shared by the selected passes. A host must
+place the shared context first, the pass instruction second, and the small
+request-specific inputs last. This stable prefix allows provider-side prefix
+caching without copying the full event JSON into every request.
+
+The full default profile contains six tracks: memory units, emotional markers,
+topic thread, personal signals, relational tone, and the prose consolidator.
+`begin_sleep_run_with_options` may select a smaller profile and set a whole-run
+provider-call limit. Omitted options preserve the full profile.
 
 `sleep_emotional_pass.md` finds emotionally salient moments supported by events and returns `sleep_emotional_pass_result.v1` with `emotional_markers`.
 
@@ -37,10 +47,13 @@ The Telegram host now uses these prompts by default during `/sleep` and auto-sle
 
 `sleep_relational_pass.md` estimates the supported relational tone and returns `sleep_relational_pass_result.v1` with `relational_tone`.
 
-`sleep_consolidator.md` receives the original sleep task plus all pass outputs and returns the final `sleep_compression_result.v1` with both legacy fields and multi-track fields.
+`sleep_consolidator.md` receives the same shared source plus the available pass
+outputs. It returns the plain-text `GIST:` and narrative overlay; the Rust core
+assembles the final `sleep_compression_result.v1` deterministically.
 
-Prompt version 2 of `sleep_personal_signal_pass.md` and
-`memory_unit_pass.md` preserves participant attribution. Outputs may include
+Prompt version 3 of the multi-pass Sleep prompts uses the compact shared input.
+Participant attribution introduced in version 2 remains part of
+`sleep_personal_signal_pass.md` and `memory_unit_pass.md`. Outputs may include
 `subject_hint` (`self_statement` or `about_other`) and `speaker_id`; these are
 untrusted hints that the Rust core checks against cited source events.
 `memory_fidelity_pass.md` version 2 also checks whether the compressed thesis
@@ -49,7 +62,9 @@ participant names in prose.
 
 Safe to edit: wording, examples, strictness, salience priorities, and output guidance.
 
-Do not change without code/contracts updates: prompt filenames, schema names, required top-level JSON fields, and the rule that consolidator returns `sleep_compression_result.v1`.
+Do not change without code/contracts updates: prompt filenames, schema names,
+required top-level JSON fields, and the rule that the consolidator returns the
+plain-text `consolidator_text.v1` form that starts with `GIST:`.
 
 ### `reflection_analyze.md`
 

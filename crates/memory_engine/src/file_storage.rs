@@ -243,6 +243,29 @@ impl FileStorage {
         read_json(&self.session_json_path(session_id))
     }
 
+    fn empty_session_metadata(&self, session_id: &str) -> SessionMetadata {
+        SessionMetadata {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_id: session_id.to_string(),
+            personality_scope_id: None,
+            host_id: self.host_id.clone(),
+            status: SessionStatus::Active,
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+            updated_at: "1970-01-01T00:00:00Z".to_string(),
+            closed_at: None,
+            event_count: 0,
+            summary: None,
+            active_theme: None,
+            tags: Vec::new(),
+            archived_to: Vec::new(),
+            archived_event_ids: Vec::new(),
+            archived_event_index_complete: true,
+            active_sleep_task_id: None,
+            sleep_pending_event_ids: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
     fn write_session_metadata_file(&self, metadata: &SessionMetadata) -> Result<()> {
         atomic_write_json_relaxed(&self.session_json_path(&metadata.session_id), metadata)
     }
@@ -344,7 +367,15 @@ impl Storage for FileStorage {
     }
 
     fn read_session(&self, session_id: &str) -> Result<SessionRecord> {
-        let metadata = self.read_session_metadata_file(session_id)?;
+        let metadata = if self.session_json_path(session_id).exists() {
+            self.read_session_metadata_file(session_id)?
+        } else if self.session_dir(session_id).exists() {
+            return Err(MemoryEngineError::Storage(format!(
+                "session metadata is missing for materialized session: {session_id}"
+            )));
+        } else {
+            self.empty_session_metadata(session_id)
+        };
         let events = read_jsonl(&self.events_path(session_id))?;
         Ok(SessionRecord { metadata, events })
     }
@@ -379,7 +410,15 @@ impl Storage for FileStorage {
     }
 
     fn read_session_metadata(&self, session_id: &str) -> Result<SessionMetadata> {
-        self.read_session_metadata_file(session_id)
+        if self.session_json_path(session_id).exists() {
+            self.read_session_metadata_file(session_id)
+        } else if self.session_dir(session_id).exists() {
+            Err(MemoryEngineError::Storage(format!(
+                "session metadata is missing for materialized session: {session_id}"
+            )))
+        } else {
+            Ok(self.empty_session_metadata(session_id))
+        }
     }
 
     fn write_session_metadata(&self, metadata: &SessionMetadata) -> Result<()> {

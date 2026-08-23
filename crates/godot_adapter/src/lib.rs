@@ -15,7 +15,7 @@ use memory_engine::core_store::{
 use memory_engine::event::IngestEvent;
 use memory_engine::forgetting::ForgetReviewResult;
 use memory_engine::hypothesis::HypothesisGraphExportRequest;
-use memory_engine::llm::{LlmResponse, SleepRun};
+use memory_engine::llm::{LlmResponse, SleepRun, SleepRunOptions};
 use memory_engine::recall::RecallQuery;
 use memory_engine::reflection::{
     ReflectionActionsResult, ReflectionAnalyzeResult, ReflectionOpportunity,
@@ -75,6 +75,18 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn begin_sleep_run_with_options(&self, session_id: GString, options_json: GString) -> GString {
+        self.with_engine(|engine| {
+            let options: SleepRunOptions =
+                parse_json(&options_json.to_string(), "sleep run options")?;
+            let run = engine
+                .begin_sleep_run_with_options(&session_id.to_string(), options)
+                .map_err(|err| err.to_string())?;
+            dump_json(&run, "sleep run")
+        })
+    }
+
+    #[func]
     fn next_sleep_batch(&self, run_json: GString) -> GString {
         self.with_engine(|engine| {
             let run: SleepRun = parse_json(&run_json.to_string(), "sleep run")?;
@@ -110,6 +122,17 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn finish_sleep_run_with_available(&self, run_json: GString) -> GString {
+        self.with_engine(|engine| {
+            let run: SleepRun = parse_json(&run_json.to_string(), "sleep run")?;
+            let outcome = engine
+                .finish_sleep_run_with_available(run)
+                .map_err(|err| err.to_string())?;
+            dump_json(&outcome, "sleep outcome")
+        })
+    }
+
+    #[func]
     fn core_context_package(&self, request_json: GString) -> GString {
         self.with_engine(|engine| {
             let request: CoreContextRequest =
@@ -131,6 +154,24 @@ impl MemoryEngineGodot {
                 &package,
                 &current_user_message.to_string(),
             ))
+        })
+    }
+
+    #[func]
+    fn render_memory_prompt_plan(
+        &self,
+        package_json: GString,
+        current_user_message: GString,
+    ) -> GString {
+        self.with_engine(|engine| {
+            let package: CoreContextPackage =
+                parse_json(&package_json.to_string(), "core context package")?;
+            let _ = engine;
+            let plan = memory_engine::render_memory_prompt_plan(
+                &package,
+                &current_user_message.to_string(),
+            );
+            dump_json(&plan, "memory prompt plan")
         })
     }
 

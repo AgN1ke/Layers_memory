@@ -38,8 +38,9 @@ use crate::hypothesis::{
 };
 use crate::journal::{JournalOperation, JournalOperationType, JournalState, RecoveryPolicy};
 use crate::llm::{
-    CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmErrorKind, LlmRequest, LlmResponse,
-    SleepOutcome, SleepRequestState, SleepRun, SleepRunStage, SleepRunStep, SleepTrack,
+    default_sleep_tracks, CoreArchiveSeedSummary, CoreSignalSummary, LlmBatch, LlmErrorKind,
+    LlmRequest, LlmResponse, LlmSharedContext, SleepOutcome, SleepPassReport, SleepRequestState,
+    SleepRun, SleepRunOptions, SleepRunStage, SleepRunStep, SleepTrack,
 };
 use crate::manifest::{FeatureFlags, Manifest, SchemaVersions};
 use crate::prompt_view::{
@@ -62,8 +63,8 @@ use crate::session::SessionRecord;
 use crate::sleep::{
     attribute_personal_signals, attribution_session_is_multi_speaker,
     personal_signal_has_user_source, personal_signal_is_auto_core_eligible,
-    resolve_attributed_subject, AttributionEvent, MemoryUnitPassResult, SleepCompressionResult,
-    SleepInputEvent, SleepInputReference,
+    render_sleep_prompt_context, resolve_attributed_subject, AttributionEvent,
+    MemoryUnitPassResult, SleepCompressionResult, SleepInputEvent, SleepInputReference,
 };
 use crate::storage::{Storage, StorageCollection, StorageReadWarning};
 use crate::tasks::{AttemptStatus, PendingTask, TaskAttempt, TaskState, TaskType};

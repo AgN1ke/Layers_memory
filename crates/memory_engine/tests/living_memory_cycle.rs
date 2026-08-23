@@ -397,10 +397,12 @@ fn run_sleep(
     let step = engine.next_sleep_batch(run).expect("first sleep batch");
     run = step.run;
     let batch = step.batch.expect("extraction batch");
-    let event_id = batch.requests[0].prompt_inputs["sleep_task"]["events"][0]["event_id"]
-        .as_str()
+    let event_id = batch
+        .shared_context
+        .as_ref()
+        .and_then(|context| context.source_event_ids.first())
         .expect("event id")
-        .to_string();
+        .clone();
     let archive_id = run.archive_id.clone();
 
     let responses = batch

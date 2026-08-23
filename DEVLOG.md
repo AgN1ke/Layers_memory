@@ -1,5 +1,110 @@
 # DEVLOG
 
+## Запис 168 — 2026-08-24 — Продакшен-витрати Sleep стали керованими, а контекст для хостів — структурованим
+
+Smartest v2 передав звіт із реального групового Telegram-трафіку за 22–23
+серпня: 12 Sleep-запусків, provider ledger та збережені run/session/archive
+records. Продукт окремо взяв на себе власний великий event payload. Цей запис
+закриває одинадцять зауважень, що належать Memory Engine.
+
+### Один компактний матеріал для всіх проходів
+
+Повний lossless Sleep input лишився durable джерелом для recovery, provenance
+та подальшої обробки. Для викликів моделей ядро тепер видає один компактний
+`sleep_prompt_context.v1`: session/archive/scope записані в заголовку, а кожна
+подія подана коротким рядком із часом, автором, типом, вагою, потрібними
+маркерами й `memory_text`. Кожний аналітичний запит несе тільки посилання на
+цей shared context і власну малу інструкцію.
+
+Reference-хости ставлять спільний матеріал першим, а інструкцію конкретного
+проходу після нього. Це створює однаковий префікс для provider cache. Реальну
+cache hit-rate та економію має виміряти Smartest v2 після переходу на новий
+контракт; цифри одного продукту не стали загальним benchmark бібліотеки.
+
+FileStorage може зберігати компактну проєкцію разом із Sleep run. Storage v2
+тримає приватний текст один раз в immutable workflow input і гідрує компактну
+проєкцію лише на worker boundary. Під час фінальної перевірки окремо виправлено
+ризик дублювання приватного тексту у transactional Sleep record.
+
+### Керування вартістю та часткове завершення
+
+Додано публічні options для вибору потрібних аналітичних проходів, загальної
+стелі provider calls та кількості повторів одного проходу. Старий виклик без
+options зберігає повний профіль із шести проходів. Коли бюджет закінчився,
+ядро збирає Complete Archive з уже отриманих результатів і детермінованих
+fallback-даних. Хост також може явно завершити workflow на поточному наборі
+результатів. Оплачена робота зберігається, а вибрані, пропущені й відновлені
+проходи потрапляють у підсумок запуску.
+
+У Telegram reference host параметри доступні через
+`MEMORY_BOT_SLEEP_TRACKS`, `MEMORY_BOT_SLEEP_MAX_PROVIDER_CALLS` і
+`MEMORY_BOT_SLEEP_MAX_PASS_ATTEMPTS`. Споживачі кожного track описані в
+`wiki/pages/planning/production-feedback-2026-08.md`, щоб інтегратор міг
+вибрати профіль свідомо.
+
+### Структурований контекст застосунку
+
+Новий `memory_prompt_plan.v1` повертає Core, Archive, associative memory,
+поточний стан і хронологічні діалогові події окремими полями. Події зберігають
+оригінальний host payload. Role-aware Chat API тепер може передати справжні
+user/assistant turns без регулярних виразів над монолітним XML-подібним
+рядком. Старий `render_memory_view` збережений для текстових інтеграцій.
+
+Порожня, ще не створена Session тепер читається як порожня віртуальна Session,
+тому синтетичний `session_started` більше не потрібен. Водночас уже наявний
+каталог без `session.json` лишається видимою помилкою пошкодження. Під час
+acceptance знайдено й виправлено дублювання подій між `session_trace` та
+`session_recent` у новому plan, включно з повтором поточного повідомлення.
+
+### Пояснювана поведінка Core, reflection і повторів
+
+Перевірка коду уточнила продакшен-спостереження про порожнє Core: Archive →
+Core bridge уже викликався всередині `finish_sleep_run`. Тепер outcome пояснює
+кожний непіднятий personal signal: невалідний сигнал, низька впевненість,
+відсутнє self-authored джерело, потреба у review або близький дублікат.
+
+Reflection status тепер показує окремо active, fidelity-valid, unchecked та
+fidelity-excluded units і скільки salience бракує до запуску. Поріг
+автовалідації важливих units став доступним у Python-конструкторі, тому продукт
+може налаштувати темп накопичення перевірених доказів, зберігаючи правило:
+reflection читає тільки fidelity-valid units.
+
+Кожна спроба Sleep-проходу зберігає свою помилку. Підсумок відрізняє чистий
+успіх від успіху після повтору, тож provider filter або transient failure
+видимі навіть після відновлення.
+
+### Acceptance
+
+Додано `crates/memory_engine/tests/production_feedback.rs` із сімома
+сценаріями: shared compact source, вибір проходів, бюджет одного виклику,
+успішний retry зі звітом, раннє завершення, порожня Session зі структурованим
+payload-preserving plan та пояснення Core bridge. Окремий тест перевіряє merge
+trace/recent без повторів. Оновлено старі end-to-end, Storage v2, Python і
+Godot fixtures під additive contract.
+
+Перевірки на завершенні:
+
+- `cargo fmt --all -- --check` — пройдено;
+- `cargo test --workspace` — пройдено; 1000-session disk stress лишається
+  штатно ignored, малий parallel sibling зелений;
+- `cargo clippy --workspace --all-targets -- -D warnings` — пройдено;
+- focused `production_feedback` — `7 passed`;
+- `living_memory_cycle` і всі 25 transactional Sleep Storage v2 tests —
+  пройдено;
+- PyO3 adapter перебудовано через `maturin develop`; pytest — `20 passed`;
+- `py_compile` для Telegram, Chibigochi proxy, conformance і wiki checker —
+  пройдено;
+- усі 11 deterministic host-conformance режимів пройдено, включно з реальним
+  Godot 4.6 headless;
+- wiki link checker перевірив 68 Markdown-файлів.
+
+### Межа заяви
+
+Зміна дає інтеграціям інструменти для скорочення provider input і керування
+ціною одного Sleep. Реальна економія залежить від профілю проходів, кешу та
+тарифів конкретного провайдера. Її наступний доказ — порівняльний ledger
+Smartest v2 після міграції на shared-prefix contract.
+
 ## Запис 167 — 2026-08-16 — Групова памʼять отримала субʼєктів, а людина — справжнє видалення
 
 Чернетку інтеграційного ТЗ від Smartest v2 розібрано як дві зміни одного

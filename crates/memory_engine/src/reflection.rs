@@ -53,8 +53,20 @@ pub struct ReflectionTriggerStatus {
     pub reflection_scope: String,
     pub opportunity: ReflectionOpportunity,
     pub evaluated_at: Timestamp,
+    /// All active Archive units in the bound reflection sessions, before
+    /// fidelity/reflection checkpoint filtering.
+    #[serde(default)]
+    pub active_memory_unit_count: usize,
+    #[serde(default)]
+    pub valid_memory_unit_count: usize,
+    #[serde(default)]
+    pub unchecked_memory_unit_count: usize,
+    #[serde(default)]
+    pub fidelity_excluded_memory_unit_count: usize,
     pub eligible_memory_unit_count: usize,
     pub accumulated_salience: f64,
+    #[serde(default)]
+    pub salience_remaining: f64,
     pub salience_threshold: f64,
     pub critical_unit_weight: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

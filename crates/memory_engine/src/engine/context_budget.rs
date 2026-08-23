@@ -27,6 +27,7 @@ pub(super) fn session_context_events(
             source: event.source.clone(),
             speaker: event.speaker.clone(),
             text: event_text(event),
+            payload: event.payload.clone(),
             tags: event.tags.clone(),
             theme: event.theme.clone(),
         })

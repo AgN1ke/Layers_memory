@@ -1794,6 +1794,19 @@ impl<S: Storage> MemoryEngine<S> {
             .as_ref()
             .and_then(|state| state.last_completed_at.clone());
 
+        let active_units =
+            self.reflection_active_memory_units_for_sessions_unlocked(&source_session_ids)?;
+        let active_memory_unit_count = active_units.len();
+        let valid_memory_unit_count = active_units
+            .iter()
+            .filter(|unit| unit.fidelity_status == FidelityStatus::Valid)
+            .count();
+        let unchecked_memory_unit_count = active_units
+            .iter()
+            .filter(|unit| unit.fidelity_status == FidelityStatus::Unchecked)
+            .count();
+        let fidelity_excluded_memory_unit_count =
+            active_memory_unit_count.saturating_sub(valid_memory_unit_count);
         let eligible = self
             .reflection_memory_units_for_sessions_unlocked(&source_session_ids)?
             .into_iter()
@@ -1803,6 +1816,8 @@ impl<S: Storage> MemoryEngine<S> {
             .iter()
             .map(|unit| unit.weight.clamp(0.0, 1.0))
             .sum::<f64>();
+        let salience_remaining =
+            (self.options.reflection.salience_threshold - accumulated_salience).max(0.0);
         let oldest_eligible_memory_at = eligible.iter().map(|unit| unit.created_at.clone()).min();
 
         if let Some(task) = self.active_reflection_task_unlocked(session_id, &reflection_scope)? {
@@ -1813,8 +1828,13 @@ impl<S: Storage> MemoryEngine<S> {
                 reflection_scope,
                 opportunity,
                 evaluated_at: now,
+                active_memory_unit_count,
+                valid_memory_unit_count,
+                unchecked_memory_unit_count,
+                fidelity_excluded_memory_unit_count,
                 eligible_memory_unit_count: eligible.len(),
                 accumulated_salience,
+                salience_remaining,
                 salience_threshold: self.options.reflection.salience_threshold,
                 critical_unit_weight: self.options.reflection.critical_unit_weight,
                 oldest_eligible_memory_at,
@@ -1861,8 +1881,13 @@ impl<S: Storage> MemoryEngine<S> {
             reflection_scope,
             opportunity,
             evaluated_at: now,
+            active_memory_unit_count,
+            valid_memory_unit_count,
+            unchecked_memory_unit_count,
+            fidelity_excluded_memory_unit_count,
             eligible_memory_unit_count: eligible.len(),
             accumulated_salience,
+            salience_remaining,
             salience_threshold: self.options.reflection.salience_threshold,
             critical_unit_weight: self.options.reflection.critical_unit_weight,
             oldest_eligible_memory_at,
@@ -2164,6 +2189,37 @@ impl<S: Storage> MemoryEngine<S> {
             .into_iter()
             .map(|context| context.unit)
             .collect())
+    }
+
+    fn reflection_active_memory_units_for_sessions_unlocked(
+        &self,
+        source_session_ids: &[String],
+    ) -> Result<Vec<MemoryUnit>> {
+        let allowed_sessions = source_session_ids.iter().cloned().collect::<HashSet<_>>();
+        let archives = self
+            .storage
+            .read_archive(&ArchiveFilters::default())?
+            .into_items()
+            .into_iter()
+            .filter(|archive| {
+                archive.status == ArchiveStatus::Complete
+                    && allowed_sessions.contains(&archive.source_session_id)
+            })
+            .collect::<Vec<_>>();
+        let mut units = Vec::new();
+        for archive in archives {
+            units.extend(
+                self.storage
+                    .read_memory_units_for_archive(&archive.archive_id)?
+                    .into_items()
+                    .into_iter()
+                    .filter(|unit| {
+                        unit.status == MemoryUnitStatus::ActiveArchive
+                            && allowed_sessions.contains(&unit.source_session_id)
+                    }),
+            );
+        }
+        Ok(units)
     }
 
     fn reflection_candidates_for_scope_unlocked(

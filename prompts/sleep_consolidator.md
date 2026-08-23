@@ -33,6 +33,10 @@ You are the prose consolidator of a multi-pass memory system.
 Use only the provided sleep task events and pass results. Do not invent facts,
 emotions, names, relationships, or intentions.
 
+The source before this instruction is the same compact
+`sleep_prompt_context.v1` prefix used by the extraction passes. Structured pass
+results follow this instruction in `REQUEST_INPUTS`.
+
 The structured archive will be assembled by the memory engine from already
 validated tracks. Do not copy the tracks back as JSON. Do not try to preserve
 every detail. Write the natural memory that a person would keep after the

@@ -9,6 +9,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -61,6 +62,19 @@ DEFAULT_IDLE_SLEEP_HOUR = 4
 DEFAULT_IDLE_SLEEP_MIN_SECONDS = 1800
 DEV_SLEEP_NOTICES_ENV = "MEMORY_BOT_DEV_SLEEP_NOTICES"
 AUTO_REFLECTION_ENV = "MEMORY_BOT_AUTO_REFLECTION"
+SLEEP_TRACKS_ENV = "MEMORY_BOT_SLEEP_TRACKS"
+SLEEP_MAX_PROVIDER_CALLS_ENV = "MEMORY_BOT_SLEEP_MAX_PROVIDER_CALLS"
+SLEEP_MAX_PASS_ATTEMPTS_ENV = "MEMORY_BOT_SLEEP_MAX_PASS_ATTEMPTS"
+FIDELITY_WEIGHT_THRESHOLD_ENV = "MEMORY_BOT_FIDELITY_WEIGHT_THRESHOLD"
+DEFAULT_FIDELITY_WEIGHT_THRESHOLD = 0.85
+DEFAULT_SLEEP_TRACKS = (
+    "memory_unit",
+    "emotional",
+    "topic_thread",
+    "personal_signal",
+    "relational",
+    "consolidator",
+)
 RECENT_CONTEXT_LIMIT = 40
 SESSION_TRACE_EVENT_LIMIT = 120
 
@@ -434,6 +448,7 @@ def main() -> None:
     engine = memory_engine.MemoryEngine(
         str(MEMORY_DIR),
         host_id="telegram_gemini_bot",
+        fidelity_auto_validate_weight_threshold=read_fidelity_weight_threshold(),
     )
     telegram = TelegramClient(telegram_token)
     gemini = GeminiClient(gemini_key)
@@ -463,6 +478,8 @@ def main() -> None:
         f"token_pressure_ratio={read_token_pressure_ratio()} "
         f"idle_sleep_hour={read_idle_sleep_hour()} "
         f"idle_sleep_min_seconds={read_idle_sleep_min_seconds()} "
+        f"sleep_options={json.dumps(read_sleep_run_options(), sort_keys=True)} "
+        f"fidelity_weight_threshold={read_fidelity_weight_threshold()} "
         f"dev_sleep_notices={sleep_notices_enabled()}"
     )
 
@@ -808,7 +825,7 @@ def queue_sleep_update(
     if has_pending_sleep_task(engine, session_id):
         log_line(f"{reason} skipped: pending sleep task already exists for session={session_id}")
         return
-    sleep_run = json.loads(engine.begin_sleep_run(session_id))
+    sleep_run = begin_configured_sleep_run(engine, session_id)
     queued = sleep_runner.submit(
         sleep_run,
         telegram=telegram,
@@ -1114,7 +1131,7 @@ def run_sleep(
     llm_config: HostLlmConfig,
     session_id: str,
 ) -> str:
-    sleep_run = json.loads(engine.begin_sleep_run(session_id))
+    sleep_run = begin_configured_sleep_run(engine, session_id)
     return complete_sleep_result(engine, gemini, llm_config, sleep_run)
 
 
@@ -1131,7 +1148,11 @@ def complete_sleep_result(
         batch = step.get("batch")
         if not batch:
             break
-        responses = [execute_llm_request(request, gemini, llm_config) for request in batch["requests"]]
+        shared_context = batch.get("shared_context")
+        responses = [
+            execute_llm_request(request, gemini, llm_config, shared_context)
+            for request in batch["requests"]
+        ]
         step = json.loads(
             engine.submit_sleep_batch(
                 json.dumps(run, ensure_ascii=False),
@@ -1142,6 +1163,10 @@ def complete_sleep_result(
 
     outcome = json.loads(engine.finish_sleep_run(json.dumps(run, ensure_ascii=False)))
     updated = outcome["archive_entry"]
+    provider_call_limit = outcome.get("max_provider_calls")
+    provider_call_limit_label = (
+        provider_call_limit if provider_call_limit is not None else "unlimited"
+    )
     core_summary = outcome.get("core_summary", {})
     fidelity_summary = run_auto_fidelity_requests(
         engine,
@@ -1175,6 +1200,12 @@ def complete_sleep_result(
         f"archive={updated.get('archive_id')} "
         f"completion_mode={outcome.get('completion_mode')} "
         f"failed_passes={','.join(outcome.get('failed_passes', [])) or 'none'} "
+        f"skipped_passes={','.join(outcome.get('skipped_passes', [])) or 'none'} "
+        f"provider_calls={outcome.get('provider_calls_issued', 0)}/"
+        f"{provider_call_limit_label} "
+        f"budget_exhausted={bool(outcome.get('budget_exhausted'))} "
+        f"recovered_passes={sum(1 for report in outcome.get('pass_reports', []) if report.get('recovered_after_retry'))} "
+        f"core={format_core_signal_counts(core_summary)} "
         f"fidelity={format_fidelity_summary_for_log(fidelity_summary)} "
         f"embeddings={format_embedding_summary_for_log(embedding_summary)} "
         f"repairs={format_memory_unit_repair_summary_for_log(repair_summary)} "
@@ -1186,6 +1217,9 @@ def complete_sleep_result(
         f"Task: {sleep_run.get('sleep_task_id')}\n"
         f"Completion: {outcome.get('completion_mode')}\n"
         f"Failed passes: {', '.join(outcome.get('failed_passes', [])) or 'none'}\n"
+        f"Skipped passes: {', '.join(outcome.get('skipped_passes', [])) or 'none'}\n"
+        f"Provider calls: {outcome.get('provider_calls_issued', 0)}/"
+        f"{provider_call_limit_label}\n"
         f"Compact memory tokens: {compact_tokens}\n"
         f"Emotional markers: {len(updated.get('emotional_markers', []))}\n"
         f"Personal signals: {len(updated.get('personal_signals', []))}\n"
@@ -1202,6 +1236,7 @@ def execute_llm_request(
     request: dict[str, Any],
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    shared_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     request_id = clean_string(request.get("request_id"))
     prompt_id = clean_string(request.get("prompt_id"))
@@ -1210,18 +1245,48 @@ def execute_llm_request(
         prompt_path = PROMPTS_DIR / f"{prompt_id}.md"
         prompt_text = prompt_path.read_text(encoding="utf-8")
         selection = llm_config.for_role(role_hint)
-        prompt_payload = json.dumps(request.get("prompt_inputs", {}), ensure_ascii=False, indent=2)
+        request_inputs = json.dumps(
+            request.get("prompt_inputs", {}), ensure_ascii=False, separators=(",", ":")
+        )
+        shared_content = clean_string(
+            shared_context.get("content") if isinstance(shared_context, dict) else ""
+        )
+        if shared_content:
+            system_instruction = (
+                "You execute a versioned Memory Engine task. The user message starts with "
+                "the complete source context shared by this batch and ends with the "
+                "pass-specific instruction. Use only that source and return the requested format."
+            )
+            prompt_payload = (
+                f"{shared_content}\n\n<TASK_INSTRUCTION>\n{prompt_text}\n"
+                f"</TASK_INSTRUCTION>\n<REQUEST_INPUTS>{request_inputs}</REQUEST_INPUTS>"
+            )
+        else:
+            system_instruction = prompt_text
+            prompt_payload = json.dumps(
+                request.get("prompt_inputs", {}), ensure_ascii=False, indent=2
+            )
         response = gemini.generate_text(
             model=selection.model,
-            system_instruction=prompt_text,
+            system_instruction=system_instruction,
             prompt=prompt_payload,
-            response_mime_type="application/json",
+            response_mime_type=(None if prompt_id == "sleep_consolidator" else "application/json"),
             operation=prompt_id,
             model_role=role_hint,
             telemetry={
                 "prompt_id": prompt_id,
                 "request_id": request_id,
                 "task_id": request.get("task_id"),
+                "shared_context_id": (
+                    shared_context.get("context_id")
+                    if isinstance(shared_context, dict)
+                    else None
+                ),
+                "shared_context_estimated_tokens": (
+                    shared_context.get("estimated_tokens")
+                    if isinstance(shared_context, dict)
+                    else None
+                ),
             },
         )
         return {"status": "ok", "request_id": request_id, "text": response.text}
@@ -1401,9 +1466,16 @@ def run_automatic_reflection_after_sleep(
         summary = {
             "enabled": True,
             "reason": clean_string(status.get("reason")) or "unknown",
+            "active_units": int_or_zero(status.get("active_memory_unit_count")),
+            "valid_units": int_or_zero(status.get("valid_memory_unit_count")),
+            "unchecked_units": int_or_zero(status.get("unchecked_memory_unit_count")),
+            "fidelity_excluded_units": int_or_zero(
+                status.get("fidelity_excluded_memory_unit_count")
+            ),
             "eligible_units": int_or_zero(status.get("eligible_memory_unit_count")),
             "source_sessions": len(status.get("source_session_ids") or []),
             "salience": float(status.get("accumulated_salience") or 0.0),
+            "salience_remaining": float(status.get("salience_remaining") or 0.0),
             "task_id": None,
             "new_units": 0,
             "related_units": 0,
@@ -1455,6 +1527,10 @@ def format_automatic_reflection_summary(summary: dict[str, Any]) -> str:
         return reason
     candidates = int_or_zero(summary.get("candidates"))
     eligible = int_or_zero(summary.get("eligible_units"))
+    active = int_or_zero(summary.get("active_units"))
+    valid = int_or_zero(summary.get("valid_units"))
+    unchecked = int_or_zero(summary.get("unchecked_units"))
+    excluded = int_or_zero(summary.get("fidelity_excluded_units"))
     sessions = int_or_zero(summary.get("source_sessions"))
     new_units = int_or_zero(summary.get("new_units"))
     related = int_or_zero(summary.get("related_units"))
@@ -1462,7 +1538,8 @@ def format_automatic_reflection_summary(summary: dict[str, Any]) -> str:
     reinforced = int_or_zero(summary.get("reinforced_candidates"))
     no_insight = clean_string(summary.get("no_insight_reason")) or "none"
     return (
-        f"{reason}, sessions={sessions}, eligible={eligible}, new={new_units}, "
+        f"{reason}, sessions={sessions}, active={active}, valid={valid}, "
+        f"unchecked={unchecked}, fidelity_excluded={excluded}, eligible={eligible}, new={new_units}, "
         f"related={related}, existing={existing}, candidates={candidates}, "
         f"reinforced={reinforced}, no_insight={no_insight}"
     )
@@ -1927,12 +2004,19 @@ def promote_existing_archives(engine: memory_engine.MemoryEngine) -> dict[str, i
     return json.loads(engine.seed_core_from_archives())
 
 
-def format_core_signal_counts(summary: dict[str, int]) -> str:
-    return (
+def format_core_signal_counts(summary: dict[str, Any]) -> str:
+    rendered = (
         f"{summary.get('created', 0)} new, "
         f"{summary.get('updated', 0)} updated, "
-        f"{summary.get('skipped', 0)} skipped"
+        f"{summary.get('skipped', 0)} skipped, "
+        f"{summary.get('review_candidates', 0)} review candidates"
     )
+    reasons = summary.get("skip_reasons")
+    if isinstance(reasons, dict) and reasons:
+        rendered += ", reasons=" + ",".join(
+            f"{reason}:{count}" for reason, count in sorted(reasons.items())
+        )
+    return rendered
 
 
 def normalize_string_list(value: Any) -> list[str]:
@@ -2314,6 +2398,80 @@ def read_token_pressure_ratio() -> float:
     return min(1.0, max(0.10, value))
 
 
+def read_fidelity_weight_threshold() -> float:
+    raw = os.environ.get(FIDELITY_WEIGHT_THRESHOLD_ENV)
+    if not raw:
+        return DEFAULT_FIDELITY_WEIGHT_THRESHOLD
+    try:
+        value = float(raw)
+    except ValueError:
+        print(
+            f"Invalid {FIDELITY_WEIGHT_THRESHOLD_ENV}={raw!r}; "
+            f"using {DEFAULT_FIDELITY_WEIGHT_THRESHOLD}."
+        )
+        return DEFAULT_FIDELITY_WEIGHT_THRESHOLD
+    if not math.isfinite(value):
+        print(
+            f"Invalid {FIDELITY_WEIGHT_THRESHOLD_ENV}={raw!r}; "
+            f"using {DEFAULT_FIDELITY_WEIGHT_THRESHOLD}."
+        )
+        return DEFAULT_FIDELITY_WEIGHT_THRESHOLD
+    return min(1.0, max(0.0, value))
+
+
+def read_optional_nonnegative_int(env_name: str) -> int | None:
+    raw = os.environ.get(env_name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"Invalid {env_name}={raw!r}; using no override.")
+        return None
+    if value < 0:
+        print(f"Invalid {env_name}={raw!r}; using no override.")
+        return None
+    return value
+
+
+def read_sleep_tracks() -> list[str]:
+    raw = os.environ.get(SLEEP_TRACKS_ENV)
+    if raw is None or not raw.strip():
+        return list(DEFAULT_SLEEP_TRACKS)
+    tracks = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    unknown = sorted(set(tracks).difference(DEFAULT_SLEEP_TRACKS))
+    if unknown:
+        raise ValueError(
+            f"Unknown {SLEEP_TRACKS_ENV} value(s): {', '.join(unknown)}; "
+            f"allowed: {', '.join(DEFAULT_SLEEP_TRACKS)}"
+        )
+    return list(dict.fromkeys(tracks))
+
+
+def read_sleep_run_options() -> dict[str, Any]:
+    max_attempts = read_optional_nonnegative_int(SLEEP_MAX_PASS_ATTEMPTS_ENV)
+    if max_attempts == 0:
+        print(f"{SLEEP_MAX_PASS_ATTEMPTS_ENV}=0 is invalid; using one attempt.")
+        max_attempts = 1
+    return {
+        "enabled_tracks": read_sleep_tracks(),
+        "max_provider_calls": read_optional_nonnegative_int(SLEEP_MAX_PROVIDER_CALLS_ENV),
+        "max_pass_attempts": max_attempts,
+    }
+
+
+def begin_configured_sleep_run(
+    engine: memory_engine.MemoryEngine,
+    session_id: str,
+) -> dict[str, Any]:
+    return json.loads(
+        engine.begin_sleep_run_with_options(
+            session_id,
+            json.dumps(read_sleep_run_options(), ensure_ascii=False),
+        )
+    )
+
+
 def read_idle_sleep_hour() -> int:
     raw = os.environ.get("MEMORY_BOT_IDLE_SLEEP_HOUR")
     if not raw:
@@ -2594,9 +2752,19 @@ def log_sleep_compression_metrics(
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     sleep_task = sleep_task_inputs_from_run(sleep_run)
-    events = sleep_task.get("events", [])
-    transcript = sleep_events_transcript(events if isinstance(events, list) else [])
-    raw_tokens = estimate_tokens(transcript)
+    shared_context = sleep_run.get("shared_prompt_context")
+    if isinstance(shared_context, dict):
+        raw_event_count = int_or_zero(shared_context.get("event_count"))
+        source_text_chars = int_or_zero(shared_context.get("source_text_chars"))
+        raw_tokens = (source_text_chars + 1) // 2
+        sleep_prompt_tokens = int_or_zero(shared_context.get("estimated_tokens"))
+    else:
+        legacy_events = sleep_task.get("events", [])
+        events = legacy_events if isinstance(legacy_events, list) else []
+        raw_event_count = len(events)
+        transcript = sleep_events_transcript(events)
+        raw_tokens = estimate_tokens(transcript)
+        sleep_prompt_tokens = raw_tokens
     stored_archive_payload = {
         "gist": result.get("gist"),
         "narrative": result.get("narrative"),
@@ -2620,8 +2788,12 @@ def log_sleep_compression_metrics(
         "kind": "sleep_compression_metric",
         "task_id": sleep_run.get("sleep_task_id"),
         "archive_id": result.get("archive_id") or sleep_task.get("preliminary_archive_id"),
-        "raw_event_count": len(events) if isinstance(events, list) else 0,
+        "raw_event_count": raw_event_count,
         "raw_chat_estimated_tokens": raw_tokens,
+        "sleep_prompt_source_estimated_tokens": sleep_prompt_tokens,
+        "sleep_prompt_context_id": (
+            shared_context.get("context_id") if isinstance(shared_context, dict) else None
+        ),
         "stored_archive_estimated_tokens": stored_archive_tokens,
         "stored_archive_ratio": round(stored_ratio, 4),
         "prompt_archive_estimated_tokens": prompt_memory_view_tokens,
