@@ -65,6 +65,9 @@ crate/host README files stay outside the wiki.
   - phased operator protocol: qualify logging first, then collect redacted
     production evidence, run controlled comparisons and decide the v0.5/v0.6
     boundary from explicit hypotheses.
+- [Smartest v2 Phase 1 Review 2026-08-25](pages/planning/smartest-v2-phase1-review-2026-08-25.md)
+  - independent assessment of the first returned telemetry package, interim
+    H1-H7 evidence and the correction handoff required before Phase 2.
 
 ## Releases
 

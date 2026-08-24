@@ -4,6 +4,8 @@
 
 - [Production Integration Feedback](production-feedback-2026-08.md) - the
   eleven production findings and the implemented library response.
+- [Smartest Phase 1 Review 2026-08-25](smartest-v2-phase1-review-2026-08-25.md) -
+  independent review of the first returned package and the correction handoff.
 - [Roadmap](roadmap.md) - active ordering from production validation into
   autonomous reflection and v0.6.
 - [Autonomous Reflection v0.5](autonomous-reflection-v0.5.md) - trigger,
@@ -17,8 +19,8 @@
 
 ## Status, audience and current phase
 
-Status: **owner-approved production protocol; Phase 1 instrumentation handoff
-is ready for 2026-08-25**.
+Status: **owner-approved production protocol; first Phase 1 package reviewed
+2026-08-25 as `CHANGES_REQUIRED`**.
 
 This document is addressed to the Smartest v2 engineer or operator who can
 change application logging and inspect provider usage, Memory Engine outputs,
@@ -37,12 +39,32 @@ Smartest should complete only Phase 1 first and return its small redacted
 sample. Long measurement starts after the Memory Engine maintainer confirms
 that the records are complete and internally consistent.
 
-### Assignment for 2026-08-25
+### Original assignment for 2026-08-25
 
 For the first handoff, Smartest implements only **Phase 1** below: install the required build,
 add five structured log streams, run one short sample and return the seven
 redacted artifacts. Phases 2–4 explain why these fields are collected and what
 will happen after qualification; they are not first-day implementation work.
+
+### Returned sample review - 2026-08-25
+
+Smartest returned eight usable cohort-B Sleep runs, provider/chat/reflection/
+health ledgers and a privacy-safe export. The package proved that compact shared
+Sleep input is active and exposed several real host-observability gaps. Phase 1
+remains open because engine build provenance, physical provider attempts,
+automatic fidelity coverage, chat budget fields, Core scope diagnostics and
+vector-task state are incomplete.
+
+The exact evidence, interim H1-H7 assessment and replacement-sample checklist
+are recorded in the
+[Phase 1 review](smartest-v2-phase1-review-2026-08-25.md). The next handoff is a
+small new cohort with corrected instrumentation. The formal multi-day Phase 2
+window starts only after that cohort is `QUALIFIED`.
+
+The corrected cohort uses study-export schema version `v2` for all six JSON
+record types below. The file names stay unchanged. This prevents v1 rows with
+ambiguous attempts or missing scope/process fields from being mixed into the
+formal cohort.
 
 ## Why this validation exists
 
@@ -170,8 +192,9 @@ Create `smartest_validation_build.json` containing:
 
 ```json
 {
-  "schema_version": "smartest_validation_build.v1",
+  "schema_version": "smartest_validation_build.v2",
   "engine_commit": "1aa427b-or-descendant",
+  "engine_build_source": "ci-artifact-manifest-or-equivalent",
   "host_commit": "...",
   "loaded_extension_path": "redacted-or-relative-path",
   "loaded_extension_sha256": "sha256:...",
@@ -182,6 +205,9 @@ Create `smartest_validation_build.json` containing:
     "fast": "exact-provider/model",
     "balanced": "exact-provider/model",
     "reasoning": "exact-provider/model"
+  },
+  "provider_api_surfaces": {
+    "gemini": "generateContent|interactions|vertex"
   },
   "sleep_tracks": [
     "memory_unit",
@@ -196,6 +222,12 @@ Create `smartest_validation_build.json` containing:
   "host_payload_fix_active": true,
   "vectors_enabled": false,
   "vector_model": null,
+  "fidelity_auto_validation": {
+    "enabled": true,
+    "weight_threshold": 0.85,
+    "routing_owner": "memory_engine",
+    "configured_tags": ["identity", "profile", "personal", "..."]
+  },
   "fidelity_config_digest": "hmac-sha256:...",
   "reflection_config_digest": "hmac-sha256:..."
 }
@@ -207,6 +239,11 @@ inside Smartest's protected records. Keep the selected source-event IDs and
 their protected runtime data available for a later isolated replay; only
 anonymized IDs leave Smartest.
 
+`engine_commit` must identify the source that produced the loaded extension.
+When the runtime server has no Git checkout, the build pipeline writes the
+commit into an artifact manifest and the exporter joins it by extension
+SHA-256. `unknown` does not qualify the build.
+
 ### Step 2. Add five structured log streams
 
 The names are recommendations. Equivalent tables or tracing events are valid
@@ -215,7 +252,7 @@ not new public Memory Engine API contracts.
 
 | Stream | Write point | Canonical source inside Smartest |
 |---|---|---|
-| `provider_calls` | Immediately after every provider attempt, including failures. | Host provider executor plus exact provider usage metadata. |
+| `provider_calls` | Immediately after every physical provider request, including inner transport retries and failures. | Host provider executor plus exact provider usage metadata. |
 | `sleep_runs` | Once after a terminal Sleep outcome. | `SleepOutcome`, its Archive entry, Core summary, pass reports and post-processing summaries. |
 | `reflection_snapshots` | After post-Sleep fidelity and after any reflection submit. | `reflection_status` plus the structured reflection outcome. |
 | `chat_context_turns` | Once for every ordinary chat-generation call. | `core_context_package`, its budget report, `memory_prompt_plan.v1` and provider usage. |
@@ -226,20 +263,23 @@ chat call has no Sleep `run_id` or shared context.
 
 #### 2.1 Provider calls
 
-Write one record for every chat, Sleep, fidelity and reflection model call.
-Local embedding work may use the same stream with `provider = local`.
+Write one record for every physical chat, Sleep, fidelity and reflection model
+request. Local embedding work may use the same stream with `provider = local`.
 
 ```json
 {
-  "schema_version": "smartest_provider_call.v1",
+  "schema_version": "smartest_provider_call.v2",
   "timestamp": "RFC3339",
   "workflow": "sleep",
   "chat_id": "anon_chat_001",
   "run_id": "anon_run_001",
-  "request_id": "anon_request_001",
+  "origin_run_id": "anon_run_001",
+  "request_id": "anon_physical_request_001",
+  "engine_request_id": "anon_engine_request_001",
   "task_id": "anon_task_001",
   "prompt_id": "memory_unit_pass",
-  "attempt": 1,
+  "engine_attempt": 1,
+  "provider_attempt": 1,
   "model_role": "balanced",
   "provider": "gemini",
   "model": "exact-model-id",
@@ -276,13 +316,24 @@ Map provider errors to stable categories such as `rate_limit`, `timeout`,
 `content_filter`, `invalid_response`, `transport` and `unknown`. Raw provider
 error text stays in protected logs.
 
+`engine_attempt` counts Memory Engine semantic/pass attempts.
+`provider_attempt` counts transport retries made while executing one engine
+request. `request_id` is unique for every actual provider request, while
+`engine_request_id` groups its transport retries. Write failed physical
+requests as separate rows instead of exporting only the final retry.
+
+Post-Sleep fidelity, repair and reflection requests inherit `origin_run_id`
+from the Sleep outcome that scheduled them. A genuinely manual or scheduled
+request without a parent run leaves the field `null` and records its origin
+category separately.
+
 #### 2.2 Sleep runs
 
 Write one record after every terminal Sleep outcome:
 
 ```json
 {
-  "schema_version": "smartest_sleep_run.v1",
+  "schema_version": "smartest_sleep_run.v2",
   "run_id": "anon_run_001",
   "chat_id": "anon_chat_001",
   "session_id": "anon_session_001",
@@ -324,6 +375,16 @@ Write one record after every terminal Sleep outcome:
   "core_review_candidates": 1,
   "core_skip_reasons": {"requires_attribution_review": 1},
   "fidelity_requested": 3,
+  "new_unit_weight_histogram": {
+    "below_0_65": 1,
+    "0_65_to_0_84": 2,
+    "0_85_and_above": 1
+  },
+  "auto_fidelity_weight_histogram": {
+    "below_0_65": 0,
+    "0_65_to_0_84": 1,
+    "0_85_and_above": 1
+  },
   "fidelity_valid": 3,
   "fidelity_rejected": 0,
   "fidelity_needs_revision": 0,
@@ -341,6 +402,9 @@ that concatenated text and is intentionally separate from the engine's JSON
 budget estimator. Keep every
 `pass_report`: attempts, errors by stable category, terminal status and
 `recovered_after_retry`. A successful retry still records the earlier failure.
+Record text-free weight histograms for all new units and units selected by
+automatic fidelity. Keep the same documented bins for the whole cohort. This
+shows coverage without asking the host to reproduce the core's routing policy.
 
 #### 2.3 Reflection snapshots
 
@@ -349,8 +413,11 @@ the optional reflection result when a task runs:
 
 ```json
 {
-  "schema_version": "smartest_reflection_snapshot.v1",
+  "schema_version": "smartest_reflection_snapshot.v2",
+  "timestamp": "RFC3339",
   "run_id": "anon_run_001",
+  "origin_run_id": "anon_run_001",
+  "snapshot_phase": "after_auto_fidelity",
   "reflection_scope": "anon_scope_001",
   "active_units": 12,
   "valid_units": 7,
@@ -377,6 +444,12 @@ the optional reflection result when a task runs:
 Keep candidate and evidence text inside Smartest. Returned records contain
 only action types, counts, anonymized IDs and final statuses.
 
+Complete every fidelity request returned by the Sleep outcome before capturing
+the snapshot. The host does not select additional units. Record the core-owned
+automatic routing threshold and text-free counts by routing reason. A second
+snapshot after reflection submit uses `snapshot_phase: after_reflection`. This
+ordering makes the active -> valid -> eligible funnel reproducible.
+
 #### 2.4 Chat context turns
 
 Write one record for ordinary response generation. This measures the actual
@@ -384,13 +457,17 @@ token-facing product path as well as Sleep:
 
 ```json
 {
-  "schema_version": "smartest_chat_context_turn.v1",
+  "schema_version": "smartest_chat_context_turn.v2",
   "timestamp": "RFC3339",
   "turn_id": "anon_turn_001",
   "chat_id": "anon_chat_001",
   "session_id": "anon_session_001",
   "prompt_plan_schema": "memory_prompt_plan.v1",
   "conversation_state": "ongoing",
+  "include_core": true,
+  "requested_core_scope_fingerprint": "hmac-sha256:...",
+  "session_personality_scope_fingerprint": "hmac-sha256:...",
+  "core_notes": [],
   "core_fact_count": 12,
   "archive_item_count": 4,
   "associative_item_count": 0,
@@ -426,14 +503,22 @@ Counts and estimates come from `core_context_package`, its budget report and
 `dialogue_payload_event_count` proves that role-aware assembly preserved host
 payload without a second Session read. No dialogue text is exported.
 
+Scope fingerprints use the export HMAC salt and reveal no raw scope IDs.
+Convert package notes into fixed diagnostic categories before export. This
+lets the maintainer distinguish an intentionally empty Core from a disabled or
+mismatched Core request without receiving private text.
+
 #### 2.5 Runtime health snapshots
 
 At process start, after every Sleep and once daily, record:
 
 ```json
 {
-  "schema_version": "smartest_memory_health.v1",
+  "schema_version": "smartest_memory_health.v2",
   "timestamp": "RFC3339",
+  "process_instance_id": "anon_process_001",
+  "snapshot_reason": "startup",
+  "measurement_scope": "global",
   "chat_id": "anon_chat_001",
   "sessions": 4,
   "complete_archives": 12,
@@ -441,8 +526,11 @@ At process start, after every Sleep and once daily, record:
   "core_facts": 14,
   "review_candidates": 2,
   "pending_tasks": 0,
+  "pending_tasks_by_type": {},
+  "oldest_pending_task_age_seconds": null,
   "pending_sleep_runs": 0,
   "collection_warnings": 0,
+  "global_embeddings_enabled": false,
   "vector_state": "disabled",
   "vector_rows": 0,
   "storage_bytes": {
@@ -458,6 +546,14 @@ At process start, after every Sleep and once daily, record:
 Filesystem sizes are optional when Smartest stores or mounts runtime data in a
 way that makes them expensive to calculate. Mark unavailable fields `null`.
 
+Use a new anonymized `process_instance_id` on each process start. Health
+records use `startup`, `post_sleep` or `daily` as `snapshot_reason`. Pending
+task counts are grouped by task type so fidelity, embedding and workflow work
+cannot be confused. `global_embeddings_enabled` and the per-scope
+`vector_state` must describe the same runtime configuration. State whether
+each count is global or personality-scoped; add an HMAC scope fingerprint for
+scope-specific counts.
+
 ### Step 3. Verify joins and privacy on one run
 
 Before returning the Phase 1 sample, confirm:
@@ -467,10 +563,18 @@ Before returning the Phase 1 sample, confirm:
 - every selected pass references that context and has the same fingerprint;
 - the shared source is placed before each pass instruction;
 - pass-specific input contains no inline event array or full `sleep_task`;
-- provider-call records join to exactly one Sleep run and pass report;
-- the Sleep record joins to a reflection snapshot after fidelity;
+- every physical provider request has a unique row and its engine/provider
+  attempt numbers are independently reconstructable;
+- provider-call records join to exactly one Sleep run and pass report, or carry
+  an explicit non-Sleep origin;
+- the Sleep record joins to a timestamped reflection snapshot after every
+  core-routed fidelity request completes;
 - one chat turn uses `memory_prompt_plan.v1` or an equivalent structured plan;
 - the current message occurs once and dialogue roles are ordered;
+- the chat row contains the package budget report and Core request/scope
+  diagnostics;
+- health distinguishes task types, process instances and global/per-scope
+  vector state;
 - the exported sample contains no secrets or private text.
 
 A natural retry is not required for Phase 1 qualification. The logging path
@@ -481,11 +585,11 @@ must support it; observed retry behavior is measured in Phase 2.
 Return:
 
 1. `smartest_validation_build.json`;
-2. 3–10 redacted `smartest_provider_call.v1` records;
-3. one `smartest_sleep_run.v1` record;
-4. one `smartest_reflection_snapshot.v1` record;
-5. one `smartest_chat_context_turn.v1` record;
-6. one `smartest_memory_health.v1` record;
+2. 3–10 redacted `smartest_provider_call.v2` records;
+3. one `smartest_sleep_run.v2` record;
+4. one `smartest_reflection_snapshot.v2` record;
+5. one `smartest_chat_context_turn.v2` record;
+6. one `smartest_memory_health.v2` record;
 7. `smartest_instrumentation_notes.md` describing field sources, unavailable
    fields, deviations and the local privacy check.
 

@@ -389,17 +389,24 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
 - [x] Sleep outcome пояснює skipped/recovered/failed work і Archive-to-Core
   рішення; reflection status розкладає active/valid/unchecked/excluded units.
   — 2026-08-24.
-- [ ] Заміряти реальну provider cache hit-rate і ціну на навантаженні Smartest
-  v2 після переходу інтеграції на shared-prefix contract. Це product benchmark,
-  а не library claim.
+- [~] Заміряти реальну provider cache hit-rate і ціну на навантаженні Smartest
+  v2 після переходу інтеграції на shared-prefix contract. Перший cohort
+  підтвердив однаковий prefix і `4.97x` amplification на семи чистих runs, але
+  Gemini memory calls мали нуль cache hits. Потрібна перевірка точного Gemini
+  usage mapping/provider token count у виправленому cohort. Це product
+  benchmark, а не library claim. — 2026-08-25,
+  [Phase 1 review](smartest-v2-phase1-review-2026-08-25.md).
 - [x] Переписати
   [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md)
   як дослідницький протокол: контекст, сім гіпотез, operator latitude,
   privacy boundary, qualification логування, пасивне вікно, replay,
   interpretation map і decision gates. — 2026-08-24.
-- [ ] Smartest Phase 1: встановити `1aa427b` або descendant, додати пʼять
-  structured log streams, виконати один короткий run і повернути redacted
-  instrumentation sample для qualification.
+- [~] Smartest Phase 1: перший redacted package перевірено як
+  `CHANGES_REQUIRED`. Privacy/JSON/shared-prefix/chat-geometry пройшли;
+  replacement cohort має додати build provenance, physical-attempt ledger,
+  declared automatic-fidelity coverage, chat budget/Core scope diagnostics, typed pending
+  work і restart/vector state. — 2026-08-25,
+  [Phase 1 review](smartest-v2-phase1-review-2026-08-25.md).
 - [ ] Після `QUALIFIED` виконати Smartest Phase 2: мінімум 20 terminal Sleep
   runs у великих групових чатах, provider ledger, unit/Core/reply quality
   review, reflection funnel і runtime health evidence.
@@ -416,9 +423,11 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
   fixtures. Polished gameplay/character UX і production packaging поставлені
   власником на паузу 2026-08-24.
 - [~] Третій проєкт — Smartest v2, комерційний груповий Telegram-бот. Реальний
-  PyO3/LLM шлях і великі чати вже дають production evidence; formal acceptance
-  чекає redacted звіту за
-  [ТЗ Smartest](smartest-v2-production-validation-2026-08.md).
+  PyO3/LLM шлях і великі чати вже дають production evidence; перший redacted
+  package виявив корисні дані й instrumentation gaps. Formal acceptance чекає
+  виправленого Phase 1 sample за
+  [ТЗ Smartest](smartest-v2-production-validation-2026-08.md) та
+  [review 2026-08-25](smartest-v2-phase1-review-2026-08-25.md).
 - [ ] MCP-facade як alternative обгортка над тим самим ядром. Для зовнішніх агентів (Claude Code, OpenAI Agents SDK), що хочуть користуватись memory як tool.
 - [ ] Стабілізувати JSON contracts: зафіксувати v1 для всіх schemas, прописати migration policy для v2+.
 

@@ -8,6 +8,25 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-25] validation | First Smartest package requires instrumentation corrections
+
+Added [Smartest v2 Phase 1 Review](pages/planning/smartest-v2-phase1-review-2026-08-25.md)
+after independently parsing the first privacy-safe production package. The
+review records the artifact digest, compact-input baseline, terminal fallback,
+chat geometry, interim H1-H7 results and the exact reasons Phase 1 remains
+`CHANGES_REQUIRED`.
+
+Updated the normative
+[Smartest protocol](pages/planning/smartest-v2-production-validation-2026-08.md)
+with build provenance, physical provider-attempt accounting, origin-run joins,
+declared core-owned automatic fidelity coverage, chat budget/Core scope
+diagnostics, process-instance health and explicit vector-task state. Updated the
+[replacement schemas to study-export `v2`](pages/planning/smartest-v2-production-validation-2026-08.md)
+so old and corrected rows cannot mix. Updated the
+[Roadmap](pages/planning/roadmap.md), [Wiki home](README.md) and
+[Wiki index](index.md). Runtime behavior did not change, so HISTORY remains
+unchanged. See [DEVLOG Entry 171](../DEVLOG.md).
+
 ## [2026-08-24] planning | Smartest protocol split into qualification and evidence phases
 
 Reworked [Smartest v2 Production Validation](pages/planning/smartest-v2-production-validation-2026-08.md)

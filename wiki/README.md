@@ -31,6 +31,9 @@ whole chat history.
   reflection and provider-observability findings.
 - [Smartest v2 Production Validation](pages/planning/smartest-v2-production-validation-2026-08.md) -
   what the production log owner must measure and return before v0.6 reasoning.
+- [Smartest v2 Phase 1 Review](pages/planning/smartest-v2-phase1-review-2026-08-25.md) -
+  what the first returned package proved and which instrumentation corrections
+  precede the formal observation window.
 - [LLM integration resources](pages/integration/llm-integration-resources.md) - what model/key resources an application must provide.
 
 ## What This Project Is
@@ -58,11 +61,13 @@ The project has already proved the main foundation:
 - project documentation now lives in this wiki with checked internal links.
 
 The active sequence is production validation on Smartest v2, closure of the
-v0.5 live reflection gate, then v0.6 hierarchical reasoning. Smartest's large
-group chats first qualify logging on one short run, then measure shared-prefix
-cost, memory quality, attribution and the active → valid → eligible reflection
-funnel without asking chat participants to perform scripted tests. Autonomous
-reflection already has durable scope-safe
+v0.5 live reflection gate, then v0.6 hierarchical reasoning. The first
+Smartest package passed privacy, shared-prefix and dialogue-geometry checks and
+was classified `CHANGES_REQUIRED` because build provenance, physical provider
+attempts, automatic fidelity coverage, chat budget/Core diagnostics and vector task state
+need a corrected small cohort. The formal multi-day window follows that
+qualification without asking chat participants to perform scripted tests.
+Autonomous reflection already has durable scope-safe
 apply/review and the first internal graph-storage slice: journaled candidate
 migration, MemoryUnit evidence edges and scope-exact inspection. Hierarchical
 reasoning starts after the redacted Smartest report confirms a non-degenerate

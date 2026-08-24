@@ -8,6 +8,8 @@
 - [Roadmap](roadmap.md) - release ordering and remaining phases.
 - [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md)
   - current live-calibration and reporting gate on large group chats.
+- [Smartest Phase 1 Review 2026-08-25](smartest-v2-phase1-review-2026-08-25.md)
+  - first production package, automatic-fidelity finding and correction handoff.
 - [Reflective Belief System](reflective-belief-system.md) - post-v0.5 plan for
   reliable reflection, hierarchical hypotheses, contradiction, and native
   clarification.
@@ -51,6 +53,14 @@ provide the active → valid → eligible funnel, repeated evidence, attribution
 pressure, provider failures and restart evidence required by the gate. The
 redacted return format is normative in
 [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md).
+
+**Instrumentation update 2026-08-25.** The first Smartest package showed that
+automatic fidelity routed only one request across 21 new units. The host
+correctly executed the returned work; it must not select additional units
+through the manual API. Phase 1 is `CHANGES_REQUIRED`; the replacement cohort
+records the core-owned routing threshold, text-free weight/selection counts and
+reflection status after returned validations complete. Thresholds change only
+as an explicit cohort configuration decision.
 
 ## Strategic Decision
 

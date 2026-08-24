@@ -1,5 +1,65 @@
 # DEVLOG
 
+## Запис 171 — 2026-08-25 — Перший Smartest telemetry package перевірено як CHANGES_REQUIRED
+
+Smartest повернув redacted пакет із реального production-вікна 24 серпня:
+232 provider calls, 9 Sleep runs, 9 reflection snapshots, 54 chat-context
+turns і 9 health snapshots. Один старий run відкинуто самим оператором;
+незалежний аналіз виконано по восьми cohort-B runs. Архів має SHA-256
+`98ca4b28a3bf6f31192cbb3dedb3e7f5ca030f2f2f8041102173d0187c5c9393`.
+Вісім runs є достатнім обсягом для Phase 1; вимога приблизно 20 runs належить
+лише формальному Phase 2 window.
+
+### Що пакет уже довів
+
+Privacy boundary пройдено: JSONL валідні, ідентифікатори анонімізовані,
+тексти розмов, кириличні фрагменти, ключі й довгі Telegram-подібні ID відсутні.
+У семи чистих consolidated runs було 41,061 estimated source tokens і 204,266
+provider prompt tokens — `4.97x` amplification. Це сильний абсолютний baseline
+після compact shared source; прямий відсоток проти історичних `24x` не
+заявляється через паралельний host payload fix і різні workloads.
+
+Усі usable runs мали один shared fingerprint і shared context first. Сім
+завершились через consolidator; один production content-filter case зберіг
+успішні tracks і став `fallback_from_tracks`, хоча залишив нуль MemoryUnits, а
+repair теж був заблокований. Усі 54 chat plans зберегли role order, host
+payload і рівно одне current message.
+
+### Чому Phase 1 ще не qualified
+
+- extension hash є, але `engine_commit` невідомий;
+- provider ledger пише фінал внутрішнього retry loop, а не кожний фізичний
+  request, тому engine attempts і provider attempts змішані;
+- core-owned automatic fidelity вибрав лише 1 із 21 нових units; package не
+  показує достатньо конфігурації й розподілу ваг для безпечного калібрування,
+  тому H5 ще не має production evidence;
+- усі 54 chat rows втратили budget report, хоча ядро його повертає;
+- health бачить 7–8 Core facts і один новий promotion, а кожний chat plan має
+  нуль Core facts; без include/scope diagnostics причина невідома;
+- один scope весь час `building`, pending `compute_embedding` tasks ростуть
+  2→6, хоча README називає vectors disabled;
+- redeploy згаданий prose-нотаткою, але process instances не joinable;
+- Gemini memory calls мали нуль cache hits, тоді як десять `paint_prompt`
+  calls інших providers показали 9,280 cached tokens. Отже exporter field
+  працює, а cache finding стосується саме Gemini memory path.
+
+### Рішення
+
+Створено
+`wiki/pages/planning/smartest-v2-phase1-review-2026-08-25.md` з digest,
+незалежними агрегатами, interim H1–H7 і correction handoff. Чинний Smartest
+protocol доповнено обовʼязковими полями: artifact provenance, окремі engine/
+provider attempts і physical request ID, origin-run joins, declared core-owned
+automatic fidelity coverage, timestamped reflection snapshots, chat budget/Core scope
+diagnostics, process instance, typed pending work і узгоджений vector state.
+Corrected cohort використовує study-export schema `v2`, щоб старі неоднозначні
+rows не змішувалися з формальним вікном.
+
+Наступний крок — короткий replacement cohort із 1–3 natural terminal Sleep
+runs. Після його `QUALIFIED` та без зміни конфігурації починається формальне
+кількаденне Phase 2 window. v0.5 live gate і v0.6 reasoning цим пакетом не
+закривались. Runtime-код бібліотеки не змінювався, тому HISTORY не оновлено.
+
 ## Запис 170 — 2026-08-24 — Smartest validation став поетапним дослідницьким протоколом
 
 Власник перевірив першу версію ТЗ через практичні питання: чи однозначно

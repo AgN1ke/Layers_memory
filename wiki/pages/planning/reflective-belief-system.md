@@ -12,6 +12,8 @@
   запуску reflection і його release boundary.
 - [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md)
   — живий evidence gate між реалізованим v0.5 і reasoning-фазою v0.6.
+- [Smartest Phase 1 Review 2026-08-25](smartest-v2-phase1-review-2026-08-25.md)
+  — перший production package і correction gate перед формальним вікном.
 - [Roadmap](roadmap.md) — місце фаз у послідовності релізів.
 - [Generative Agents Memory Stream review](../research/generative-agents-memory-stream-2026-07-06.md)
   — зовнішні референси та висновки, з яких виріс цей план.
@@ -275,6 +277,13 @@ effect and no attribution/data-integrity blocker remains. Chibigochi packaging
 and the Google Play server track are paused and are not dependencies of this
 cognitive phase. Optional vector enrichment may follow measured evidence;
 structural non-vector selection is the required baseline.
+
+**Gate status 2026-08-25.** The first Smartest package is useful interim
+evidence and has status `CHANGES_REQUIRED`. It cannot open Phase 3 because the
+automatic fidelity coverage was too low and insufficiently described, build
+provenance was incomplete and reflection/restart joins were insufficient. A corrected short cohort precedes
+the multi-day live gate; no reasoning threshold is tuned from the current
+sample.
 
 Input builder більше не бере просто останні N candidates. Він збирає bounded
 підграф, пов'язаний із trigger evidence: structural selector є обов'язковим,
