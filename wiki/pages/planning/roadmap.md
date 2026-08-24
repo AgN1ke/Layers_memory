@@ -406,7 +406,8 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
   replacement cohort має додати build provenance, physical-attempt ledger,
   declared automatic-fidelity coverage, chat budget/Core scope diagnostics, typed pending
   work і restart/vector state. — 2026-08-25,
-  [Phase 1 review](smartest-v2-phase1-review-2026-08-25.md).
+  [Phase 1 review](smartest-v2-phase1-review-2026-08-25.md) і
+  [correction ТЗ](smartest-v2-phase1-correction-tz-2026-08-25.md).
 - [ ] Після `QUALIFIED` виконати Smartest Phase 2: мінімум 20 terminal Sleep
   runs у великих групових чатах, provider ledger, unit/Core/reply quality
   review, reflection funnel і runtime health evidence.

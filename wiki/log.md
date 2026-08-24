@@ -8,6 +8,24 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-25] planning | Smartest Phase 1 correction handoff is directly assignable
+
+Added the standalone
+[Smartest Phase 1 Correction TZ](pages/planning/smartest-v2-phase1-correction-tz-2026-08-25.md).
+It turns the package review into two explicit checkpoints: v2 instrumentation
+and preflight first, then a fixed-configuration cohort with 1-3 natural
+terminal Sleep runs.
+
+The handoff preserves the core/host boundary, specifies physical provider
+attempts, artifact provenance, automatic-fidelity observation, chat budget and
+Core scope diagnostics, restart/vector health, a synthetic Gemini cache probe,
+privacy checks, stop conditions and exact return templates. Linked it from the
+[protocol](pages/planning/smartest-v2-production-validation-2026-08.md),
+[review](pages/planning/smartest-v2-phase1-review-2026-08-25.md),
+[roadmap](pages/planning/roadmap.md), [Wiki home](README.md) and
+[Wiki index](index.md). This is an integration specification, so HISTORY
+remains unchanged. See [DEVLOG Entry 172](../DEVLOG.md).
+
 ## [2026-08-25] validation | First Smartest package requires instrumentation corrections
 
 Added [Smartest v2 Phase 1 Review](pages/planning/smartest-v2-phase1-review-2026-08-25.md)

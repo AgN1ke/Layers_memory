@@ -34,6 +34,8 @@ whole chat history.
 - [Smartest v2 Phase 1 Review](pages/planning/smartest-v2-phase1-review-2026-08-25.md) -
   what the first returned package proved and which instrumentation corrections
   precede the formal observation window.
+- [Smartest v2 Phase 1 Correction TZ](pages/planning/smartest-v2-phase1-correction-tz-2026-08-25.md) -
+  the standalone task the Smartest engineer should execute next.
 - [LLM integration resources](pages/integration/llm-integration-resources.md) - what model/key resources an application must provide.
 
 ## What This Project Is

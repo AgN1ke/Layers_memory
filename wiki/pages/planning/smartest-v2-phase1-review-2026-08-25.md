@@ -11,6 +11,8 @@ formal multi-day observation window begins.
 
 - [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md) -
   normative hypotheses, schemas, privacy boundary and acceptance sequence.
+- [Smartest Phase 1 Correction TZ](smartest-v2-phase1-correction-tz-2026-08-25.md) -
+  the standalone task to send to the Smartest engineer.
 - [Production Integration Feedback](production-feedback-2026-08.md) - the
   eleven production findings that motivated the validation.
 - [Roadmap](roadmap.md) - active ordering after this review.
@@ -264,3 +266,6 @@ The replacement sample must demonstrate:
 When these records are complete and internally consistent, Phase 1 becomes
 `QUALIFIED` and the unchanged configuration may continue directly into the
 formal Phase 2 window.
+
+Implementation and return steps are specified in the
+[Phase 1 correction TZ](smartest-v2-phase1-correction-tz-2026-08-25.md).

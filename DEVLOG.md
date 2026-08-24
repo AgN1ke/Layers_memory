@@ -1,5 +1,47 @@
 # DEVLOG
 
+## Запис 172 — 2026-08-25 — Smartest отримав окреме correction ТЗ для Phase 1 v2
+
+Після незалежного review першого telemetry package власник попросив оформити
+не аналітичний висновок, а готове завдання, яке можна напряму передати
+відповідальному за Smartest v2.
+
+Створено
+`wiki/pages/planning/smartest-v2-phase1-correction-tz-2026-08-25.md`.
+Документ розділяє роботу на дві контрольні точки.
+
+### Контрольна точка A
+
+Smartest додає study-export schemas `v2`, доводить звʼязок extension hash із
+engine commit, розділяє semantic engine attempts і фізичні provider retries,
+приєднує fidelity/repair/reflection до origin Sleep run, відновлює chat budget
+і Core scope diagnostics, додає process-instance health та розкладає pending
+tasks за типом.
+
+Окремо зафіксовано стратегічну межу: host виконує всі fidelity requests, які
+повернуло ядро, і не вибирає units через manual API. Перед cohort він повертає
+text-free weight/selection histograms і чинний threshold; maintainer
+підтверджує одну fixed automatic-fidelity конфігурацію. Vector scope також має
+отримати один явний режим: enabled із дренуванням задач або disabled без нової
+черги. Нерозвʼязні pending tasks повертаються як blocker без ручного редагування
+runtime.
+
+### Контрольна точка B
+
+Після preflight Smartest збирає 1–3 natural terminal Sleep runs на одному
+host/prompt/engine/provider config і повертає вісім redacted artifacts. ТЗ має
+готові JSON-поля, два шаблони відповіді, privacy rules і стоп-умови. Вимога 20
+runs лишається Phase 2 та починається тільки після `QUALIFIED`.
+
+До preflight додано synthetic Gemini cache probe через фактичний provider
+client: однаковий неперсональний prefix понад provider-counted 4,096 tokens,
+три близькі в часі requests і повний physical-attempt ledger. Це відділяє
+cache policy конкретного provider path від економії compact input бібліотеки.
+
+ТЗ перелінковано з protocol, review, roadmap і двох wiki entry pages. Це
+integration/measurement specification; runtime-поведінка Memory Engine не
+змінювалася, тому HISTORY не оновлено.
+
 ## Запис 171 — 2026-08-25 — Перший Smartest telemetry package перевірено як CHANGES_REQUIRED
 
 Smartest повернув redacted пакет із реального production-вікна 24 серпня:

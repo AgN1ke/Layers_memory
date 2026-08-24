@@ -6,6 +6,8 @@
   eleven production findings and the implemented library response.
 - [Smartest Phase 1 Review 2026-08-25](smartest-v2-phase1-review-2026-08-25.md) -
   independent review of the first returned package and the correction handoff.
+- [Smartest Phase 1 Correction TZ](smartest-v2-phase1-correction-tz-2026-08-25.md) -
+  standalone implementation and return instructions for the Smartest engineer.
 - [Roadmap](roadmap.md) - active ordering from production validation into
   autonomous reflection and v0.6.
 - [Autonomous Reflection v0.5](autonomous-reflection-v0.5.md) - trigger,
@@ -60,6 +62,9 @@ are recorded in the
 [Phase 1 review](smartest-v2-phase1-review-2026-08-25.md). The next handoff is a
 small new cohort with corrected instrumentation. The formal multi-day Phase 2
 window starts only after that cohort is `QUALIFIED`.
+
+The directly assignable work package is the
+[Phase 1 correction TZ](smartest-v2-phase1-correction-tz-2026-08-25.md).
 
 The corrected cohort uses study-export schema version `v2` for all six JSON
 record types below. The file names stay unchanged. This prevents v1 rows with

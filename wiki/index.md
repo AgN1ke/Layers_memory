@@ -68,6 +68,9 @@ crate/host README files stay outside the wiki.
 - [Smartest v2 Phase 1 Review 2026-08-25](pages/planning/smartest-v2-phase1-review-2026-08-25.md)
   - independent assessment of the first returned telemetry package, interim
     H1-H7 evidence and the correction handoff required before Phase 2.
+- [Smartest v2 Phase 1 Correction TZ 2026-08-25](pages/planning/smartest-v2-phase1-correction-tz-2026-08-25.md)
+  - directly assignable logging, preflight, qualification and return
+    instructions for the Smartest engineer.
 
 ## Releases
 
