@@ -42,6 +42,16 @@ cache policy конкретного provider path від економії compac
 integration/measurement specification; runtime-поведінка Memory Engine не
 змінювалася, тому HISTORY не оновлено.
 
+### Уточнення після передачі
+
+Smartest повідомив, що не задає й не бачить numeric automatic-fidelity
+threshold та запропонував cohort `c`. Перевірка коду підтвердила дефолт `0.85`
+і в `FidelityConfig`, і в PyO3 constructor. Для cohort `c` ТЗ тепер вимагає
+явно передати `fidelity_auto_validate_weight_threshold=0.85`. Ваги нижче
+порога можуть бути auto-routed через risk tags або Core-path, тому selected
+weight range не є оцінкою threshold. Мітку `c` прийнято; довгий збір чекає
+`QUALIFIED`.
+
 ## Запис 171 — 2026-08-25 — Перший Smartest telemetry package перевірено як CHANGES_REQUIRED
 
 Smartest повернув redacted пакет із реального production-вікна 24 серпня:

@@ -26,6 +26,10 @@ privacy checks, stop conditions and exact return templates. Linked it from the
 [Wiki index](index.md). This is an integration specification, so HISTORY
 remains unchanged. See [DEVLOG Entry 172](../DEVLOG.md).
 
+Follow-up clarification: qualification cohort `c` explicitly passes the
+existing `0.85` automatic-fidelity threshold. Lower-weight auto-selected units
+remain expected when a configured risk tag or Core-path rule applies.
+
 ## [2026-08-25] validation | First Smartest package requires instrumentation corrections
 
 Added [Smartest v2 Phase 1 Review](pages/planning/smartest-v2-phase1-review-2026-08-25.md)

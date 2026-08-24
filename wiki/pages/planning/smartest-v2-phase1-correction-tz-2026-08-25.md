@@ -176,6 +176,14 @@ Acceptance: для штучного transport retry з двома спробам
 Smartest виконує всі fidelity requests, які повернуло ядро, а потім знімає
 reflection snapshot. Host не формує власний список units.
 
+**Рішення maintainer 2026-08-25 для qualification cohort `c`:** явно передати
+`fidelity_auto_validate_weight_threshold=0.85` у конструктор PyO3 і записати
+це значення в build record. `0.85` є чинним дефолтом Rust-ядра та PyO3, тому
+попередній Smartest runtime без explicit argument уже працював із цим
+порогом. Unit із вагою нижче `0.85` також може бути auto-selected через
+configured risk tag або Core-path source events; розподіл вибраних ваг не є
+способом вивести числовий threshold.
+
 Для передперевірки порахувати на наявному cohort B:
 
 - кількість нових units у кожному weight bin;
@@ -330,7 +338,7 @@ Privacy exporter v2: PASS/FAIL
 
 Automatic fidelity:
 - enabled:
-- weight threshold:
+- weight threshold: 0.85 (explicit constructor argument)
 - configured tags:
 - existing new-unit weight bins:
 - existing auto-selected weight bins:
@@ -351,8 +359,9 @@ Blocked items:
 Proposed qualification cohort label:
 ```
 
-Memory Engine maintainer після цього підтверджує automatic-fidelity threshold,
-vector mode і дозвіл на контрольну точку B.
+Memory Engine maintainer після цього перевіряє зафіксований threshold,
+підтверджує vector mode і дає дозвіл на контрольну точку B. Поріг усередині
+cohort `c` не змінюється.
 
 ---
 
@@ -367,6 +376,8 @@ vector mode і дозвіл на контрольну точку B.
    учасників;
 4. не змінювати конфігурацію всередині cohort;
 5. експортувати package через fail-closed privacy check.
+
+Запропонована й прийнята мітка qualification cohort: `c`.
 
 ## Що повернути після контрольної точки B
 

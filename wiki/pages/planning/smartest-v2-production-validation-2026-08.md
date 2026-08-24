@@ -65,6 +65,9 @@ window starts only after that cohort is `QUALIFIED`.
 
 The directly assignable work package is the
 [Phase 1 correction TZ](smartest-v2-phase1-correction-tz-2026-08-25.md).
+Qualification cohort `c` explicitly uses
+`fidelity_auto_validate_weight_threshold=0.85`; lower-weight units may still
+be routed by configured risk tags or Core-path evidence.
 
 The corrected cohort uses study-export schema version `v2` for all six JSON
 record types below. The file names stay unchanged. This prevents v1 rows with
