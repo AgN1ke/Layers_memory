@@ -35,7 +35,10 @@ whole chat history.
   what the first returned package proved and which instrumentation corrections
   precede the formal observation window.
 - [Smartest v2 Phase 1 Correction TZ](pages/planning/smartest-v2-phase1-correction-tz-2026-08-25.md) -
-  the standalone task the Smartest engineer should execute next.
+  the standalone logging, preflight and qualification task used by Smartest.
+- [Smartest v2 Checkpoint A Review](pages/planning/smartest-v2-checkpoint-a-review-2026-08-26.md) -
+  the maintainer decision that qualifies cohort `c` for its short natural-run
+  sample and corrects the fidelity/provenance interpretation.
 - [LLM integration resources](pages/integration/llm-integration-resources.md) - what model/key resources an application must provide.
 
 ## What This Project Is
@@ -65,10 +68,10 @@ The project has already proved the main foundation:
 The active sequence is production validation on Smartest v2, closure of the
 v0.5 live reflection gate, then v0.6 hierarchical reasoning. The first
 Smartest package passed privacy, shared-prefix and dialogue-geometry checks and
-was classified `CHANGES_REQUIRED` because build provenance, physical provider
-attempts, automatic fidelity coverage, chat budget/Core diagnostics and vector task state
-need a corrected small cohort. The formal multi-day window follows that
-qualification without asking chat participants to perform scripted tests.
+was classified `CHANGES_REQUIRED`. The corrected instrumentation preflight is
+now `QUALIFIED`; cohort `c` is collecting 1-3 natural terminal Sleep runs on a
+frozen configuration. The formal multi-day window follows review of that
+sample without asking chat participants to perform scripted tests.
 Autonomous reflection already has durable scope-safe
 apply/review and the first internal graph-storage slice: journaled candidate
 migration, MemoryUnit evidence edges and scope-exact inspection. Hierarchical

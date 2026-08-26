@@ -8,6 +8,29 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-08-26] validation | Smartest checkpoint A qualified cohort c
+
+Added the
+[Smartest Checkpoint A Review](pages/planning/smartest-v2-checkpoint-a-review-2026-08-26.md)
+after reviewing the corrected preflight, instrumentation notes and anomaly
+interpretations. Build provenance, physical provider attempts, post-Sleep
+joins, chat/Core diagnostics, process health, privacy export, explicit
+automatic-fidelity configuration and vector execution now pass the preflight.
+
+The review corrects two boundaries. Production hosts execute core-selected
+automatic fidelity requests and do not clear unchecked units through the
+manual operator API. Extension provenance now tracks the last runtime commit
+`6dd6b68` separately from later documentation-only protocol revisions.
+
+Updated the
+[production protocol](pages/planning/smartest-v2-production-validation-2026-08.md),
+[correction TZ](pages/planning/smartest-v2-phase1-correction-tz-2026-08-25.md),
+[historical Phase 1 review](pages/planning/smartest-v2-phase1-review-2026-08-25.md),
+[Roadmap](pages/planning/roadmap.md), [Wiki home](README.md) and
+[Wiki index](index.md). Cohort `c` now collects 1-3 natural terminal Sleep runs;
+Phase 2 remains gated by the final Phase 1 review. Runtime behavior did not
+change, so HISTORY remains unchanged. See [DEVLOG Entry 173](../DEVLOG.md).
+
 ## [2026-08-25] planning | Smartest Phase 1 correction handoff is directly assignable
 
 Added the standalone

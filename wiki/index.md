@@ -71,6 +71,9 @@ crate/host README files stay outside the wiki.
 - [Smartest v2 Phase 1 Correction TZ 2026-08-25](pages/planning/smartest-v2-phase1-correction-tz-2026-08-25.md)
   - directly assignable logging, preflight, qualification and return
     instructions for the Smartest engineer.
+- [Smartest v2 Checkpoint A Review 2026-08-26](pages/planning/smartest-v2-checkpoint-a-review-2026-08-26.md)
+  - maintainer qualification of the corrected preflight, including the frozen
+    cohort-C instructions and fidelity/provenance corrections.
 
 ## Releases
 

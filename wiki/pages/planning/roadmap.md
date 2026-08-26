@@ -67,9 +67,11 @@ unit-focused prompt projection замість змішаного денного 
 shared-prefix економіку, повний memory outcome, групову атрибуцію і живий
 reflection funnel на великих чатах. Протокол розділено на qualification
 логування, пасивне production-спостереження, контрольний replay та рішення.
-Phase 1 готова до передачі Smartest 2026-08-25; довге вікно починається після
-перевірки одного redacted sample. Chibigochi product work і Google Play server
-track поставлені власником на паузу 2026-08-24.
+Контрольна точка A пройшла `QUALIFIED` 2026-08-26; cohort `c` збирає 1-3
+природні terminal Sleep runs на замороженій конфігурації. Довге Phase 2
+починається після review цього package й остаточного `QUALIFIED` для Phase 1.
+Chibigochi product work і Google Play server track поставлені власником на
+паузу 2026-08-24.
 
 Кодові й deterministic gates v0.4 зелені; unit-focused live acceptance також
 проходив. Фінальний re-run calibrated associative threshold `0.47` та release
@@ -391,23 +393,24 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
   — 2026-08-24.
 - [~] Заміряти реальну provider cache hit-rate і ціну на навантаженні Smartest
   v2 після переходу інтеграції на shared-prefix contract. Перший cohort
-  підтвердив однаковий prefix і `4.97x` amplification на семи чистих runs, але
-  Gemini memory calls мали нуль cache hits. Потрібна перевірка точного Gemini
-  usage mapping/provider token count у виправленому cohort. Це product
-  benchmark, а не library claim. — 2026-08-25,
-  [Phase 1 review](smartest-v2-phase1-review-2026-08-25.md).
+  підтвердив однаковий prefix і `4.97x` amplification на семи чистих runs.
+  Передперевірка cohort `c` підтвердила правильне Gemini usage field і нуль
+  implicit cache на трьох запитах зі спільним 8k-token prefix. Phase 2 оцінює
+  фактичну ціну compact input без припущення про cache. Це product benchmark,
+  а не library claim. — 2026-08-26,
+  [Checkpoint A review](smartest-v2-checkpoint-a-review-2026-08-26.md).
 - [x] Переписати
   [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md)
   як дослідницький протокол: контекст, сім гіпотез, operator latitude,
   privacy boundary, qualification логування, пасивне вікно, replay,
   interpretation map і decision gates. — 2026-08-24.
-- [~] Smartest Phase 1: перший redacted package перевірено як
-  `CHANGES_REQUIRED`. Privacy/JSON/shared-prefix/chat-geometry пройшли;
-  replacement cohort має додати build provenance, physical-attempt ledger,
-  declared automatic-fidelity coverage, chat budget/Core scope diagnostics, typed pending
-  work і restart/vector state. — 2026-08-25,
-  [Phase 1 review](smartest-v2-phase1-review-2026-08-25.md) і
-  [correction ТЗ](smartest-v2-phase1-correction-tz-2026-08-25.md).
+- [~] Smartest Phase 1: перший redacted package отримав `CHANGES_REQUIRED`, а
+  виправлена контрольна точка A пройшла `QUALIFIED` 2026-08-26. Provenance,
+  physical attempts, origin joins, chat budget/Core diagnostics, process
+  health, privacy export і vector execution підтверджені. Cohort `c` збирає
+  1-3 природні terminal Sleep runs; остаточний Phase 1 status чекає package
+  контрольної точки B. —
+  [Checkpoint A review](smartest-v2-checkpoint-a-review-2026-08-26.md).
 - [ ] Після `QUALIFIED` виконати Smartest Phase 2: мінімум 20 terminal Sleep
   runs у великих групових чатах, provider ledger, unit/Core/reply quality
   review, reflection funnel і runtime health evidence.
@@ -425,10 +428,11 @@ Update 2026-06-10: Stage 1 recall already uses `recall_count` and `last_recalled
   власником на паузу 2026-08-24.
 - [~] Третій проєкт — Smartest v2, комерційний груповий Telegram-бот. Реальний
   PyO3/LLM шлях і великі чати вже дають production evidence; перший redacted
-  package виявив корисні дані й instrumentation gaps. Formal acceptance чекає
-  виправленого Phase 1 sample за
+  package виявив корисні дані й instrumentation gaps. Передперевірка
+  виправленого вимірювання пройшла; formal acceptance чекає короткого cohort-C
+  package за
   [ТЗ Smartest](smartest-v2-production-validation-2026-08.md) та
-  [review 2026-08-25](smartest-v2-phase1-review-2026-08-25.md).
+  [review 2026-08-26](smartest-v2-checkpoint-a-review-2026-08-26.md).
 - [ ] MCP-facade як alternative обгортка над тим самим ядром. Для зовнішніх агентів (Claude Code, OpenAI Agents SDK), що хочуть користуватись memory як tool.
 - [ ] Стабілізувати JSON contracts: зафіксувати v1 для всіх schemas, прописати migration policy для v2+.
 

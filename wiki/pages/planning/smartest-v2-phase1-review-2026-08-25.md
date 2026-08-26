@@ -36,6 +36,11 @@ identify incomplete build provenance, incomplete physical-attempt telemetry,
 insufficiently observed automatic fidelity coverage, missing chat-budget
 fields, an unresolved Core scope path and inconsistent vector configuration.
 
+Follow-up: the corrected
+[Checkpoint A preflight passed on 2026-08-26](smartest-v2-checkpoint-a-review-2026-08-26.md).
+This page retains the historical result for the first package; qualification
+cohort `c` is now collecting the replacement sample.
+
 ## Reviewed artifact
 
 - File: `smartest-validation-2026-08-24.tar.gz`

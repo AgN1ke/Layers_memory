@@ -26,6 +26,18 @@ chat-контексті, зрозуміти automatic fidelity coverage та в�
 - [LLM Integration Resources](../integration/llm-integration-resources.md) -
   межа між Memory Engine і provider executor.
 
+## Maintainer response 2026-08-26
+
+[Контрольна точка A пройшла review](smartest-v2-checkpoint-a-review-2026-08-26.md)
+зі статусом `QUALIFIED`. Qualification cohort `c` продовжує збір 1-3 природних
+terminal Sleep runs на незмінній конфігурації. Повний Phase 1 лишається
+відкритим до review package контрольної точки B; багатоденний Phase 2 ще не
+починається.
+
+Окреме уточнення: production host не очищає `unchecked` units через масові
+виклики `begin_memory_fidelity_pass`. Це manual operator/debug API. Cohort
+вимірює core-owned automatic routing із явно зафіксованим threshold `0.85`.
+
 ## Очікуваний результат
 
 Робота завершується новим cohort із 1-3 природними terminal Sleep runs і
@@ -378,6 +390,10 @@ cohort `c` не змінюється.
 5. експортувати package через fail-closed privacy check.
 
 Запропонована й прийнята мітка qualification cohort: `c`.
+
+Контрольна точка A підтвердила початок cohort `c` о 2026-08-25 05:53 UTC.
+Provider/model routing, prompts, Sleep profile, threshold `0.85`, vector mode
+та export schemas лишаються замороженими до повернення package.
 
 ## Що повернути після контрольної точки B
 

@@ -8,6 +8,8 @@
   independent review of the first returned package and the correction handoff.
 - [Smartest Phase 1 Correction TZ](smartest-v2-phase1-correction-tz-2026-08-25.md) -
   standalone implementation and return instructions for the Smartest engineer.
+- [Smartest Checkpoint A Review 2026-08-26](smartest-v2-checkpoint-a-review-2026-08-26.md) -
+  qualification decision for the corrected preflight and cohort `c`.
 - [Roadmap](roadmap.md) - active ordering from production validation into
   autonomous reflection and v0.6.
 - [Autonomous Reflection v0.5](autonomous-reflection-v0.5.md) - trigger,
@@ -21,8 +23,8 @@
 
 ## Status, audience and current phase
 
-Status: **owner-approved production protocol; first Phase 1 package reviewed
-2026-08-25 as `CHANGES_REQUIRED`**.
+Status: **owner-approved production protocol; corrected checkpoint A reviewed
+2026-08-26 as `QUALIFIED`; checkpoint B cohort is collecting**.
 
 This document is addressed to the Smartest v2 engineer or operator who can
 change application logging and inspect provider usage, Memory Engine outputs,
@@ -68,6 +70,12 @@ The directly assignable work package is the
 Qualification cohort `c` explicitly uses
 `fidelity_auto_validate_weight_threshold=0.85`; lower-weight units may still
 be routed by configured risk tags or Core-path evidence.
+
+The corrected preflight passed
+[checkpoint A review](smartest-v2-checkpoint-a-review-2026-08-26.md).
+Smartest now collects 1-3 natural terminal Sleep runs without changing the
+cohort configuration. Phase 2 remains closed until checkpoint B receives the
+final Phase 1 `QUALIFIED` decision.
 
 The corrected cohort uses study-export schema version `v2` for all six JSON
 record types below. The file names stay unchanged. This prevents v1 rows with
@@ -164,10 +172,12 @@ own access controls.
 
 The acceptance window must use:
 
-- Memory Engine `main` commit `1aa427b` or a later descendant;
-- the Python extension built from that source, with its loaded path and
-  SHA-256 recorded;
-- production-feedback implementation commit `6dd6b68` present in ancestry;
+- a Python extension built from production-feedback runtime commit `6dd6b68`
+  or a later compatible descendant, with the exact source commit, loaded path
+  and SHA-256 recorded;
+- protocol revision `1e3101f` or a compatible later revision recorded
+  separately from the extension source commit; documentation-only revisions
+  do not require rebuilding an otherwise identical extension;
 - multi-pass Sleep prompt version `3` or a compatible later version;
 - Smartest's own repeated event payload fix enabled or separately measured.
 
@@ -201,7 +211,7 @@ Create `smartest_validation_build.json` containing:
 ```json
 {
   "schema_version": "smartest_validation_build.v2",
-  "engine_commit": "1aa427b-or-descendant",
+  "engine_commit": "6dd6b68-or-compatible-descendant",
   "engine_build_source": "ci-artifact-manifest-or-equivalent",
   "host_commit": "...",
   "loaded_extension_path": "redacted-or-relative-path",
@@ -566,7 +576,8 @@ scope-specific counts.
 
 Before returning the Phase 1 sample, confirm:
 
-- the loaded extension descends from `1aa427b`;
+- the loaded extension maps by artifact manifest and SHA-256 to accepted
+  runtime commit `6dd6b68` or a compatible descendant;
 - one Sleep batch has one `shared_context`;
 - every selected pass references that context and has the same fingerprint;
 - the shared source is placed before each pass instruction;

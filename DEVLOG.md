@@ -1,5 +1,56 @@
 # DEVLOG
 
+## Запис 173 — 2026-08-26 — Smartest checkpoint A qualified, cohort c продовжує збір
+
+Smartest повернув передперевірку Phase 1 v2 після correction ТЗ. Перевірено
+`preflight-2026-08-25.md`, `instrumentation-notes.md` і виправлюваний
+`anomalies.md`.
+
+### Що підтверджено
+
+- extension SHA однозначно зіставлено з commit
+  `6dd6b6879f853bc740a331f5d2fdeb6a4bc377f1` через byte-identical rebuild;
+- host/prompt config заморожено, provider ledger пише фізичні attempts, а
+  post-Sleep calls мають `origin_run_id`;
+- chat budget, Core scope, process-instance health і privacy exporter v2
+  пройшли передперевірку;
+- automatic fidelity threshold явно передається як `0.85`; на історичних 62
+  units automatic routing покрив 100% ваги `>=0.85`, 71% середньої смуги й
+  11% легкої;
+- Smartest підключив виконання `compute_embedding`: обраний scope перейшов у
+  `ready`, має 23 rows, pending embedding queue порожня;
+- synthetic Gemini probe через `generateContent` повернув
+  `cachedContentTokenCount=0` на трьох запитах із byte-identical prefix близько
+  8k provider tokens. Implicit cache для цього шляху в поточній конфігурації
+  не закладається в економічну модель.
+
+### Дві maintainer-корекції
+
+У Smartest anomaly A-001 лишилась помилкова теза, що 49 unchecked units є
+host backlog і мають бути прогнані через `begin_memory_fidelity_pass`.
+Production host не вибирає units вручну: він виконує automatic requests ядра,
+а manual API лишається operator/debug шляхом. Cohort `c` вимірює поточну
+core-owned policy; можливе калібрування threshold відбудеться після cohort у
+новій конфігурації.
+
+Також виправлено version boundary протоколу. `6dd6b68` є останнім runtime
+implementation commit; наступні `1aa427b` і `1e3101f` змінювали лише
+документацію. Тому доведений extension від `6dd6b68` прийнятий, а protocol
+revision і binary source commit надалі записуються окремо.
+
+### Рішення і наступний крок
+
+Контрольна точка A отримала `QUALIFIED`. Cohort `c`, відкритий 2026-08-25
+05:53 UTC, збирає 1-3 природні terminal Sleep runs без зміни threshold,
+provider/model routing, prompts, Sleep profile, vectors або schemas. Після
+повернення package контрольної точки B maintainer видасть остаточний Phase 1
+status. Багатоденний Phase 2 до цього не починається.
+
+Створено
+`wiki/pages/planning/smartest-v2-checkpoint-a-review-2026-08-26.md`; protocol,
+correction ТЗ, roadmap і wiki entry pages синхронізовано. Runtime-поведінка
+Memory Engine не змінювалася, тому HISTORY не оновлено.
+
 ## Запис 172 — 2026-08-25 — Smartest отримав окреме correction ТЗ для Phase 1 v2
 
 Після незалежного review першого telemetry package власник попросив оформити
