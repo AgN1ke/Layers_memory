@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -543,6 +543,7 @@ impl Storage for FileStorage {
 
         let mut entries = Vec::new();
         let mut warnings = Vec::new();
+        let mut canonical_units = None;
         for path in files {
             let Some(entry) =
                 read_json_from_collection::<ArchiveEntry>(self, &path, "archive", &mut warnings)?
@@ -550,7 +551,17 @@ impl Storage for FileStorage {
                 continue;
             };
             if archive_matches_filters(&entry, filters) {
-                entries.push(self.hydrate_archive_memory_units(entry)?);
+                if canonical_units.is_none() {
+                    canonical_units = Some(self.read_canonical_memory_units_by_archive()?);
+                }
+                entries.push(
+                    self.hydrate_archive_memory_units_from_group(
+                        entry,
+                        canonical_units
+                            .as_ref()
+                            .expect("canonical unit groups initialized"),
+                    ),
+                );
             }
         }
 
@@ -1475,6 +1486,48 @@ impl FileStorage {
         Ok(entry)
     }
 
+    fn read_canonical_memory_units_by_archive(&self) -> Result<HashMap<String, Vec<MemoryUnit>>> {
+        let mut files = Vec::new();
+        collect_json_files(&self.root.join("archive").join("units"), &mut files)?;
+
+        // Hydration has historically ignored unreadable unit warnings. Keep
+        // that behavior while parsing each canonical unit file only once.
+        let mut ignored_warnings = Vec::new();
+        let mut grouped: HashMap<String, Vec<MemoryUnit>> = HashMap::new();
+        for path in files {
+            let Some(unit) = read_json_from_collection::<MemoryUnit>(
+                self,
+                &path,
+                "memory unit",
+                &mut ignored_warnings,
+            )? else {
+                continue;
+            };
+            grouped
+                .entry(unit.archive_id.clone())
+                .or_default()
+                .push(unit);
+        }
+        for units in grouped.values_mut() {
+            units.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        }
+        Ok(grouped)
+    }
+
+    fn hydrate_archive_memory_units_from_group(
+        &self,
+        mut entry: ArchiveEntry,
+        grouped: &HashMap<String, Vec<MemoryUnit>>,
+    ) -> ArchiveEntry {
+        if let Some(canonical) = grouped
+            .get(&entry.archive_id)
+            .filter(|units| !units.is_empty())
+        {
+            entry.memory_units = canonical.clone();
+        }
+        entry
+    }
+
     fn relative_path(&self, path: &Path) -> String {
         path.strip_prefix(&self.root)
             .unwrap_or(path)
@@ -1870,8 +1923,17 @@ fn event_summary(event: &StoredEvent) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::unique_tmp_path;
+    use super::{unique_tmp_path, FileStorage};
+    use crate::archive::{
+        ArchiveEntry, ArchiveFilters, ArchiveStatus, FidelityStatus, MemoryUnit, MemoryUnitStatus,
+    };
+    use crate::storage::Storage;
+    use crate::types::TimeRange;
+    use std::fs;
     use std::path::Path;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_ROOT_ID: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn unique_tmp_path_stays_in_same_directory_and_changes_name() {
@@ -1892,5 +1954,168 @@ mod tests {
             .and_then(|name| name.to_str())
             .expect("right tmp name")
             .ends_with(".tmp"));
+    }
+
+    #[test]
+    fn archive_collection_hydration_matches_individual_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "memory-context-hydration-{}-{}",
+            std::process::id(),
+            TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let storage = FileStorage::new(&root);
+        storage.ensure_layout().expect("storage layout");
+
+        let first = archive_fixture(
+            "archive_first",
+            "scope_one",
+            vec![unit_fixture(
+                "embedded_first",
+                "archive_first",
+                "embedded",
+                "2026-01-01T00:00:00Z",
+            )],
+        );
+        let second = archive_fixture(
+            "archive_second",
+            "scope_two",
+            vec![unit_fixture(
+                "embedded_second",
+                "archive_second",
+                "embedded",
+                "2026-01-01T00:00:00Z",
+            )],
+        );
+        storage.write_archive_entry(&first).expect("first archive");
+        storage
+            .write_archive_entry(&second)
+            .expect("second archive");
+        storage
+            .write_memory_unit(&unit_fixture(
+                "unit_later",
+                "archive_first",
+                "scope_one",
+                "2026-02-01T00:00:00Z",
+            ))
+            .expect("later canonical unit");
+        storage
+            .write_memory_unit(&unit_fixture(
+                "unit_tie_a",
+                "archive_first",
+                "scope_one",
+                "2026-01-01T00:00:00Z",
+            ))
+            .expect("first tied canonical unit");
+        storage
+            .write_memory_unit(&unit_fixture(
+                "unit_tie_b",
+                "archive_first",
+                "scope_one",
+                "2026-01-01T00:00:00Z",
+            ))
+            .expect("second tied canonical unit");
+        fs::write(root.join("archive/units/corrupt.json"), b"{broken json")
+            .expect("corrupt unit fixture");
+
+        let collection = storage
+            .read_archive(&ArchiveFilters::default())
+            .expect("archive collection");
+        assert!(
+            collection.warnings.is_empty(),
+            "unit hydration warnings stay discarded"
+        );
+        for entry in collection.items {
+            assert_eq!(
+                entry,
+                storage
+                    .read_archive_entry_by_id(&entry.archive_id)
+                    .expect("individual archive read")
+            );
+        }
+        let first_read = storage
+            .read_archive_entry_by_id("archive_first")
+            .expect("canonical precedence");
+        assert_eq!(
+            first_read.memory_units[0].created_at,
+            first_read.memory_units[1].created_at
+        );
+        assert_eq!(first_read.memory_units[2].memory_unit_id, "unit_later");
+        let fallback = storage
+            .read_archive_entry_by_id("archive_second")
+            .expect("embedded fallback");
+        assert_eq!(fallback.memory_units[0].memory_unit_id, "embedded_second");
+
+        let no_matches = storage
+            .read_archive(&ArchiveFilters {
+                theme: Some("no-match".to_string()),
+                ..ArchiveFilters::default()
+            })
+            .expect("empty filtered read does not load unit files");
+        assert!(no_matches.items.is_empty());
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    fn archive_fixture(id: &str, scope: &str, memory_units: Vec<MemoryUnit>) -> ArchiveEntry {
+        ArchiveEntry {
+            schema_version: "archive_entry.v1".to_string(),
+            archive_id: id.to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            personality_scope_id: Some(scope.to_string()),
+            source_session_id: format!("session_{scope}"),
+            source_event_ids: vec![],
+            time_range: TimeRange {
+                start: "2026-01-01T00:00:00Z".to_string(),
+                end: "2026-01-01T00:00:00Z".to_string(),
+            },
+            theme: None,
+            tags: vec![],
+            gist: id.to_string(),
+            narrative: id.to_string(),
+            compact_memory: None,
+            memory_units,
+            facts: vec![],
+            quotes: vec![],
+            weight: 1.0,
+            freshness: 1.0,
+            recall_count: 0,
+            last_recalled_at: None,
+            links: vec![],
+            emotional_markers: vec![],
+            topic_thread: vec![],
+            personal_signals: vec![],
+            relational_tone: None,
+            status: ArchiveStatus::Complete,
+            llm_enhanced: false,
+            prompt_id: None,
+            prompt_version: None,
+            embedding_model_id: None,
+            embedding: None,
+        }
+    }
+
+    fn unit_fixture(id: &str, archive_id: &str, scope: &str, created_at: &str) -> MemoryUnit {
+        MemoryUnit {
+            schema_version: "memory_unit.v1".to_string(),
+            memory_unit_id: id.to_string(),
+            archive_id: archive_id.to_string(),
+            personality_scope_id: Some(scope.to_string()),
+            source_session_id: format!("session_{scope}"),
+            created_at: created_at.to_string(),
+            updated_at: created_at.to_string(),
+            thesis: id.to_string(),
+            subject: None,
+            source_event_ids: vec![],
+            evidence: None,
+            tags: vec![],
+            weight: 1.0,
+            status: MemoryUnitStatus::ActiveArchive,
+            fidelity_status: FidelityStatus::Valid,
+            fidelity_review: None,
+            forget_review: None,
+            reflection_count: 0,
+            last_reflected_at: None,
+            last_reflection_operation_id: None,
+        }
     }
 }
