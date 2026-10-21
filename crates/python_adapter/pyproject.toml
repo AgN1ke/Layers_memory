@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "memory-engine"
-version = "0.1.1"
+version = "0.1.2"
 description = "Python bindings for Memory Engine, a reusable three-layer memory core"
 requires-python = ">=3.10"
 readme = "README.md"
