@@ -510,8 +510,18 @@ pub fn render_core_fact_prompt_line(fact: &CoreContextFact) -> Option<String> {
         .map(|subject| {
             let name = clean_string(&subject.name);
             let id = clean_string(&subject.id);
-            let label = if name.is_empty() { id } else { name };
-            format!(" about {}", xml_escape(label))
+            let label = if name.is_empty() || name == id {
+                if name.is_empty() {
+                    id.to_string()
+                } else {
+                    name.to_string()
+                }
+            } else if id.is_empty() {
+                name.to_string()
+            } else {
+                format!("{name} [id={id}]")
+            };
+            format!(" about {}", xml_escape(&label))
         })
         .unwrap_or_default();
     let status_marker = match fact.status {
@@ -667,13 +677,59 @@ fn xml_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_memory_view, TimeLabelContext};
+    use super::{render_core_fact_prompt_line, render_memory_view, TimeLabelContext};
     use crate::core_store::{
         AssociativeMemoryActivation, AssociativeMemoryItem, CoreContextEvent, CoreContextFact,
         CoreContextPackage, CoreFactStatus,
     };
     use crate::recall::{RecallItem, RecallSourceLayer};
-    use crate::types::TimeRange;
+    use crate::types::{Speaker, TimeRange};
+
+    fn fact_with_subject(id: &str, name: &str) -> CoreContextFact {
+        CoreContextFact {
+            category: "hobby_activity".to_string(),
+            core_fact_id: "core_fact_identity_test".to_string(),
+            scope: Some("chat_identity_test".to_string()),
+            subject: Some(Speaker {
+                id: id.to_string(),
+                name: name.to_string(),
+            }),
+            text: "moderates a hobby group".to_string(),
+            status: CoreFactStatus::Active,
+            confidence: 0.85,
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn core_fact_subject_keeps_stable_id_when_names_collide() {
+        let dana_a =
+            render_core_fact_prompt_line(&fact_with_subject("tg_174264079", "Dana")).unwrap();
+        let dana_b =
+            render_core_fact_prompt_line(&fact_with_subject("tg_745854382", "Dana")).unwrap();
+
+        assert!(dana_a.contains("Dana [id=tg_174264079]"));
+        assert!(dana_b.contains("Dana [id=tg_745854382]"));
+        assert_ne!(dana_a, dana_b);
+    }
+
+    #[test]
+    fn core_fact_subject_falls_back_to_id_when_name_is_missing() {
+        let rendered =
+            render_core_fact_prompt_line(&fact_with_subject("tg_745854382", "")).unwrap();
+
+        assert!(rendered.contains("about tg_745854382"));
+    }
+
+    #[test]
+    fn core_fact_subject_escapes_and_does_not_repeat_identical_id() {
+        let rendered =
+            render_core_fact_prompt_line(&fact_with_subject("Dana & <team>", "Dana & <team>"))
+                .unwrap();
+
+        assert!(rendered.contains("about Dana &amp; &lt;team&gt;"));
+        assert!(!rendered.contains("[id="));
+    }
 
     #[test]
     fn memory_view_keeps_layers_separate_and_drops_current_duplicate() {

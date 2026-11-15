@@ -7954,3 +7954,16 @@ fault injection. Потім v0.6 storage/migration графа, після ньо
 reflection та maturation. Contradiction/time revision і opt-in native
 clarification належать v0.7. Нові prompts/schemas не створюються раніше коду,
 який їх реально використовує.
+# 2026-10-03 — Batched canonical unit hydration for Archive reads (0.1.1)
+
+Smartest Club context packaging spent36.33s on a24.7MB snapshot with257 unit
+files and101 other archive JSON files. `read_archive` rescanned and parsed
+all canonical units for each matching entry. Group units once per call,
+loading lazily only when an archive matches. Preserve source traversal,
+stable created_at ordering, canonical precedence, embedded-unit fallback,
+filters, and existing warning behavior. No persistent cache or storage-format
+change; Session/Core/Sleep/erase contracts are unchanged.
+
+Focused equivalence test passes, including malformed units, scope filtering,
+ties and embedded fallback. Production performance and release proof are
+tracked in Smartest `docs/analysis/context-latency-2026-10-03.md`.
