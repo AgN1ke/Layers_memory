@@ -1500,7 +1500,8 @@ impl FileStorage {
                 &path,
                 "memory unit",
                 &mut ignored_warnings,
-            )? else {
+            )?
+            else {
                 continue;
             };
             grouped
