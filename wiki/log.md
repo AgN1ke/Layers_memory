@@ -8,6 +8,13 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] update | H1 Python wheel delivery
+
+Added the [wheel installation and verification guide](pages/integration/local-development.md#встановлення-релізного-wheel)
+and moved the current host integration guidance there. Recorded implementation
+of H1.5–H1.7 in the integration plan and roadmap. The first tagged release
+remains a separate acceptance step.
+
 ## [2026-11-15] update | H1.4 ignored query fields
 
 Documented response notes for ignored fields in the

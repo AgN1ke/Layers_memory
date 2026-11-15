@@ -46,6 +46,14 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-15 — Release workflow for installed Python wheels
+
+The repository can build Linux and Windows x86-64 wheels for CPython 3.12 in
+GitHub Actions. It validates the installed build identity and Python API on
+each platform and records the SHA-256 of each wheel. Publication requires an
+existing version tag and accepted release evidence. See the
+[integrator guide](wiki/pages/integration/local-development.md#встановлення-релізного-wheel).
+
 ## 2026-11-15 — Context and recall report ignored JSON request fields
 
 Python and Godot add a note for each ignored field in `core_context_package`

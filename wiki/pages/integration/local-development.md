@@ -7,6 +7,7 @@
 - [LLM integration resources](llm-integration-resources.md) - model resources an embedding application must provide.
 - [v0.3 acceptance](../releases/v0.3-acceptance.md) - conformance checks this setup supports.
 - [Chibigochi LLM Bridge](chibigochi-llm-bridge.md) - local bridge/proxy path used by the Godot product loop.
+- [Integration Hardening Plan](../planning/integration-hardening-plan-2026-11-15.md) - work order and acceptance gates for the current integration.
 
 Цей документ потрібен для моделей або розробників, які відкривають проєкт без історії чату. Тут зафіксовано, що вже встановлено на цій машині, де воно лежить і якими командами перевіряти локальний цикл.
 
@@ -485,6 +486,68 @@ pytest tests/ --require-api-contract-coverage
 для змінених джерел). Передані поля мають пріоритет, а пропущене поле в такій
 збірці лишається невідомим. Значення вбудовуються під час збірки.
 
+### Встановлення релізного wheel
+
+Workflow [Python wheels](../../../.github/workflows/python-wheels.yml)
+збирає `SHA256SUMS` і готові wheels для CPython 3.12 на x86_64 під Windows
+(`win_amd64`) і Linux (`manylinux_2_28_x86_64`, glibc 2.28 або новіша).
+Після перевірок прийнятого тегу `vX.Y.Z` він публікує їх у GitHub Releases.
+Встановлення wheel у середовище хоста не потребує Rust. Перший тег і приймання
+релізу відстежуються в
+[плані інтеграції](../planning/integration-hardening-plan-2026-11-15.md).
+
+1. Завантажте відповідний wheel і `SHA256SUMS` з одного релізу. Порівняйте
+   SHA-256 wheel із рядком для його імені. Наприклад, у команді замініть
+   `WHEEL_FILE.whl` фактичним іменем:
+
+   ```console
+   python -c "import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())" WHEEL_FILE.whl
+   ```
+
+2. Після збігу хешу встановіть пакет у середовище бота. `python` має бути
+   інтерпретатором цього середовища.
+
+   ```console
+   python -m pip install --no-index --no-deps WHEEL_FILE.whl
+   python -c "import memory_engine; print(memory_engine.build_info())"
+   ```
+
+3. Звірте `version` з номером релізу, а `commit` з повним SHA коміту тегу.
+   Для чистої релізної збірки `dirty` дорівнює `False`. Запишіть версію, SHA
+   і хеш wheel у конфігурацію розгортання.
+
+Запуск workflow вручну або через pull request із відповідними змінами дає
+тестовий артефакт `python-wheels-cp312` у GitHub Actions. Для розгортання
+беріть assets прийнятого релізу та закріпіть його версію і хеш пакета.
+
+### Відновлення Sleep і межі операцій із памʼяттю
+
+- Після перезапуску викличте `pending_sleep_runs()` і продовжте кожен потрібний
+  запуск від збереженого стану. `begin_sleep_run(session_id)` повертає наявний
+  багатопрохідний запуск для сесії. `cancel_sleep_run(sleep_task_id)` скасовує
+  його й дозволяє почати новий. Ці виклики мають іти через один
+  спільний рушій для каталогу FileStorage. Старий API `sleep()` має окремий
+  [контракт](../foundation/contracts.md#94-multi-pass-sleep-provider-contract).
+- Зберігайте `tasks/completed`. Ці записи потрібні для розпізнавання повторів
+  і міграції. `pending_tasks()` читає окрему чергу. `delete_session` і
+  `purge_scope` очищають дані відповідної сесії або області в межах своїх
+  контрактів. Кероване прибирання завершених задач заплановане в H2.
+- Для FileStorage повтор `ingest` може додати ще один запис. Журнал хоста
+  допомагає відстежувати події, але між двома записами можливий збій.
+  `ingest_transactional` належить до еталонного транзакційного сховища в
+  памʼяті. Стійка ідемпотентність FileStorage запланована в H2.
+- Якщо `core_context_package` повертає в `notes` `ignored unknown request
+  field: "/subject_id"`, запит оброблено без фільтра за людиною. Для перегляду
+  чи стирання саме однієї людини потрібен API етапу H3.
+  `delete_session` та `purge_scope` мають ширшу область дії.
+- Щоб виправити субʼєкта факту Core, позначте старий факт як `deprecated` та
+  створіть новий з правильною атрибуцією. `deprecated` прибирає факт з
+  активного контексту, а текст лишається у сховищі. Кандидат рефлексії
+  потрапляє в Core після явного прийняття через `review_candidate`.
+- Передавайте `utc_offset_minutes`, щоб відносні дати враховували місцевий
+  час чату. Статус серпневих вимірювань Smartest звіряйте зі
+  [сторінкою приймання](../planning/smartest-v2-checkpoint-a-review-2026-08-26.md).
+
 ### Свіже Розгортання
 
 Якщо `.venv` не існує:
@@ -498,19 +561,13 @@ $venv = "C:\Python_projects\Layers_memory\crates\python_adapter\.venv"
 
 Потім - команда збірки і pytest з попереднього блока.
 
-### Поточний Очікуваний Результат Pytest
+### Що перевіряє Pytest
 
-9 тестів у `tests/test_basic.py`, усі проходять:
-
-- `test_ingest_creates_stored_event`;
-- `test_read_session_returns_stored_events`;
-- `test_explicit_sleep_preserves_active_tail`;
-- `test_full_cycle_ingest_sleep_resume_recall`;
-- `test_core_context_package_combines_session_and_archive`;
-- `test_upsert_core_fact_is_returned_in_context_package`;
-- `test_core_context_package_does_not_leak_facts_between_scopes`;
-- `test_ingest_rejects_wrong_schema`;
-- `test_recall_zero_limit_uses_engine_default`.
+Набір тестів звіряє відповіді всіх публічних викликів Python-адаптера,
+відновлення Sleep після повторного відкриття сховища й примітки про невідомі
+поля. Для перевірки конкретного релізного wheel задайте
+`MEMORY_ENGINE_EXPECTED_VERSION` і `MEMORY_ENGINE_EXPECTED_COMMIT` перед
+запуском. Workflow задає ці значення за маніфестом і комітом збірки.
 
 ## Що Не Треба Шукати Вручну
 
