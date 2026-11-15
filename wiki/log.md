@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] update | H2 FileStorage operation contract
+
+Recorded the target [FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and its [recovery architecture](pages/foundation/architecture.md). Updated
+the plan and roadmap with the restart reproductions for H2.
+
 ## [2026-11-15] update | H1 Python wheel delivery
 
 Added the [wheel installation and verification guide](pages/integration/local-development.md#встановлення-релізного-wheel)
