@@ -3,8 +3,8 @@
 ## Purpose
 
 Status: **S2 inventory complete; S2.A and S2.B externally accepted; S2.C
-transactional Sleep lifecycle implemented with external acceptance pending; S2
-exit gate open**.
+transactional Sleep lifecycle has external logical acceptance at `c57e3cc`;
+S2 exit gate open**.
 
 This page is the migration ledger between the method-by-method local `Storage`
 trait and the vault-bound transactional storage required by the server runtime.
@@ -127,9 +127,9 @@ sources to Complete archive coverage; those events remain live until a future
 finalize transaction validates provider output and commits completion. The
 focused suite now covers the complete workflow, all mutation edges, lost ack,
 replay, stale/concurrent workers, immutable dependency rewrites, source
-provenance, late live turns, limits and cancellation. External acceptance is
-still pending, so this is an implemented logical reference rather than an
-accepted S2.C closure.
+provenance, late live turns, limits and cancellation. The
+[recorded external review](client-request-memory-integrity-2026-09-29.md#приймання-яке-не-можна-загубити)
+accepted the logical lifecycle at `c57e3cc`. Full S2.C parity remains open.
 
 This is a reference and conformance surface, not the production backend.
 `FileStorage` and `MemoryEngine::ingest` remain unchanged for existing local,
@@ -192,8 +192,8 @@ isolated manifest or coverage write.
 
 ### S2.C — Sleep, fidelity and forgetting
 
-**Transactional Sleep lifecycle reference exists; external acceptance
-pending.** Its short begin transaction makes seven changes visible together:
+**Transactional Sleep lifecycle has external logical acceptance at
+`c57e3cc`.** Its short begin transaction makes seven changes visible together:
 Session workflow claim, preliminary Archive, compression task, MemoryUnit task,
 immutable workflow input, initial SleepRun and immutable replay result. It
 shares Stage 1 selection with Storage v1 and uses

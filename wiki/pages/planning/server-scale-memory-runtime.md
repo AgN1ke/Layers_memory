@@ -16,8 +16,8 @@
 ## Status and purpose
 
 Status: **accepted strategic plan; S1 reference contracts implemented; S2.A
-and S2.B externally accepted; S2.C transactional Sleep lifecycle implemented with external
-acceptance pending**.
+and S2.B externally accepted; S2.C transactional Sleep lifecycle has external
+logical acceptance at `c57e3cc`; S2 completion remains open**.
 
 **Owner scheduling update 2026-08-24:** implementation is paused. Existing
 S1/S2 reference slices stay in regression coverage. PostgreSQL, authenticated
@@ -321,10 +321,11 @@ frozen run/input/Archive/task topology and advances run/tasks with exact replay.
 Finalize alone publishes deterministic canonical MemoryUnits and Complete
 coverage; cancel clears the claim without hiding its events. Recovery can
 rehydrate the current provider batch from durable records. Inputs/responses are
-bounded and all logical mutation edges have rollback/lost-ack tests. External
-acceptance, post-finalize Core/derived work, fidelity, forgetting, vector state,
-PostgreSQL and host adapters remain open; therefore neither S2 nor production
-readiness is claimed.
+bounded and all logical mutation edges have rollback/lost-ack tests. The
+[recorded external review](client-request-memory-integrity-2026-09-29.md#приймання-яке-не-можна-загубити)
+accepted the logical Sleep lifecycle at `c57e3cc`. Post-finalize Core/derived
+work, fidelity, forgetting, vector state, PostgreSQL and host adapters remain
+open, as do the full S2 and production acceptance gates.
 
 The two former server-schema gates are closed in the logical reference: one
 bounded immutable input owns raw prompt material, and transactional events have

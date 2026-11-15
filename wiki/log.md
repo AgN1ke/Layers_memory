@@ -8,6 +8,14 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] update | Local H0 integration checks
+
+Recorded merge `bfbfd9f` in the [integration plan](pages/planning/integration-hardening-plan-2026-11-15.md)
+and [roadmap](pages/planning/roadmap.md). Updated the [Core prompt contract](pages/foundation/contracts.md)
+and the Storage v2 planning pages to reflect the external logical acceptance
+of the transactional Sleep reference at `c57e3cc`. Local verification is in
+[DEVLOG Entry 177](../DEVLOG.md#запис-177--2026-11-15--локальне-злиття-й-перевірки-h0).
+
 ## [2026-11-15] move | September memory design notes
 
 Moved the [memory model proposal](pages/research/memory-model-completion-proposal-2026-09-05.md)

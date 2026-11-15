@@ -1048,6 +1048,11 @@ Canonical prompt view рендерить прийняті hits окремим
 
 Важливо: цей JSON-контракт є API/debug формою, а не обовʼязковим дослівним prompt payload. Для LLM має використовуватись компактне prompt-facing представлення: без `schema_version`, довгих `event_id` / `archive_id` / `core_fact_id`, службових `source`, зайвих timestamp/source полів і дубльованих технічних ключів, якщо вони не потрібні для конкретної відповіді або debug-команди. Канонічні storage-файли лишаються повними; prompt view має нести сенс, а не аудитну обвʼязку. Ядро надає текстовий `render_memory_view` і структурований `render_memory_prompt_plan`; хост обирає форму відповідно до API провайдера.
 
+Атрибутований рядок Core додає після категорії `about Name [id=stable_id]`, якщо
+імʼя та `subject.id` задані й різняться. Єдине непорожнє або однакове
+значення показується один раз. Рендер екранує XML-символи. Стабільний ID
+учасника розрізняє тезок і належить до атрибуції змісту.
+
 ### 6.6 MemoryPromptPlan
 
 `render_memory_prompt_plan(package, current_user_message)` повертає

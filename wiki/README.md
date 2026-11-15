@@ -61,16 +61,16 @@ are current applications that use it. Memory policy lives in the Rust core.
 ### 2026-11-15 — Integration hardening plan is the active work order
 
 The [Integration Hardening Plan H0–H5](pages/planning/integration-hardening-plan-2026-11-15.md)
-is now the working order. It combines the production host's request summary of
+is the working order. It combines the production host's request summary of
 2026-11-15, the client request of 2026-09-29 and a maintainer check of both
-repositories. Work under the plan has started with the plan itself; no code,
-schema, package version or git history was changed.
+repositories.
 
 Three facts from that check qualify the statements further down this page:
 
-- **`main` is not what production runs.** Smartest2 builds its own wheel `0.1.2`
-  from `7a18569`, a side branch with two fixes that are not merged. Stage H0
-  merges them.
+- **Local `main` has the Smartest2 `0.1.2` engine sources.** H0 merge `bfbfd9f`
+  brought in both fixes from `7a18569`, the source revision for the host's wheel.
+  The H0 checks passed, including all 11 host conformance scenarios. The
+  merge is local and remote synchronization is tracked by H0.7.
 - **The Smartest validation evidence is not authoritative.** The host reported
   privacy and provenance defects in its own exporter, so the Phase 1 numbers
   and the checkpoint A `QUALIFIED` status await a new qualification. The
@@ -102,11 +102,10 @@ intake and are not reported production incidents. Scoped inspection/control is
 also an integration gap. Earlier passes remain evidence of their tested paths,
 not proof against these new cases.
 
-The same document preserves the received external logical acceptance of
-`c57e3cc`; older "external acceptance pending" statements below and on server
-pages predate that report. It does not establish full S2.C parity or production
-readiness. Proposed repair phases await owner approval; the server pause and
-Smartest live-validation gates remain in force.
+The same document preserves the external logical acceptance of the Storage v2
+Sleep lifecycle at `c57e3cc`. Full S2.C parity and production readiness remain
+open. The H0–H5 plan now carries the proposed repair phases, and the server
+pause and Smartest live-validation gates remain in force.
 
 ### Previously recorded implementation and validation state
 
@@ -120,18 +119,15 @@ The project has already proved the main foundation:
   memory units;
 - project documentation now lives in this wiki with checked internal links.
 
-The active sequence is production validation on Smartest v2, closure of the
-v0.5 live reflection gate, then v0.6 hierarchical reasoning. The first
-Smartest package passed privacy, shared-prefix and dialogue-geometry checks and
-was classified `CHANGES_REQUIRED`. The corrected instrumentation preflight is
-now `QUALIFIED`; cohort `c` is collecting 1-3 natural terminal Sleep runs on a
-frozen configuration. The formal multi-day window follows review of that
-sample without asking chat participants to perform scripted tests.
+The August Smartest plan progressed from `CHANGES_REQUIRED` to a provisional
+checkpoint A `QUALIFIED` for a small frozen cohort. The November exporter
+findings described above supersede that qualification. Production validation
+awaits fresh evidence.
 Autonomous reflection already has durable scope-safe
 apply/review and the first internal graph-storage slice: journaled candidate
-migration, MemoryUnit evidence edges and scope-exact inspection. Hierarchical
-reasoning starts after the redacted Smartest report confirms a non-degenerate
-reflection action and no data-integrity blocker.
+migration, MemoryUnit evidence edges and scope-exact inspection. The current
+requirements for starting hierarchical reasoning are tracked in the H0–H5
+plan and roadmap.
 
 A separate server-scale track remains documented. The current `FileStorage` and
 in-process locks are the local/reference deployment, not proof of centralized
@@ -145,7 +141,8 @@ committed-view Stage 1 recall. Its S2.C Sleep reference now covers start,
 provider-result submit, restart recovery, finalize and cancel as one durable
 workflow. One bounded immutable input owns private source events; only finalize
 publishes canonical MemoryUnits and Complete coverage, while cancel releases
-the sources unchanged. External acceptance is pending. Post-finalize
+the sources unchanged. External logical acceptance covers this lifecycle
+at `c57e3cc`. Post-finalize
 Core/derived routing, fidelity, forgetting, reflection/vector workflows,
 PostgreSQL, the authenticated game API and production-scale acceptance remain
 open. Chibigochi product UX/packaging and the Google Play server track are

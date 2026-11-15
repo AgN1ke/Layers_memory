@@ -149,8 +149,8 @@ revisions for the exact query, retaining phantom protection without requiring
 a full-vault hot-path scan. Production PostgreSQL must map these contracts to
 bounded composite indexes and prove query plans.
 
-### Phase IV — Finish the transactional Sleep lifecycle (implemented in the
-in-memory reference; external acceptance pending)
+### Phase IV — Finish the transactional Sleep lifecycle (in-memory reference,
+external logical acceptance at `c57e3cc`)
 
 Sleep is now one restartable state machine rather than a start transaction
 followed by best-effort local writes. `sleep_workflow_input.v1` owns the only
@@ -204,8 +204,10 @@ private memory text.
 
 The compatible Python/Godot APIs still use FileStorage; the new fields are
 already populated by repository hosts, but there is no Storage v2 host cutover.
-External acceptance of transactional Sleep, post-finalize Core/derived work,
-fidelity/forgetting, Storage v2 vector workflows, and PostgreSQL remain open.
+The [external review](client-request-memory-integrity-2026-09-29.md#приймання-яке-не-можна-загубити)
+accepted the transactional Sleep lifecycle at the logical reference level.
+Post-finalize Core/derived work, fidelity/forgetting, Storage v2 vector
+workflows, and PostgreSQL remain open.
 Finalize зберігає versioned `post_finalize` pending-state, тому ці гілки не
 губляться за порожнім compatibility outcome.
 These are planned architectural phases. They are not hidden behind a claim

@@ -55,29 +55,28 @@ Memory Engine має бути **довготривалою памʼяттю, щ�
 
 ---
 
-## Оновлення 2026-11-15 — активна черга
+## Поточний стан (2026-11-15)
 
-Першою тепер іде робота за
-[планом дій H0–H5](integration-hardening-plan-2026-11-15.md): звести `main` з
-тим, що працює в продакшені, закрити прогалини інтеграції, підтверджені в коді,
-і лише потім повернутися до живого gate v0.5 та v0.6 Phase 3. Напрям погоджено
-власником; роботу розпочато з фіксації плану, код не змінювався.
+Діє [план H0–H5](integration-hardening-plan-2026-11-15.md). Локальний H0
+обʼєднав код бібліотеки з правками, які вже використовує Smartest2. Далі
+H1 прибирає дубльовані запуски Sleep та стандартизує поставку адаптера.
+H2–H3 закривають відомі проблеми запису, збереження й перегляду памʼяті.
 
 Що змінилося відносно розділу нижче:
 
-- У продакшені Smartest2 працює wheel `0.1.2`, зібраний із незлитої гілки
-  (`7a18569`, дві правки поверх `6dd6b68`). `main` їх не містить до H0.
+- Smartest2 використовує wheel `0.1.2` із `7a18569`. Локальний `main` містить
+  обидва його коміти через merge `bfbfd9f`. Синхронізація `origin/main`
+  обліковується окремим кроком H0.7.
 - Валідація на Smartest зупинена. Хост повідомив про вади приватності та
   походження у власному експортері, тому числа Phase 1 і `QUALIFIED` точки A
   чекають нового підтвердження; пакет точки B у репозиторії не зафіксовано.
   Gate v0.5 і вхід у v0.6 Phase 3 лишаються закритими до рішення D3 з плану.
 - Клієнтський запит 2026-09-29 (C1–C4) і зведення хоста 2026-11-15 зведені в
   один порядок робіт. Серверний напрям лишається на паузі.
+- Зовнішній звіт прийняв логічний еталон transactional Sleep на `c57e3cc`.
+  Повний паритет S2.C, PostgreSQL і продакшен-приймання відкриті.
 
-Розділ «Поточний стан (2026-08-24)» збережено як запис на ту дату; його
-перепише крок H0.6.
-
-## Поточний стан (2026-08-24)
+## Стан на 2026-08-24
 
 Після v0.3: ліцензію повернуто на non-commercial; Chibigochi має async
 product loop і реальну Godot-інтеграцію; prompt view має derived time labels.
@@ -142,8 +141,8 @@ PostgreSQL/pgvector. Архітектурне S0 зафіксовано, provisi
 має числа й відкриті owner decisions, а S1 reference contracts уже реалізують
 fail-closed vault identity та ordered/idempotent turn ledger. S2.A ingest і
 S2.B Core/committed-view recall пройшли зовнішнє logical-reference приймання;
-S2.C вже має завершений transactional Sleep lifecycle reference із зовнішнім
-acceptance pending.
+S2.C має transactional Sleep lifecycle reference, згодом логічно прийнятий
+на `c57e3cc`.
 PostgreSQL, game API, workers і S7 ще не починались, а решта durable workflows
 не перенесена. Локальні/Chibigochi
 acceptance попередніх версій залишаються правдивими, але не є доказом
@@ -554,9 +553,9 @@ v0.5 → v0.7 цим треком не змінюється.
 
 - [x] План зафіксовано; запити хоста й клієнтський запит 2026-09-29 звірено з
   кодом. — 2026-11-15, DEVLOG Запис 176.
-- [ ] H0 — `main` дорівнює продакшену: влито `c9a7742` і `7a18569`, накопичену
-  документацію закомічено, повний набір перевірок зелений, `origin/main`
-  синхронізовано.
+- [~] H0 — локальний `main` містить `c9a7742` і `7a18569` через merge
+  `bfbfd9f`; документацію й перевірки H0.1–H0.6 завершено. Синхронізація
+  `origin/main` очікує H0.7. — 2026-11-15, DEVLOG Запис 177.
 - [ ] H1 — один відкритий Sleep на сесію у FileStorage; ідентичність збірки в
   модулі; опис Python-поверхні; примітка про невідомі ключі запиту; теговані
   релізи з готовими wheels.
@@ -649,8 +648,8 @@ core як централізований сервіс для тисяч грав
   category revision, durable operation result і shared Core policy, а recall
   комітить ranking result і correctness feedback в одному view. S2.A/S2.B
   externally accepted; чинний Storage/FileStorage API не зламано. S2.C
-  transactional Sleep lifecycle реалізований; зовнішнє приймання,
-  post-finalize cognition і compatibility adapter ще відкриті. — 2026-08-02.
+  transactional Sleep lifecycle має зовнішнє логічне приймання `c57e3cc`;
+  post-finalize cognition і compatibility adapter ще відкриті.
 - [x] Correctness-critical recall state класифіковано й перенесено в S2.B
   reference: `recall_transactional` читає один Archive snapshot, ранжує shared
   Stage 1 policy та одним work unit зберігає selected feedback і exact result.
@@ -689,8 +688,8 @@ core як централізований сервіс для тисяч грав
   Session не блокує target Sleep. Submit/finalize/cancel freeze current run,
   revalidate input/Archive/task topology, мають deterministic IDs, exact replay
   і повні logical failpoints. Лише finalize атомарно створює canonical
-  MemoryUnits та Complete coverage; cancel не приховує events. Зовнішнє
-  приймання ще не завершене. — 2026-08-02,
+  MemoryUnits та Complete coverage; cancel не приховує events. Логічний
+  lifecycle зовнішньо прийнято на `c57e3cc`. — 2026-08-02,
   `server_sleep_stage1_storage_v2.rs`.
 - [x] Sleep payload нормалізовано у один `sleep_workflow_input.v1`; tasks/run/
   replay results тримають typed digest reference, а provider batch

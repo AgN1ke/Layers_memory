@@ -46,6 +46,25 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-15 — Smartest2 archive and Core rendering fixes merged into `main`
+
+Merge `bfbfd9f` brings the source of the Smartest2 `0.1.2` wheel into local
+`main`, preserving the commits in the host's build manifest.
+
+**What changed:**
+
+- `c9a7742` (2026-10-03) batches canonical MemoryUnit hydration during an
+  Archive collection read. The focused equivalence fixture covers filtering,
+  ordering, warnings and fallback. The canonical-read defect tracked in H3
+  remains open.
+- `7a18569` (2026-10-21) preserves the stable `subject.id` alongside the
+  display name in rendered Core fact lines. Facts about people with the same
+  name remain distinguishable in the model's context.
+
+The merged manifests identify `0.1.2`, the version already built by the host.
+Release packaging and the remaining integration work are tracked in the
+[Integration Hardening Plan](wiki/pages/planning/integration-hardening-plan-2026-11-15.md).
+
 ## 2026-11-15 — Production host report qualifies validation evidence and names integration gaps
 
 Context. Smartest2, the production host, consolidated what it needs from the
