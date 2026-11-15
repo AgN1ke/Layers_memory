@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] move | September memory design notes
+
+Moved the [memory model proposal](pages/research/memory-model-completion-proposal-2026-09-05.md)
+and [design notes](pages/research/memory-design-beliefs-notes-2026-09-05.md)
+into the wiki research section and updated their links and index entries.
+
 ## [2026-11-15] plan | Integration hardening plan H0–H5
 
 Added the [Integration Hardening Plan](pages/planning/integration-hardening-plan-2026-11-15.md).

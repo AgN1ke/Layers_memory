@@ -37,7 +37,7 @@ Smartest або Chibigochi. Під час підготовки цього док
 - [Storage v2 inventory](storage-v2-work-unit-inventory.md) — транзакційні межі та неперенесені flows.
 - [Server runtime](server-scale-memory-runtime.md) — окремий призупинений серверний напрям.
 - [Smartest checkpoint A](smartest-v2-checkpoint-a-review-2026-08-26.md) — фактична межа приймання спостережень.
-- [Вереснева пропозиція](../../../docs/research/memory-model-completion-proposal-2026-09-05.md) — матеріал для обговорення, не прийнята зміна roadmap.
+- [Вереснева пропозиція](../research/memory-model-completion-proposal-2026-09-05.md) — матеріал для обговорення, не прийнята зміна roadmap.
 - [Versioning](../governance/versioning.md) — сумісність і release gate.
 - [HISTORY](../../../HISTORY.md) і [DEVLOG](../../../DEVLOG.md) — межі тверджень та робочий запис.
 

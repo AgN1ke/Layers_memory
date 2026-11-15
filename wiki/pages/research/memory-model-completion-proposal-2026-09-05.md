@@ -10,6 +10,12 @@
 утворюють чергу робіт бібліотеки. 2026-09-05 цей документ і допоміжні нотатки
 перенесено сюди з репозиторію бота, де їх спочатку помилково зберегли.
 
+## Related pages
+
+- [Допоміжні дизайн-нотатки](memory-design-beliefs-notes-2026-09-05.md)
+- [Клієнтський запит щодо цілісності пам’яті](../planning/client-request-memory-integrity-2026-09-29.md)
+- [План зміцнення інтеграції](../planning/integration-hardening-plan-2026-11-15.md)
+
 ## Основна думка
 
 Доробляти слід цілісний цикл **досвід → осмислення → стійке розуміння → перегляд**.
@@ -30,13 +36,13 @@
 
 | Документ | Що визначає для цієї пропозиції |
 |---|---|
-| [Стратегія](../../wiki/pages/foundation/strategy.md) | «Core», «Archive», «Ваги і природний відбір», «Sleep», «Adaptive Stable Core», доповнення про граф гіпотез |
-| [Архітектура](../../wiki/pages/foundation/architecture.md) | §5.3–5.4: стабільний Store окремо від поточного Context; різні канали запису Core; структурні правила promotion |
-| [Autonomous Reflection v0.5](../../wiki/pages/planning/autonomous-reflection-v0.5.md) | Осмислення за новим валідованим досвідом, checkpoint, reinforcement, challenge, no-insight та live gate |
-| [Reflective Belief System](../../wiki/pages/planning/reflective-belief-system.md) | Незалежність evidence, рівні узагальнення, maturation, час, суперечності та opt-in clarification |
-| [Information Flow Integrity](../../wiki/pages/planning/information-flow-integrity.md) | Один зміст від event до prompt; MemoryUnit як канонічний текст; scope, vectors та кінцевий context plan |
-| [Roadmap](../../wiki/pages/planning/roadmap.md) | v0.5 live gate перед v0.6 reasoning; graph storage уже існує; server/game track призупинений |
-| [Виконане порівняння в репозиторії бота](D:/AI/SHIZUS2026/docs/analysis/old-new-memory-comparison-2026-09-05.md) | Зовнішні докази інтеграції та recall; source HEAD не ототожнюється зі встановленим wheel |
+| [Стратегія](../foundation/strategy.md) | «Core», «Archive», «Ваги і природний відбір», «Sleep», «Adaptive Stable Core», доповнення про граф гіпотез |
+| [Архітектура](../foundation/architecture.md) | §5.3–5.4: стабільний Store окремо від поточного Context; різні канали запису Core; структурні правила promotion |
+| [Autonomous Reflection v0.5](../planning/autonomous-reflection-v0.5.md) | Осмислення за новим валідованим досвідом, checkpoint, reinforcement, challenge, no-insight та live gate |
+| [Reflective Belief System](../planning/reflective-belief-system.md) | Незалежність evidence, рівні узагальнення, maturation, час, суперечності та opt-in clarification |
+| [Information Flow Integrity](../planning/information-flow-integrity.md) | Один зміст від event до prompt; MemoryUnit як канонічний текст; scope, vectors та кінцевий context plan |
+| [Roadmap](../planning/roadmap.md) | v0.5 live gate перед v0.6 reasoning; graph storage уже існує; server/game track призупинений |
+| Репозиторій Smartest2 (`SHIZUS2026`), `docs/analysis/old-new-memory-comparison-2026-09-05.md` | Зовнішні докази інтеграції та recall; source HEAD не ототожнюється зі встановленим wheel |
 
 У Markdown є історичні абзаци: наприклад, локальні `memory/core/README.md` та
 `memory/archive/README.md` ще кажуть, що схем немає; вони вже існують. Старі

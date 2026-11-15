@@ -53,7 +53,7 @@ v1.0.
   задум відносних часових міток, якого стосується рішення D1.
 - [Multi-Speaker Geometry](../research/multi-speaker-geometry-2026-06-12.md) —
   атрибуція й цитати, від яких залежить H3.
-- [Вереснева пропозиція](../../../docs/research/memory-model-completion-proposal-2026-09-05.md) —
+- [Вереснева пропозиція](../research/memory-model-completion-proposal-2026-09-05.md) —
   матеріал для обговорення про завершення моделі.
 - [HISTORY](../../../HISTORY.md) і [DEVLOG](../../../DEVLOG.md) — межі тверджень
   і робочий запис; початок роботи зафіксовано в Записі 176.

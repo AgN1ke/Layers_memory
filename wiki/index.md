@@ -116,6 +116,9 @@ crate/host README files stay outside the wiki.
 
 ## Research
 
+- [Memory Model Completion Proposal](pages/research/memory-model-completion-proposal-2026-09-05.md) і
+  [допоміжні дизайн-нотатки](pages/research/memory-design-beliefs-notes-2026-09-05.md) —
+  вересневі матеріали для обговорення розвитку тришарової пам’яті.
 - [Agentic Architectures](pages/research/agentic-architectures.md) - agent
   framework landscape and what Memory Engine adopts or rejects.
 - [Generative Agents Memory Stream](pages/research/generative-agents-memory-stream-2026-07-06.md)

@@ -1,9 +1,13 @@
 # Нотатки: як логічно завершити 3-шарову пам’ять
 
-Джерела: `wiki/pages/planning/autonomous-reflection-v0.5.md` та
-`wiki/pages/planning/reflective-belief-system.md` у `C:/Python_projects/Layers_memory`.
 Це коротка дизайн-вирізка: вона розділяє вже реалізований фундамент і заплановану
 поведінку, не оголошуючи roadmap прийнятим рішенням.
+
+## Related pages
+
+- [Autonomous Reflection v0.5](../planning/autonomous-reflection-v0.5.md)
+- [Reflective Belief System](../planning/reflective-belief-system.md)
+- [Пропозиція щодо завершення моделі пам’яті](memory-model-completion-proposal-2026-09-05.md)
 
 ## Принципи
 
