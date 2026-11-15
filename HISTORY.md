@@ -46,6 +46,97 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-15 — Production host report qualifies validation evidence and names integration gaps
+
+Context. Smartest2, the production host, consolidated what it needs from the
+library in a request summary dated 2026-11-15; its full text is preserved in
+the [Integration Hardening Plan](wiki/pages/planning/integration-hardening-plan-2026-11-15.md).
+A maintainer check read the library at `4a114bd` and at the production branch
+tip `7a18569`, and read the host repository without changing it. On `4a114bd`,
+`cargo test --workspace` gave 194 passed, 0 failed, 1 ignored, and clippy with
+`-D warnings` was clean. The host's reproduction scripts were not rerun and
+production was not accessed, so the gaps below are confirmed by source
+inspection, not by new executed evidence.
+
+**What is qualified:**
+
+- **Smartest validation evidence.** The host reports open privacy and
+  provenance defects in its own exporter and asks that no conclusions be drawn
+  from the August numbers. We did not verify those findings. The Phase 1 review
+  aggregates and the checkpoint A `QUALIFIED` status are therefore a record of
+  what was reviewed, not authoritative evidence, until a new qualification on
+  exact bytes. No checkpoint B package was recorded.
+- **`main` is not the production runtime.** Production runs a host-built wheel
+  `0.1.2` from `7a18569`, which carries two fixes absent from `main`: batched
+  canonical-unit hydration (`c9a7742`) and a stable subject ID in rendered Core
+  fact lines (`7a18569`). The second changes prompt-facing text and has no
+  library record yet.
+- **Ingest is append-only.** FileStorage `ingest` assigns a new event ID on
+  every call and accepts no host identity, so a redelivered event is stored
+  again. `ingest_transactional` exists only for the in-memory Storage v2
+  reference and is not a FileStorage or Python capability.
+- **Erasure has no generation fence.** `purge_scope` and `delete_session`
+  remove a planned set of records but leave no barrier against a stale write
+  arriving afterwards; excluding concurrent writers is left to the host.
+- **One open Sleep per Session is not enforced by FileStorage.** A second
+  `begin_sleep_run` creates a second preliminary Archive and task set.
+- **No person-bound view or erase.** The context request has no subject filter
+  and silently ignores unknown keys; erasure exists only for a Session or a
+  whole scope; `patch_core_fact` cannot change a subject.
+- **Time in rendered memory is relative only.** Archive lines carry a derived
+  age label and Core facts carry no time.
+- **Completed work records are never pruned** and keep the frozen inputs of
+  their pass until the Session or scope is erased.
+- **Context exposure counts as recall feedback** and can raise an Archive's
+  rank by up to 1.25. The host reproduced entrenchment of the first shown
+  memories; we did not rerun it.
+
+**What remains true:** by the host's report, the three-layer lifecycle carries
+production without memory-caused failed turns, concurrent chat and Sleep keep
+the new Session tail, and stored attribution was correct in the namesake
+incident where only rendering lost identity. Relative time labels and
+`current_time`, shipped 2026-07-02, work as documented. Earlier acceptances
+remain evidence for their tested paths. The server track stays paused.
+
+**What we are doing:** following the plan's stages H0–H5, starting with the
+merge of the production branch into `main`. This entry makes no runtime fix,
+migration or release. Four owner decisions are open: absolute dates in
+rendered memory; who reviews Core candidates and whether a reviewer model only
+recommends or may write; what an isolated real-model replay unlocks while
+production acceptance of v0.5 stays separate; and release numbering.
+
+## 2026-09-29 — Reported FileStorage counterexamples qualify lifecycle integrity claims
+
+Context. An integrator supplied synthetic local FileStorage observations on
+`4a114bdae5d24450c1752c6c01606f0d2594684c`, not incidents from live Smartest or
+Chibigochi. The complete report and its evidence boundaries are preserved in
+the [consolidated client request](wiki/pages/planning/client-request-memory-integrity-2026-09-29.md).
+Source inspection supports the reported mechanisms. No independent rerun was
+performed during this documentation intake; executable fixtures remain a
+proposed next step rather than newly claimed test evidence.
+
+**What is qualified:** late fidelity results can overwrite a Forgotten state;
+replaying an old completed forgetting result can undo a later restore;
+partially persisted extraction can be mistaken for completion; and canonical
+read failure can leave a stale embedded copy authoritative without its warning.
+Successful earlier lifecycle and readable-canonical precedence tests do not
+establish correctness for these counterexamples. Current ID-only low-level
+methods and the Telegram example's directory-based inspection must not be
+represented as a complete user-scoped administration interface.
+
+**What remains true:** prior acceptance is retained for its actual tested
+paths. The owner supplied logical implementation/architecture PASS for the
+`7314833` → `c57e3cc` Storage v2 Sleep work; it did not claim production
+readiness and does not certify later FileStorage cases. Scoped recall is not
+shown to leak generally. Storage v2 post-finalize parity, PostgreSQL, durable
+workers and physical-failure qualification remain unfinished.
+
+**What we are doing:** recording the request and proposing shared rules for
+decision authority, recoverable complete publication, canonical reads and
+scope-bound inspection. No runtime fix, migration or release is made by this
+entry. Implementation awaits owner approval; the paused server track is not
+restarted.
+
 ## 2026-08-24 — Sleep gains provider-cost controls and structured host context
 
 Context. Production traces from Smartest v2 showed that each analytical Sleep

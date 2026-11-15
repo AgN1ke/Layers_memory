@@ -26,6 +26,15 @@
 Status: **owner-approved production protocol; corrected checkpoint A reviewed
 2026-08-26 as `QUALIFIED`; checkpoint B cohort is collecting**.
 
+**Update 2026-11-15: the study is on hold.** Smartest reported open privacy and
+provenance defects in its exporter and asked that no conclusions be drawn from
+the August numbers. No checkpoint B package was recorded in this repository. A
+new export and Phase 2 follow only after the exporter is fixed and a new
+`QUALIFIED` is issued on exact bytes. Production acceptance stays a separate
+open item. Whether development may meanwhile proceed on an isolated real-model
+replay is owner decision D3 in the
+[Integration Hardening Plan](integration-hardening-plan-2026-11-15.md).
+
 This document is addressed to the Smartest v2 engineer or operator who can
 change application logging and inspect provider usage, Memory Engine outputs,
 runtime state and configuration. Chat participants continue using the product

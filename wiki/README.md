@@ -13,6 +13,9 @@ whole chat history.
 - [Architecture](pages/foundation/architecture.md) - how the library is structured.
 - [Contracts](pages/foundation/contracts.md) - data and task shapes that integrations must respect.
 - [Roadmap](pages/planning/roadmap.md) - current state and next planned work.
+- [Integration Hardening Plan H0–H5](pages/planning/integration-hardening-plan-2026-11-15.md) -
+  the active work order since 2026-11-15: what is done, in which order, and by
+  which acceptance criteria.
 - [Autonomous reflection v0.5](pages/planning/autonomous-reflection-v0.5.md) -
   how validated experience reaches reflection by salience, sleep, and time,
   then matures one reviewable understanding through typed outcomes.
@@ -54,6 +57,58 @@ The library is reusable across product surfaces. Telegram and Godot/Chibigochi
 are current applications that use it. Memory policy lives in the Rust core.
 
 ## Current State
+
+### 2026-11-15 — Integration hardening plan is the active work order
+
+The [Integration Hardening Plan H0–H5](pages/planning/integration-hardening-plan-2026-11-15.md)
+is now the working order. It combines the production host's request summary of
+2026-11-15, the client request of 2026-09-29 and a maintainer check of both
+repositories. Work under the plan has started with the plan itself; no code,
+schema, package version or git history was changed.
+
+Three facts from that check qualify the statements further down this page:
+
+- **`main` is not what production runs.** Smartest2 builds its own wheel `0.1.2`
+  from `7a18569`, a side branch with two fixes that are not merged. Stage H0
+  merges them.
+- **The Smartest validation evidence is not authoritative.** The host reported
+  privacy and provenance defects in its own exporter, so the Phase 1 numbers
+  and the checkpoint A `QUALIFIED` status await a new qualification. The
+  checkpoint B package was never recorded here. The v0.5 live gate and the
+  v0.6 Phase 3 entry gate therefore stay closed.
+- **Several host requests are confirmed integration gaps:** append-only ingest
+  without a host identity, no erasure generation fence, no second-Sleep guard
+  in FileStorage, no person-bound view or erase, no release identity beyond a
+  version string. One request needs correcting: `ingest_transactional` exists
+  only for the in-memory Storage v2 reference and cannot simply be bound to
+  Python.
+
+Four owner decisions are open: absolute dates in rendered memory; who reviews
+Core candidates and whether a reviewer model only recommends or may write;
+what an isolated real-model replay unlocks while production acceptance stays
+separate; and the release numbering. The server track stays paused. The plan
+finishes the reliability and integration of the present memory, not the whole
+project: hierarchical hypotheses, contradiction and time revision, and the
+evaluation before v1.0 remain ahead.
+
+### 2026-09-29 — New client request qualifies the integrity baseline
+
+The [consolidated client request](pages/planning/client-request-memory-integrity-2026-09-29.md)
+records new synthetic FileStorage counterexamples: stale fidelity/forgetting
+results changing newer decisions, partial extraction being treated as complete,
+and a damaged canonical record exposing an older embedded copy. Source reading
+supports the mechanisms; these scenarios were not rerun during documentation
+intake and are not reported production incidents. Scoped inspection/control is
+also an integration gap. Earlier passes remain evidence of their tested paths,
+not proof against these new cases.
+
+The same document preserves the received external logical acceptance of
+`c57e3cc`; older "external acceptance pending" statements below and on server
+pages predate that report. It does not establish full S2.C parity or production
+readiness. Proposed repair phases await owner approval; the server pause and
+Smartest live-validation gates remain in force.
+
+### Previously recorded implementation and validation state
 
 The project has already proved the main foundation:
 
@@ -109,7 +164,9 @@ For strategy and boundaries, read:
 
 For current work, read:
 
+- [Integration Hardening Plan H0–H5](pages/planning/integration-hardening-plan-2026-11-15.md)
 - [Roadmap](pages/planning/roadmap.md)
+- [Client Request 2026-09-29](pages/planning/client-request-memory-integrity-2026-09-29.md)
 - [Information Flow Integrity](pages/planning/information-flow-integrity.md)
 - [Production Integration Feedback](pages/planning/production-feedback-2026-08.md)
 - [Smartest v2 Production Validation](pages/planning/smartest-v2-production-validation-2026-08.md)

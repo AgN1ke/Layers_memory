@@ -31,6 +31,15 @@ crate/host README files stay outside the wiki.
 
 ## Planning
 
+- [Integration Hardening Plan H0–H5, 2026-11-15](pages/planning/integration-hardening-plan-2026-11-15.md)
+  - the active work order: verified production-host requests, repository
+    reconciliation, quick fixes and release hygiene, trusted application of
+    decisions, canonical reads with scope- and person-bound inspection, recall
+    quality and time, live acceptance; four owner decisions are still open.
+- [Client Request: Memory Integrity and Plasticity 2026-09-29](pages/planning/client-request-memory-integrity-2026-09-29.md)
+  - consolidated Smartest request, earlier Storage v2 criticism and owner
+    requirements; source-qualified findings and a proposed phased response,
+    not an implementation authorization or a server-track restart.
 - [Information Flow Integrity](pages/planning/information-flow-integrity.md) -
   end-to-end host-event → Session → Sleep → MemoryUnit → recall → context-plan
   authority, implemented integrity repairs, and ordered server completion

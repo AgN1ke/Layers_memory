@@ -7,6 +7,16 @@ first redacted Smartest v2 telemetry package. It separates evidence that is
 already usable from instrumentation gaps that must be corrected before the
 formal multi-day observation window begins.
 
+> **Update 2026-11-15.** Smartest reported that its validation exporter has
+> open privacy and provenance defects found by its own audit: a privacy PASS
+> is not bound to the verified bytes, and an export is not a snapshot of one
+> cohort and build. We have not verified those findings ourselves. Until
+> Smartest fixes the exporter and returns a new qualification on exact bytes,
+> the aggregates and the "privacy-safe" assessment below are a record of what
+> was reviewed on 2026-08-25, not authoritative evidence. See the
+> [Integration Hardening Plan](integration-hardening-plan-2026-11-15.md),
+> stage H5 and decision D3.
+
 ## Related pages
 
 - [Smartest v2 Production Validation](smartest-v2-production-validation-2026-08.md) -

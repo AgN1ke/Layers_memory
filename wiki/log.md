@@ -8,6 +8,52 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] plan | Integration hardening plan H0–H5
+
+Added the [Integration Hardening Plan](pages/planning/integration-hardening-plan-2026-11-15.md).
+It records the sources (the production host's request summary of 2026-11-15,
+preserved in full as an appendix; the client request of 2026-09-29; a
+maintainer check of both repositories), the verified facts, the principles the
+work must keep, four open owner decisions, stages H0–H5 with work items and
+exit criteria, one acceptance matrix, the release and migration rules, and the
+answers that already hold for the integrator.
+
+Updated [Wiki home](README.md), [index](index.md) and the
+[Roadmap](pages/planning/roadmap.md) (a dated update and a new H0–H5 milestone
+track). Added dated notes to the
+[client request](pages/planning/client-request-memory-integrity-2026-09-29.md)
+(its phases A–D now map to H2, H3 and H5) and to the Smartest
+[Phase 1 review](pages/planning/smartest-v2-phase1-review-2026-08-25.md),
+[checkpoint A review](pages/planning/smartest-v2-checkpoint-a-review-2026-08-26.md)
+and [validation protocol](pages/planning/smartest-v2-production-validation-2026-08.md),
+whose evidence the host itself now calls unreliable.
+
+Recorded in [DEVLOG Entry 176](../DEVLOG.md), which marks the start of work
+under the plan. [HISTORY](../HISTORY.md) qualifies the validation evidence and
+names the confirmed integration gaps; it announces no fix. No runtime, schema,
+package version or git history was changed.
+
+The same day the plan was refined after a review by Codex: the fidelity basis
+covers sources and attribution as well as the thesis text; a reviewer model's
+recommendation is separated from the authority to write into Core; an isolated
+replay unlocks development without closing production acceptance; H2 does not
+wait for H1 packaging. The plan lists these under "Уточнення".
+
+## [2026-09-29] intake | Consolidated memory-integrity and plasticity request
+
+Added the [consolidated client request](pages/planning/client-request-memory-integrity-2026-09-29.md)
+with the complete new integrator report, earlier Storage v2 criticism, owner
+requirements, source-qualified findings and a proposed phased response. The
+document separates synthetic FileStorage counterexamples from live Smartest
+evidence and the paused server track. It preserves the received logical
+acceptance of `c57e3cc` without widening its claims.
+
+Updated [Wiki home](README.md) and [index](index.md), and recorded the intake in
+[DEVLOG Entry 175](../DEVLOG.md). [HISTORY](../HISTORY.md) qualifies previous
+integrity claims in light of the new reported cases; it does not announce a
+fix. No runtime, schema, package version or accepted roadmap was changed.
+Implementation remains subject to an owner command.
+
 ## [2026-08-26] validation | Smartest checkpoint A qualified cohort c
 
 Added the
