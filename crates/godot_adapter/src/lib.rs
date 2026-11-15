@@ -143,11 +143,12 @@ impl MemoryEngineGodot {
     #[func]
     fn core_context_package(&self, request_json: GString) -> GString {
         self.with_engine(|engine| {
-            let request: CoreContextRequest =
-                parse_json(&request_json.to_string(), "core context request")?;
-            let package = engine
+            let (request, notes): (CoreContextRequest, _) =
+                parse_query_json(&request_json.to_string(), "core context request")?;
+            let mut package = engine
                 .core_context_package(request)
                 .map_err(|err| err.to_string())?;
+            package.notes.extend(notes);
             dump_json(&package, "core context package")
         })
     }
@@ -186,8 +187,10 @@ impl MemoryEngineGodot {
     #[func]
     fn recall(&self, query_json: GString) -> GString {
         self.with_engine(|engine| {
-            let query: RecallQuery = parse_json(&query_json.to_string(), "recall query")?;
-            let result = engine.recall(query).map_err(|err| err.to_string())?;
+            let (query, notes): (RecallQuery, _) =
+                parse_query_json(&query_json.to_string(), "recall query")?;
+            let mut result = engine.recall(query).map_err(|err| err.to_string())?;
+            result.append_notes(notes);
             dump_json(&result, "recall result")
         })
     }
@@ -532,10 +535,23 @@ fn parse_reflection_opportunity(raw: &str) -> Result<ReflectionOpportunity, Stri
 }
 
 fn parse_json<T: DeserializeOwned>(raw: &str, label: &str) -> Result<T, String> {
+    serde_json::from_value(normalized_json(raw, label)?)
+        .map_err(|err| format!("invalid {label} JSON: {err}"))
+}
+
+fn parse_query_json<T: DeserializeOwned>(
+    raw: &str,
+    label: &str,
+) -> Result<(T, Vec<String>), String> {
+    memory_engine::query_json::from_value(normalized_json(raw, label)?)
+        .map_err(|err| format!("invalid {label} JSON: {err}"))
+}
+
+fn normalized_json(raw: &str, label: &str) -> Result<Value, String> {
     let mut value: Value =
         serde_json::from_str(raw).map_err(|err| format!("invalid {label} JSON: {err}"))?;
     normalize_godot_numbers(&mut value);
-    serde_json::from_value(value).map_err(|err| format!("invalid {label} JSON: {err}"))
+    Ok(value)
 }
 
 fn dump_json<T: Serialize>(value: &T, label: &str) -> Result<String, String> {

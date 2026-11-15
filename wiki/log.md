@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] update | H1.4 ignored query fields
+
+Documented response notes for ignored fields in the
+[context and recall contracts](pages/foundation/contracts.md). Updated the H1
+status in the integration plan and roadmap.
+
 ## [2026-11-15] update | H1.3 Python adapter contracts
 
 Updated [local development](pages/integration/local-development.md) with the

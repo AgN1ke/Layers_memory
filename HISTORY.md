@@ -46,6 +46,13 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-15 — Context and recall report ignored JSON request fields
+
+Python and Godot add a note for each ignored field in `core_context_package`
+and `recall`. Notes carry JSON Pointer paths. Recall includes them in the
+optional debug output as well. Existing validation and query behavior remain
+in force. Host-owned `domain_state` and `context` accept arbitrary keys.
+
 ## 2026-11-15 — Python wheel includes API types and response contracts
 
 The Python package includes `__init__.pyi`, `py.typed`, a registry of public

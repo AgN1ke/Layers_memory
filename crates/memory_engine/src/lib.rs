@@ -20,6 +20,7 @@ pub mod journal;
 pub mod llm;
 pub mod manifest;
 pub mod prompt_view;
+pub mod query_json;
 pub mod recall;
 pub mod reflection;
 pub mod server_runtime;

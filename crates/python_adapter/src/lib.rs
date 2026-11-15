@@ -498,8 +498,9 @@ impl PyMemoryEngine {
     }
 
     fn recall(&self, py: Python<'_>, query_json: &str) -> PyResult<String> {
-        let query: RecallQuery = parse_json(query_json, "recall query")?;
-        let result = run_without_gil(py, || self.inner.recall(query))?;
+        let (query, notes): (RecallQuery, _) = parse_query_json(query_json, "recall query")?;
+        let mut result = run_without_gil(py, || self.inner.recall(query))?;
+        result.append_notes(notes);
         dump_json(&result, "recall result")
     }
 
@@ -508,8 +509,10 @@ impl PyMemoryEngine {
     }
 
     fn core_context_package(&self, py: Python<'_>, request_json: &str) -> PyResult<String> {
-        let request: CoreContextRequest = parse_json(request_json, "core context request")?;
-        let package = run_without_gil(py, || self.inner.core_context_package(request))?;
+        let (request, notes): (CoreContextRequest, _) =
+            parse_query_json(request_json, "core context request")?;
+        let mut package = run_without_gil(py, || self.inner.core_context_package(request))?;
+        package.notes.extend(notes);
         dump_json(&package, "core context package")
     }
 
@@ -614,6 +617,11 @@ where
 
 fn parse_json<T: DeserializeOwned>(raw: &str, what: &str) -> PyResult<T> {
     serde_json::from_str(raw)
+        .map_err(|err| PyValueError::new_err(format!("Invalid {what} JSON: {err}")))
+}
+
+fn parse_query_json<T: DeserializeOwned>(raw: &str, what: &str) -> PyResult<(T, Vec<String>)> {
+    ::memory_engine::query_json::from_str(raw)
         .map_err(|err| PyValueError::new_err(format!("Invalid {what} JSON: {err}")))
 }
 

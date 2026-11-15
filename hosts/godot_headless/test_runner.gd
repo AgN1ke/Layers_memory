@@ -69,6 +69,9 @@ func _init() -> void:
     _assert_core(package)
     if failed:
         return
+    _assert_unknown_request_fields(current_text, archive["archive_id"])
+    if failed:
+        return
 
     print("HOST CONFORMANCE PASSED")
     print("host=godot-headless")
@@ -380,6 +383,57 @@ func _assert_core(package: Dictionary) -> void:
         _fail("core facts do not include user name:\n%s" % texts)
     if not texts.contains("Іржа"):
         _fail("core facts do not include Irzha:\n%s" % texts)
+
+func _assert_unknown_request_fields(current_text: String, archive_id: String) -> void:
+    var domain_state := {"subject_id": "host-owned", "nested": {"custom_key": true}}
+    var package: Dictionary = _loads(engine.core_context_package(_dumps({
+        "schema_version": "core_context_request.v1",
+        "session_id": SESSION_ID,
+        "core_scope": CORE_SCOPE,
+        "query_text": current_text,
+        "include_core": true,
+        "recall_limit": 5.0,
+        "subject_id": "ignored",
+        "domain_state": domain_state,
+    })))
+    if failed:
+        return
+    if package.get("notes", []) != ['ignored unknown request field: "/subject_id"']:
+        _fail("context must report only the unknown request field: %s" % str(package.get("notes")))
+        return
+    if package.get("domain_state") != domain_state:
+        _fail("context must preserve the host's domain_state")
+        return
+    _assert_core(package)
+    if failed:
+        return
+
+    var recall: Dictionary = _loads(engine.recall(_dumps({
+        "schema_version": "recall_query.v1",
+        "session_id": SESSION_ID,
+        "query_text": current_text,
+        "context": {"host_data": {"custom_key": true}},
+        "filters": {
+            "source_layers": ["archive"],
+            "time_range": {
+                "start": "2026-01-01T00:00:00Z",
+                "end": "2099-01-01T00:00:00Z",
+                "unexpected": true,
+            },
+        },
+        "limit": 1.0,
+        "include_core": false,
+        "explain": true,
+    })))
+    if failed:
+        return
+    var expected := ['ignored unknown request field: "/filters/time_range/unexpected"']
+    if recall.get("notes", []) != expected or recall.get("debug", {}).get("notes", []) != expected:
+        _fail("recall must report the nested unknown field in notes and debug.notes: %s" % str(recall.get("notes")))
+        return
+    var items: Array = recall.get("items", [])
+    if items.size() != 1 or items[0].get("id") != archive_id:
+        _fail("recall must still return the expected archive")
 
 func _event_text(event: Dictionary) -> String:
     var text = event.get("text")

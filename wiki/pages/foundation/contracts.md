@@ -879,6 +879,14 @@ structural recall; opt-in Stage 2 доступний через explicit `engine
 
 ### 6.5 CoreContextPackage
 
+JSON-виклик `core_context_package` через Python або Godot додає в `notes`
+примітки про невідомі поля запиту, зокрема вкладені. Наприклад, `subject_id`
+дає `ignored unknown request field: "/subject_id"`. Примітка містить шлях
+у форматі [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901.html),
+представлений як JSON-рядок. Значення поля залишається поза діагностикою.
+`domain_state` належить хосту й приймає довільні ключі. Правила обробки
+відомих полів і перевірки їхніх типів діють як раніше.
+
 Core Context Package не обов'язково зберігається на диск. Це відповідь ядра на запит хоста.
 
 ```json
@@ -1454,6 +1462,11 @@ generalization distance. Це storage compatibility, не hierarchical reasoning
 ## 8. Recall
 
 ### 8.1 RecallQuery
+
+JSON-виклик `recall` через Python або Godot повідомляє про невідомі поля
+у `notes` і, якщо запитано пояснення, у `debug.notes`. Формат примітки той
+самий, що в `CoreContextPackage`. Наприклад, `filters.limit_hint` дає
+шлях `"/filters/limit_hint"`. Довільні ключі в полі `context` належать хосту.
 
 Вхід у `engine.recall(query)`.
 

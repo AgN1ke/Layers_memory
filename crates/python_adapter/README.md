@@ -31,6 +31,12 @@ Maturin. `dirty` accepts `true` or `false`.
 
 ## Public API
 
+`core_context_package()` and `recall()` report ignored request fields in the
+returned `notes`. For example, an unsupported `subject_id` produces
+`ignored unknown request field: "/subject_id"`. The note names the field
+using JSON Pointer syntax. The request still runs with the supported fields.
+Recall also includes the note in `debug.notes` when `explain` is enabled.
+
 The installed package includes `__init__.pyi` and `py.typed` for editor and
 type-checker support. [api_contracts.json](python/memory_engine/api_contracts.json)
 maps each public call to its named JSON request and result types. The Python

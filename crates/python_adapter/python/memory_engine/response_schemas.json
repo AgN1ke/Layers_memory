@@ -2729,6 +2729,12 @@
             "filtered_count": {
               "type": "integer"
             },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "stage_used": {
               "type": "string"
             },
@@ -2771,7 +2777,6 @@
           },
           "required": [
             "candidate_count",
-            "candidates",
             "filtered_count",
             "stage_used",
             "vector_stage"
@@ -2854,6 +2859,12 @@
             "additionalProperties": false
           }
         },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "schema_version": {
           "type": "string",
           "enum": [
@@ -2866,7 +2877,6 @@
       },
       "required": [
         "created_at",
-        "items",
         "schema_version",
         "stage_used"
       ],
