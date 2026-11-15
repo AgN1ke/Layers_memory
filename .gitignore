@@ -35,6 +35,8 @@ crates/python_adapter/.venv/
 crates/python_adapter/*.egg-info/
 crates/python_adapter/dist/
 crates/python_adapter/wheels/
+crates/python_adapter/python/memory_engine/*.pyd
+crates/python_adapter/python/memory_engine/*.so
 *.whl
 
 # Host app local runtime

@@ -14,9 +14,9 @@ result back. The engine itself never touches the network.
 From `crates/python_adapter/`, inside a Python virtual environment:
 
 ```bash
-pip install maturin pytest
+pip install maturin pytest jsonschema
 maturin develop
-pytest tests/
+pytest tests/ --require-api-contract-coverage
 ```
 
 `maturin develop` builds the Rust extension and installs it into the
@@ -30,6 +30,25 @@ Unknown values are `None`. This function is available without creating a
 Maturin. `dirty` accepts `true` or `false`.
 
 ## Public API
+
+The installed package includes `__init__.pyi` and `py.typed` for editor and
+type-checker support. [api_contracts.json](python/memory_engine/api_contracts.json)
+maps each public call to its named JSON request and result types. The Python
+methods accept and return JSON strings
+where the registry names a serialized result. Native scalars and `build_info()`
+are described by their Python types.
+
+The result name selects an entry in `$defs` of
+[response_schemas.json](python/memory_engine/response_schemas.json), which describes
+the response structures exercised by the adapter tests. CI builds and installs
+the package, compares the stubs to the
+native signatures, and validates successful responses from each documented
+call. Nested host/provider data and response variants outside the test scenarios
+require the corresponding [wire contracts](../../wiki/pages/foundation/contracts.md).
+
+After an intentional response change, rebuild the adapter and run
+`pytest tests/ --record-api-response-schemas`. Review the generated schema diff,
+rebuild the package with it, and run the coverage check again.
 
 ```python
 import json

@@ -462,10 +462,14 @@ $env:VIRTUAL_ENV = $venv
 $env:Path = "$venv\Scripts;C:\Users\AgNike\.cargo\bin;" + $env:Path
 Set-Location C:\Python_projects\Layers_memory\crates\python_adapter
 maturin develop
-pytest tests/ -v
+pytest tests/ --require-api-contract-coverage
 ```
 
 `maturin develop` компілює Rust extension і ставить його в активний venv як editable wheel під ім'ям `memory_engine`. Імпорт у Python - `import memory_engine`.
+
+Для цих тестів потрібен `jsonschema`. У wheel є підказки типів, реєстр
+`api_contracts.json` і схеми перевірюваних відповідей. Повний прогін звіряє
+сигнатури встановленого модуля та перевіряє відповіді всіх публічних викликів.
 
 ### Як звірити джерело збірки
 
@@ -489,7 +493,7 @@ pytest tests/ -v
 py -3.13 -m venv crates\python_adapter\.venv
 $venv = "C:\Python_projects\Layers_memory\crates\python_adapter\.venv"
 & "$venv\Scripts\python.exe" -m pip install --upgrade pip
-& "$venv\Scripts\python.exe" -m pip install maturin pytest
+& "$venv\Scripts\python.exe" -m pip install maturin pytest jsonschema
 ```
 
 Потім - команда збірки і pytest з попереднього блока.

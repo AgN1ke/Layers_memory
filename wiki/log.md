@@ -8,6 +8,11 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] update | H1.3 Python adapter contracts
+
+Updated [local development](pages/integration/local-development.md) with the
+installed adapter contract checks and recorded H1.3 in the plan and roadmap.
+
 ## [2026-11-15] update | H1.2 build identity
 
 Documented [build identity](pages/integration/local-development.md#як-звірити-джерело-збірки)

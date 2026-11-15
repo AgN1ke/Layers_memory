@@ -46,6 +46,14 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-15 — Python wheel includes API types and response contracts
+
+The Python package includes `__init__.pyi`, `py.typed`, a registry of public
+calls with their JSON request and result type names, and JSON Schemas for the
+response structures exercised by the adapter tests. CI installs the package
+and checks its signatures and responses. `import memory_engine` continues to
+expose the same native methods and JSON string interface.
+
 ## 2026-11-15 — Adapters report the source of their build
 
 Python exposes `memory_engine.build_info()` and Godot exposes

@@ -1,0 +1,5267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "ArchiveEntry": {
+      "type": "object",
+      "properties": {
+        "archive_id": {
+          "type": "string"
+        },
+        "compact_memory": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "embedding": {
+          "type": "null"
+        },
+        "embedding_model_id": {
+          "type": "null"
+        },
+        "emotional_markers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "affect": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "quote": {
+                "type": "string"
+              },
+              "source_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strength": {
+                "type": "number"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "affect",
+              "evidence",
+              "quote",
+              "source_event_ids",
+              "strength",
+              "target"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "confidence": {
+                "type": "number"
+              },
+              "source_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "confidence",
+              "source_event_ids",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "freshness": {
+          "type": "number"
+        },
+        "gist": {
+          "type": "string"
+        },
+        "last_recalled_at": {
+          "type": "null"
+        },
+        "links": {
+          "type": "array"
+        },
+        "llm_enhanced": {
+          "type": "boolean"
+        },
+        "memory_units": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "archive_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "fidelity_status": {
+                "type": "string"
+              },
+              "memory_unit_id": {
+                "type": "string"
+              },
+              "reflection_count": {
+                "type": "integer"
+              },
+              "schema_version": {
+                "type": "string",
+                "enum": [
+                  "memory_unit.v1"
+                ]
+              },
+              "source_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source_session_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "thesis": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              },
+              "weight": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "archive_id",
+              "created_at",
+              "fidelity_status",
+              "memory_unit_id",
+              "reflection_count",
+              "schema_version",
+              "source_event_ids",
+              "source_session_id",
+              "status",
+              "thesis",
+              "updated_at",
+              "weight"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "narrative": {
+          "type": "string"
+        },
+        "personal_signals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "source_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "category",
+              "confidence",
+              "evidence",
+              "source_event_ids",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "prompt_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "prompt_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quotes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source_event_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_event_id",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "recall_count": {
+          "type": "integer"
+        },
+        "relational_tone": {
+          "type": "object",
+          "properties": {
+            "intellectual_engagement": {
+              "type": "number"
+            },
+            "intimacy": {
+              "type": "number"
+            },
+            "playfulness": {
+              "type": "number"
+            },
+            "source_event_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "summary": {
+              "type": "string"
+            },
+            "tension": {
+              "type": "number"
+            },
+            "trust": {
+              "type": "number"
+            },
+            "warmth": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "intellectual_engagement",
+            "intimacy",
+            "playfulness",
+            "source_event_ids",
+            "summary",
+            "tension",
+            "trust",
+            "warmth"
+          ],
+          "additionalProperties": false
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "archive_entry.v1"
+          ]
+        },
+        "source_event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_session_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "theme": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "time_range": {
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "string"
+            },
+            "start": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "end",
+            "start"
+          ],
+          "additionalProperties": false
+        },
+        "topic_thread": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "energy": {
+                "type": "string"
+              },
+              "source_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "subtopics": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "summary": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "energy",
+              "source_event_ids",
+              "subtopics",
+              "summary",
+              "topic"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "archive_id",
+        "created_at",
+        "embedding",
+        "embedding_model_id",
+        "facts",
+        "freshness",
+        "gist",
+        "last_recalled_at",
+        "links",
+        "llm_enhanced",
+        "narrative",
+        "prompt_id",
+        "prompt_version",
+        "quotes",
+        "recall_count",
+        "schema_version",
+        "source_event_ids",
+        "source_session_id",
+        "status",
+        "tags",
+        "theme",
+        "time_range",
+        "updated_at",
+        "weight"
+      ],
+      "additionalProperties": false
+    },
+    "ArchiveEntry | null": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "archive_id": {
+              "type": "string"
+            },
+            "compact_memory": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "embedding": {
+              "type": "null"
+            },
+            "embedding_model_id": {
+              "type": "null"
+            },
+            "facts": {
+              "type": "array"
+            },
+            "freshness": {
+              "type": "number"
+            },
+            "gist": {
+              "type": "string"
+            },
+            "last_recalled_at": {
+              "type": "null"
+            },
+            "links": {
+              "type": "array"
+            },
+            "llm_enhanced": {
+              "type": "boolean"
+            },
+            "memory_units": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "archive_id": {
+                    "type": "string"
+                  },
+                  "created_at": {
+                    "type": "string"
+                  },
+                  "fidelity_status": {
+                    "type": "string"
+                  },
+                  "memory_unit_id": {
+                    "type": "string"
+                  },
+                  "reflection_count": {
+                    "type": "integer"
+                  },
+                  "schema_version": {
+                    "type": "string",
+                    "enum": [
+                      "memory_unit.v1"
+                    ]
+                  },
+                  "source_event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "source_session_id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "thesis": {
+                    "type": "string"
+                  },
+                  "updated_at": {
+                    "type": "string"
+                  },
+                  "weight": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "archive_id",
+                  "created_at",
+                  "fidelity_status",
+                  "memory_unit_id",
+                  "reflection_count",
+                  "schema_version",
+                  "source_event_ids",
+                  "source_session_id",
+                  "status",
+                  "thesis",
+                  "updated_at",
+                  "weight"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "narrative": {
+              "type": "string"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "quotes": {
+              "type": "array"
+            },
+            "recall_count": {
+              "type": "integer"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "archive_entry.v1"
+              ]
+            },
+            "source_event_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "source_session_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array"
+            },
+            "theme": {
+              "type": "null"
+            },
+            "time_range": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end",
+                "start"
+              ],
+              "additionalProperties": false
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "archive_id",
+            "compact_memory",
+            "created_at",
+            "embedding",
+            "embedding_model_id",
+            "facts",
+            "freshness",
+            "gist",
+            "last_recalled_at",
+            "links",
+            "llm_enhanced",
+            "memory_units",
+            "narrative",
+            "prompt_id",
+            "prompt_version",
+            "quotes",
+            "recall_count",
+            "schema_version",
+            "source_event_ids",
+            "source_session_id",
+            "status",
+            "tags",
+            "theme",
+            "time_range",
+            "updated_at",
+            "weight"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AutomaticReflectionStart": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "object",
+          "properties": {
+            "accumulated_salience": {
+              "type": "number"
+            },
+            "active_memory_unit_count": {
+              "type": "integer"
+            },
+            "critical_unit_weight": {
+              "type": "number"
+            },
+            "due": {
+              "type": "boolean"
+            },
+            "eligible_memory_unit_count": {
+              "type": "integer"
+            },
+            "evaluated_at": {
+              "type": "string"
+            },
+            "fidelity_excluded_memory_unit_count": {
+              "type": "integer"
+            },
+            "opportunity": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "reflection_scope": {
+              "type": "string"
+            },
+            "salience_remaining": {
+              "type": "number"
+            },
+            "salience_threshold": {
+              "type": "number"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "reflection_trigger_status.v1"
+              ]
+            },
+            "source_session_id": {
+              "type": "string"
+            },
+            "source_session_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "unchecked_memory_unit_count": {
+              "type": "integer"
+            },
+            "valid_memory_unit_count": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "accumulated_salience",
+            "active_memory_unit_count",
+            "critical_unit_weight",
+            "due",
+            "eligible_memory_unit_count",
+            "evaluated_at",
+            "fidelity_excluded_memory_unit_count",
+            "opportunity",
+            "reason",
+            "reflection_scope",
+            "salience_remaining",
+            "salience_threshold",
+            "schema_version",
+            "source_session_id",
+            "source_session_ids",
+            "unchecked_memory_unit_count",
+            "valid_memory_unit_count"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "BuildInfo": {
+      "type": "object",
+      "properties": {
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "dirty": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "commit",
+        "dirty",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "CandidateReviewResult": {
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "type": "object",
+          "properties": {
+            "candidate_id": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string"
+            },
+            "confidence": {
+              "type": "number"
+            },
+            "core_scope": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "evidence_summary": {
+              "type": "string"
+            },
+            "promotion_checks": {
+              "type": "object",
+              "properties": {
+                "manual_review_required": {
+                  "type": "boolean"
+                },
+                "min_sources_met": {
+                  "type": "boolean"
+                },
+                "no_recent_contradiction": {
+                  "type": "boolean"
+                },
+                "weight_threshold_met": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "manual_review_required",
+                "min_sources_met",
+                "no_recent_contradiction",
+                "weight_threshold_met"
+              ],
+              "additionalProperties": false
+            },
+            "review": {
+              "type": "object",
+              "properties": {
+                "decision": {
+                  "type": "string"
+                },
+                "reviewed_at": {
+                  "type": "string"
+                },
+                "reviewed_by": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "decision",
+                "reviewed_at",
+                "reviewed_by"
+              ],
+              "additionalProperties": false
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "candidate_belief.v1"
+              ]
+            },
+            "source_memory_unit_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "source_session_id": {
+              "type": "string"
+            },
+            "source_session_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "status": {
+              "type": "string"
+            },
+            "supporting_archive_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "text": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "category",
+            "confidence",
+            "core_scope",
+            "created_at",
+            "evidence_summary",
+            "promotion_checks",
+            "review",
+            "schema_version",
+            "source_memory_unit_ids",
+            "source_session_id",
+            "source_session_ids",
+            "status",
+            "supporting_archive_ids",
+            "tags",
+            "text",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "candidate_review_result.v1"
+          ]
+        }
+      },
+      "required": [
+        "candidate",
+        "schema_version"
+      ],
+      "additionalProperties": false
+    },
+    "CoreArchiveSeedSummary": {
+      "type": "object",
+      "properties": {
+        "archives": {
+          "type": "integer"
+        },
+        "created": {
+          "type": "integer"
+        },
+        "skipped": {
+          "type": "integer"
+        },
+        "updated": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "archives",
+        "created",
+        "skipped",
+        "updated"
+      ],
+      "additionalProperties": false
+    },
+    "CoreContextPackage": {
+      "type": "object",
+      "properties": {
+        "archive_relevant": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "compact_memory": {
+                "type": "string"
+              },
+              "freshness": {
+                "type": "number"
+              },
+              "gist": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "relevance_score": {
+                "type": "number"
+              },
+              "source_layer": {
+                "type": "string"
+              },
+              "source_session_id": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "theme": {
+                "type": "string"
+              },
+              "time_range": {
+                "type": "object",
+                "properties": {
+                  "end": {
+                    "type": "string"
+                  },
+                  "start": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "end",
+                  "start"
+                ],
+                "additionalProperties": false
+              },
+              "weight": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "compact_memory",
+              "freshness",
+              "gist",
+              "id",
+              "relevance_score",
+              "source_layer",
+              "source_session_id",
+              "tags",
+              "theme",
+              "time_range",
+              "weight"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "budget_exceeded": {
+              "type": "boolean"
+            },
+            "compressed_memory_budget_tokens": {
+              "type": "integer"
+            },
+            "core_budget_tokens": {
+              "type": "integer"
+            },
+            "current_memory_budget_tokens": {
+              "type": "integer"
+            },
+            "dropped_archive_relevant": {
+              "type": "integer"
+            },
+            "dropped_core_facts": {
+              "type": "integer"
+            },
+            "dropped_session_recent": {
+              "type": "integer"
+            },
+            "dropped_session_trace": {
+              "type": "integer"
+            },
+            "estimated_compressed_memory_tokens": {
+              "type": "integer"
+            },
+            "estimated_core_tokens": {
+              "type": "integer"
+            },
+            "estimated_current_memory_tokens": {
+              "type": "integer"
+            },
+            "estimated_domain_state_tokens": {
+              "type": "integer"
+            },
+            "estimated_total_tokens": {
+              "type": "integer"
+            },
+            "estimator": {
+              "type": "string"
+            },
+            "total_budget_tokens": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "budget_exceeded",
+            "compressed_memory_budget_tokens",
+            "core_budget_tokens",
+            "current_memory_budget_tokens",
+            "dropped_archive_relevant",
+            "dropped_core_facts",
+            "dropped_session_recent",
+            "dropped_session_trace",
+            "estimated_compressed_memory_tokens",
+            "estimated_core_tokens",
+            "estimated_current_memory_tokens",
+            "estimated_domain_state_tokens",
+            "estimated_total_tokens",
+            "estimator",
+            "total_budget_tokens"
+          ],
+          "additionalProperties": false
+        },
+        "clock_untrusted": {
+          "type": "boolean"
+        },
+        "core_facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number"
+              },
+              "core_fact_id": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "category",
+              "confidence",
+              "core_fact_id",
+              "scope",
+              "status",
+              "tags",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "domain_state": {
+          "type": "object"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "core_context_package.v1"
+          ]
+        },
+        "session_recent": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "event_id": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "source": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string"
+              },
+              "theme": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event_id",
+              "payload",
+              "source",
+              "tags",
+              "text",
+              "theme",
+              "timestamp",
+              "type"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "session_trace": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "event_id": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "source": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string"
+              },
+              "theme": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event_id",
+              "payload",
+              "source",
+              "tags",
+              "text",
+              "theme",
+              "timestamp",
+              "type"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "utc_offset_minutes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "budget",
+        "clock_untrusted",
+        "created_at",
+        "domain_state",
+        "schema_version",
+        "utc_offset_minutes"
+      ],
+      "additionalProperties": false
+    },
+    "CoreFactPatchResult": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "fact": {
+          "type": "object",
+          "properties": {
+            "confidence": {
+              "type": "number"
+            },
+            "core_fact_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "core_fact.v1"
+              ]
+            },
+            "scope": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "text": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "confidence",
+            "core_fact_id",
+            "created_at",
+            "schema_version",
+            "scope",
+            "status",
+            "tags",
+            "text",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "core_fact_patch_result.v1"
+          ]
+        }
+      },
+      "required": [
+        "category",
+        "fact",
+        "schema_version"
+      ],
+      "additionalProperties": false
+    },
+    "CoreFactUpsertResult": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "fact": {
+          "type": "object",
+          "properties": {
+            "confidence": {
+              "type": "number"
+            },
+            "core_fact_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "core_fact.v1"
+              ]
+            },
+            "scope": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "text": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "confidence",
+            "core_fact_id",
+            "created_at",
+            "schema_version",
+            "scope",
+            "status",
+            "tags",
+            "text",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "core_fact_upsert_result.v1"
+          ]
+        }
+      },
+      "required": [
+        "category",
+        "created",
+        "fact",
+        "schema_version"
+      ],
+      "additionalProperties": false
+    },
+    "DeepRecallResult": {
+      "type": "object",
+      "properties": {
+        "found": {
+          "type": "boolean"
+        },
+        "hits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "archive_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "memory_unit_id": {
+                "type": "string"
+              },
+              "score": {
+                "type": "number"
+              },
+              "sim": {
+                "type": "number"
+              },
+              "thesis": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "archive_id",
+              "created_at",
+              "memory_unit_id",
+              "score",
+              "sim",
+              "thesis"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "deep_recall.v1"
+          ]
+        }
+      },
+      "required": [
+        "found",
+        "hits",
+        "schema_version"
+      ],
+      "additionalProperties": false
+    },
+    "EvidencePack": {
+      "type": "object",
+      "properties": {
+        "archive_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "estimated_tokens": {
+          "type": "integer"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "event_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event_id",
+              "role",
+              "source",
+              "text",
+              "timestamp",
+              "type"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "evidence_pack_id": {
+          "type": "string"
+        },
+        "max_estimated_tokens": {
+          "type": "integer"
+        },
+        "memory_unit_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "evidence_pack.v1"
+          ]
+        },
+        "source_session_id": {
+          "type": "string"
+        },
+        "target_thesis": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "archive_id",
+        "created_at",
+        "estimated_tokens",
+        "events",
+        "evidence_pack_id",
+        "max_estimated_tokens",
+        "memory_unit_id",
+        "schema_version",
+        "source_session_id",
+        "target_thesis",
+        "truncated"
+      ],
+      "additionalProperties": false
+    },
+    "ForgetReviewApplyResult": {
+      "type": "object",
+      "properties": {
+        "changed_units": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "archive_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "fidelity_review": {
+                "type": "object",
+                "properties": {
+                  "archive_id": {
+                    "type": "string"
+                  },
+                  "confidence": {
+                    "type": "number"
+                  },
+                  "explanation": {
+                    "type": "string"
+                  },
+                  "memory_unit_id": {
+                    "type": "string"
+                  },
+                  "schema_version": {
+                    "type": "string",
+                    "enum": [
+                      "fidelity_review.v1"
+                    ]
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "archive_id",
+                  "confidence",
+                  "explanation",
+                  "memory_unit_id",
+                  "schema_version",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              "fidelity_status": {
+                "type": "string"
+              },
+              "forget_review": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "reviewed_at": {
+                    "type": "string"
+                  },
+                  "task_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "decision",
+                  "reason",
+                  "reviewed_at",
+                  "task_id"
+                ],
+                "additionalProperties": false
+              },
+              "memory_unit_id": {
+                "type": "string"
+              },
+              "reflection_count": {
+                "type": "integer"
+              },
+              "schema_version": {
+                "type": "string",
+                "enum": [
+                  "memory_unit.v1"
+                ]
+              },
+              "source_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source_session_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "thesis": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              },
+              "weight": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "archive_id",
+              "created_at",
+              "fidelity_review",
+              "fidelity_status",
+              "forget_review",
+              "memory_unit_id",
+              "reflection_count",
+              "schema_version",
+              "source_event_ids",
+              "source_session_id",
+              "status",
+              "tags",
+              "thesis",
+              "updated_at",
+              "weight"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "forgotten": {
+          "type": "integer"
+        },
+        "ignored": {
+          "type": "integer"
+        },
+        "kept": {
+          "type": "integer"
+        },
+        "protected": {
+          "type": "integer"
+        },
+        "reviewed": {
+          "type": "integer"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "forget_review_result.v1"
+          ]
+        },
+        "source_session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "forgotten",
+        "ignored",
+        "kept",
+        "protected",
+        "reviewed",
+        "schema_version",
+        "source_session_id"
+      ],
+      "additionalProperties": false
+    },
+    "ForgetReviewStart": {
+      "type": "object",
+      "properties": {
+        "candidate_count": {
+          "type": "integer"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "age_days": {
+                "type": "number"
+              },
+              "archive_id": {
+                "type": "string"
+              },
+              "archive_recall_count": {
+                "type": "integer"
+              },
+              "fidelity_status": {
+                "type": "string"
+              },
+              "has_core_link": {
+                "type": "boolean"
+              },
+              "has_emotional": {
+                "type": "boolean"
+              },
+              "label": {
+                "type": "string"
+              },
+              "memory_unit_id": {
+                "type": "string"
+              },
+              "thesis": {
+                "type": "string"
+              },
+              "weight": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "age_days",
+              "archive_id",
+              "archive_recall_count",
+              "fidelity_status",
+              "has_core_link",
+              "has_emotional",
+              "label",
+              "memory_unit_id",
+              "thesis",
+              "weight"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "pending_task": {
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "array"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "expected_output_schema": {
+              "type": "string"
+            },
+            "inputs": {
+              "type": "object"
+            },
+            "last_error": {
+              "type": "null"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "role_hint": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "pending_task.v1"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "task_type": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempts",
+            "created_at",
+            "expected_output_schema",
+            "inputs",
+            "last_error",
+            "prompt_id",
+            "prompt_version",
+            "role_hint",
+            "schema_version",
+            "state",
+            "task_id",
+            "task_type",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        },
+        "request": {
+          "type": "object",
+          "properties": {
+            "expected_output_schema": {
+              "type": "string"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_inputs": {
+              "type": "object"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "role_hint": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expected_output_schema",
+            "prompt_id",
+            "prompt_inputs",
+            "prompt_version",
+            "request_id",
+            "role_hint",
+            "task_id"
+          ],
+          "additionalProperties": false
+        },
+        "source_session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_count",
+        "candidates",
+        "pending_task",
+        "request",
+        "source_session_id"
+      ],
+      "additionalProperties": false
+    },
+    "ForgottenMemoryUnits": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "memory_unit.v1"
+          ]
+        },
+        "source_session_id": {
+          "type": "string"
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "archive_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "fidelity_review": {
+                "type": "object",
+                "properties": {
+                  "archive_id": {
+                    "type": "string"
+                  },
+                  "confidence": {
+                    "type": "number"
+                  },
+                  "explanation": {
+                    "type": "string"
+                  },
+                  "memory_unit_id": {
+                    "type": "string"
+                  },
+                  "schema_version": {
+                    "type": "string",
+                    "enum": [
+                      "fidelity_review.v1"
+                    ]
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "archive_id",
+                  "confidence",
+                  "explanation",
+                  "memory_unit_id",
+                  "schema_version",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              "fidelity_status": {
+                "type": "string"
+              },
+              "forget_review": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "reviewed_at": {
+                    "type": "string"
+                  },
+                  "task_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "decision",
+                  "reason",
+                  "reviewed_at",
+                  "task_id"
+                ],
+                "additionalProperties": false
+              },
+              "memory_unit_id": {
+                "type": "string"
+              },
+              "reflection_count": {
+                "type": "integer"
+              },
+              "schema_version": {
+                "type": "string",
+                "enum": [
+                  "memory_unit.v1"
+                ]
+              },
+              "source_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source_session_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "thesis": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              },
+              "weight": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "archive_id",
+              "created_at",
+              "fidelity_review",
+              "fidelity_status",
+              "forget_review",
+              "memory_unit_id",
+              "reflection_count",
+              "schema_version",
+              "source_event_ids",
+              "source_session_id",
+              "status",
+              "tags",
+              "thesis",
+              "updated_at",
+              "weight"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "source_session_id",
+        "units"
+      ],
+      "additionalProperties": false
+    },
+    "HypothesisGraphExport": {
+      "type": "object",
+      "properties": {
+        "evidence_links": {
+          "type": "array"
+        },
+        "nodes": {
+          "type": "array"
+        },
+        "relations": {
+          "type": "array"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "hypothesis_graph_export.v1"
+          ]
+        },
+        "warnings": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "evidence_links",
+        "nodes",
+        "relations",
+        "schema_version",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "HypothesisGraphMigrationResult": {
+      "type": "object",
+      "properties": {
+        "evidence_links_created": {
+          "type": "integer"
+        },
+        "evidence_links_unchanged": {
+          "type": "integer"
+        },
+        "evidence_links_updated": {
+          "type": "integer"
+        },
+        "migrated_at": {
+          "type": "string"
+        },
+        "nodes_created": {
+          "type": "integer"
+        },
+        "nodes_unchanged": {
+          "type": "integer"
+        },
+        "nodes_updated": {
+          "type": "integer"
+        },
+        "relations_created": {
+          "type": "integer"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "hypothesis_graph_migration_result.v1"
+          ]
+        },
+        "source_candidate_count": {
+          "type": "integer"
+        },
+        "unresolved_memory_unit_ids": {
+          "type": "array"
+        },
+        "warnings": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "evidence_links_created",
+        "evidence_links_unchanged",
+        "evidence_links_updated",
+        "migrated_at",
+        "nodes_created",
+        "nodes_unchanged",
+        "nodes_updated",
+        "relations_created",
+        "schema_version",
+        "source_candidate_count",
+        "unresolved_memory_unit_ids",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "IngestResult": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "ingest_result.v1"
+          ]
+        },
+        "stored_event": {
+          "type": "object",
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "importance_hint": {
+              "type": "string"
+            },
+            "initial_weight": {
+              "type": "number"
+            },
+            "payload": {
+              "type": "object"
+            },
+            "processing_mode": {
+              "type": "string"
+            },
+            "received_at": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "event.v1"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "theme": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "weight_reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "importance_hint",
+            "initial_weight",
+            "payload",
+            "processing_mode",
+            "received_at",
+            "schema_version",
+            "session_id",
+            "source",
+            "timestamp",
+            "type",
+            "weight_reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "stored_event"
+      ],
+      "additionalProperties": false
+    },
+    "MemoryErasureReport": {
+      "type": "object",
+      "properties": {
+        "archived_memory_preserved": {
+          "type": "boolean"
+        },
+        "completed_at": {
+          "type": "string"
+        },
+        "deleted": {
+          "type": "object",
+          "properties": {
+            "active_events": {
+              "type": "integer"
+            },
+            "archived_events": {
+              "type": "integer"
+            },
+            "archives": {
+              "type": "integer"
+            },
+            "candidates": {
+              "type": "integer"
+            },
+            "core_facts": {
+              "type": "integer"
+            },
+            "hypothesis_evidence_links": {
+              "type": "integer"
+            },
+            "hypothesis_nodes": {
+              "type": "integer"
+            },
+            "hypothesis_relations": {
+              "type": "integer"
+            },
+            "journal_operations": {
+              "type": "integer"
+            },
+            "memory_units": {
+              "type": "integer"
+            },
+            "reflection_states": {
+              "type": "integer"
+            },
+            "sessions": {
+              "type": "integer"
+            },
+            "sleep_runs": {
+              "type": "integer"
+            },
+            "tasks": {
+              "type": "integer"
+            },
+            "vector_scopes": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "active_events",
+            "archived_events",
+            "archives",
+            "candidates",
+            "core_facts",
+            "hypothesis_evidence_links",
+            "hypothesis_nodes",
+            "hypothesis_relations",
+            "journal_operations",
+            "memory_units",
+            "reflection_states",
+            "sessions",
+            "sleep_runs",
+            "tasks",
+            "vector_scopes"
+          ],
+          "additionalProperties": false
+        },
+        "operation": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "memory_erasure_report.v1"
+          ]
+        },
+        "target_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "archived_memory_preserved",
+        "completed_at",
+        "deleted",
+        "operation",
+        "schema_version",
+        "target_id"
+      ],
+      "additionalProperties": false
+    },
+    "MemoryFidelityPassStart": {
+      "type": "object",
+      "properties": {
+        "evidence_pack": {
+          "type": "object",
+          "properties": {
+            "archive_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "estimated_tokens": {
+              "type": "integer"
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "event_id",
+                  "role",
+                  "source",
+                  "text",
+                  "timestamp",
+                  "type"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "evidence_pack_id": {
+              "type": "string"
+            },
+            "max_estimated_tokens": {
+              "type": "integer"
+            },
+            "memory_unit_id": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "evidence_pack.v1"
+              ]
+            },
+            "source_session_id": {
+              "type": "string"
+            },
+            "target_thesis": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "archive_id",
+            "created_at",
+            "estimated_tokens",
+            "events",
+            "evidence_pack_id",
+            "max_estimated_tokens",
+            "memory_unit_id",
+            "schema_version",
+            "source_session_id",
+            "target_thesis",
+            "truncated"
+          ],
+          "additionalProperties": false
+        },
+        "pending_task": {
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "array"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "expected_output_schema": {
+              "type": "string"
+            },
+            "inputs": {
+              "type": "object"
+            },
+            "last_error": {
+              "type": "null"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "role_hint": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "pending_task.v1"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "task_type": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempts",
+            "created_at",
+            "expected_output_schema",
+            "inputs",
+            "last_error",
+            "prompt_id",
+            "prompt_version",
+            "role_hint",
+            "schema_version",
+            "state",
+            "task_id",
+            "task_type",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        },
+        "request": {
+          "type": "object",
+          "properties": {
+            "expected_output_schema": {
+              "type": "string"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_inputs": {
+              "type": "object"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "role_hint": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expected_output_schema",
+            "prompt_id",
+            "prompt_inputs",
+            "prompt_version",
+            "request_id",
+            "role_hint",
+            "task_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "evidence_pack",
+        "pending_task",
+        "request"
+      ],
+      "additionalProperties": false
+    },
+    "MemoryPromptPlan": {
+      "type": "object",
+      "properties": {
+        "conversation_state": {
+          "type": "string"
+        },
+        "core_memory": {
+          "type": "string"
+        },
+        "current_user_message": {
+          "type": "string"
+        },
+        "dialogue_events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "event_id": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "source": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string"
+              },
+              "theme": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event_id",
+              "payload",
+              "source",
+              "tags",
+              "text",
+              "theme",
+              "timestamp",
+              "type"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "long_memory": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "memory_prompt_plan.v1"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "conversation_state",
+        "core_memory",
+        "current_user_message",
+        "dialogue_events",
+        "long_memory",
+        "schema_version",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "MemoryUnit": {
+      "type": "object",
+      "properties": {
+        "archive_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "fidelity_review": {
+          "type": "object",
+          "properties": {
+            "archive_id": {
+              "type": "string"
+            },
+            "confidence": {
+              "type": "number"
+            },
+            "explanation": {
+              "type": "string"
+            },
+            "memory_unit_id": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "fidelity_review.v1"
+              ]
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "archive_id",
+            "confidence",
+            "explanation",
+            "memory_unit_id",
+            "schema_version",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        "fidelity_status": {
+          "type": "string"
+        },
+        "forget_review": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "reviewed_at": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "decision",
+            "reason",
+            "reviewed_at",
+            "task_id"
+          ],
+          "additionalProperties": false
+        },
+        "memory_unit_id": {
+          "type": "string"
+        },
+        "reflection_count": {
+          "type": "integer"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "memory_unit.v1"
+          ]
+        },
+        "source_event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_session_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "thesis": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "archive_id",
+        "created_at",
+        "fidelity_review",
+        "fidelity_status",
+        "memory_unit_id",
+        "reflection_count",
+        "schema_version",
+        "source_event_ids",
+        "source_session_id",
+        "status",
+        "thesis",
+        "updated_at",
+        "weight"
+      ],
+      "additionalProperties": false
+    },
+    "RecallResult": {
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "debug": {
+          "type": "object",
+          "properties": {
+            "candidate_count": {
+              "type": "integer"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "archive_id": {
+                    "type": "string"
+                  },
+                  "components": {
+                    "type": "object"
+                  },
+                  "final_rank": {
+                    "type": "integer"
+                  },
+                  "final_score": {
+                    "type": "number"
+                  },
+                  "selected": {
+                    "type": "boolean"
+                  },
+                  "stage1_rank": {
+                    "type": "integer"
+                  },
+                  "stage1_score": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "archive_id",
+                  "components",
+                  "final_rank",
+                  "final_score",
+                  "selected",
+                  "stage1_rank",
+                  "stage1_score"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "filtered_count": {
+              "type": "integer"
+            },
+            "stage_used": {
+              "type": "string"
+            },
+            "vector_stage": {
+              "type": "object",
+              "properties": {
+                "candidate_count": {
+                  "type": "integer"
+                },
+                "candidate_limit": {
+                  "type": "integer"
+                },
+                "matched_archive_count": {
+                  "type": "integer"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "stage1_weight": {
+                  "type": "number"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "vector_weight": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "candidate_count",
+                "candidate_limit",
+                "matched_archive_count",
+                "reason",
+                "stage1_weight",
+                "status",
+                "vector_weight"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "candidate_count",
+            "candidates",
+            "filtered_count",
+            "stage_used",
+            "vector_stage"
+          ],
+          "additionalProperties": false
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "compact_memory": {
+                "type": "string"
+              },
+              "freshness": {
+                "type": "number"
+              },
+              "gist": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "narrative": {
+                "type": "string"
+              },
+              "relevance_explanation": {
+                "type": "string"
+              },
+              "relevance_score": {
+                "type": "number"
+              },
+              "source_layer": {
+                "type": "string"
+              },
+              "source_session_id": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "theme": {
+                "type": "string"
+              },
+              "time_range": {
+                "type": "object",
+                "properties": {
+                  "end": {
+                    "type": "string"
+                  },
+                  "start": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "end",
+                  "start"
+                ],
+                "additionalProperties": false
+              },
+              "weight": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "freshness",
+              "gist",
+              "id",
+              "relevance_score",
+              "source_layer",
+              "source_session_id",
+              "tags",
+              "theme",
+              "time_range",
+              "weight"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "recall_result.v1"
+          ]
+        },
+        "stage_used": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "created_at",
+        "items",
+        "schema_version",
+        "stage_used"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionCandidatesResult": {
+      "type": "object",
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "candidate_id": {
+                "type": "string"
+              },
+              "category": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number"
+              },
+              "core_scope": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "evidence_summary": {
+                "type": "string"
+              },
+              "promotion_checks": {
+                "type": "object",
+                "properties": {
+                  "manual_review_required": {
+                    "type": "boolean"
+                  },
+                  "min_sources_met": {
+                    "type": "boolean"
+                  },
+                  "no_recent_contradiction": {
+                    "type": "boolean"
+                  },
+                  "weight_threshold_met": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "manual_review_required",
+                  "min_sources_met",
+                  "no_recent_contradiction",
+                  "weight_threshold_met"
+                ],
+                "additionalProperties": false
+              },
+              "schema_version": {
+                "type": "string",
+                "enum": [
+                  "candidate_belief.v1"
+                ]
+              },
+              "source_memory_unit_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source_session_id": {
+                "type": "string"
+              },
+              "source_session_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "string"
+              },
+              "supporting_archive_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "candidate_id",
+              "category",
+              "confidence",
+              "core_scope",
+              "created_at",
+              "evidence_summary",
+              "promotion_checks",
+              "schema_version",
+              "source_memory_unit_ids",
+              "source_session_id",
+              "source_session_ids",
+              "status",
+              "supporting_archive_ids",
+              "tags",
+              "text",
+              "updated_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "core_scope": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "no_insight": {
+          "type": "object",
+          "properties": {
+            "explanation": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "explanation",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "result_digest": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "reflection_apply_result.v1",
+            "reflection_result.v1"
+          ]
+        },
+        "source_session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidates",
+        "core_scope",
+        "created_at",
+        "operation_id",
+        "result_digest",
+        "schema_version",
+        "source_session_id"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionPassStart": {
+      "type": "object",
+      "properties": {
+        "core_fact_count": {
+          "type": "integer"
+        },
+        "core_scope": {
+          "type": "string"
+        },
+        "existing_candidate_count": {
+          "type": "integer"
+        },
+        "memory_unit_count": {
+          "type": "integer"
+        },
+        "new_memory_unit_count": {
+          "type": "integer"
+        },
+        "pending_task": {
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "array"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "expected_output_schema": {
+              "type": "string"
+            },
+            "inputs": {
+              "type": "object"
+            },
+            "last_error": {
+              "type": "null"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "role_hint": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "pending_task.v1"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "task_type": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempts",
+            "created_at",
+            "expected_output_schema",
+            "inputs",
+            "last_error",
+            "prompt_id",
+            "prompt_version",
+            "role_hint",
+            "schema_version",
+            "state",
+            "task_id",
+            "task_type",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        },
+        "related_memory_unit_count": {
+          "type": "integer"
+        },
+        "request": {
+          "type": "object",
+          "properties": {
+            "expected_output_schema": {
+              "type": "string"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_inputs": {
+              "type": "object"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "role_hint": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expected_output_schema",
+            "prompt_id",
+            "prompt_inputs",
+            "prompt_version",
+            "request_id",
+            "role_hint",
+            "task_id"
+          ],
+          "additionalProperties": false
+        },
+        "source_session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "core_fact_count",
+        "core_scope",
+        "existing_candidate_count",
+        "memory_unit_count",
+        "new_memory_unit_count",
+        "pending_task",
+        "related_memory_unit_count",
+        "request",
+        "source_session_id"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionState": {
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "last_candidate_count": {
+          "type": "integer"
+        },
+        "reflection_scope": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "reflection_state.v1"
+          ]
+        },
+        "source_session_id": {
+          "type": "string"
+        },
+        "source_session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "created_at",
+        "last_candidate_count",
+        "reflection_scope",
+        "schema_version",
+        "source_session_id",
+        "source_session_ids",
+        "updated_at"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionTriggerStatus": {
+      "type": "object",
+      "properties": {
+        "accumulated_salience": {
+          "type": "number"
+        },
+        "active_memory_unit_count": {
+          "type": "integer"
+        },
+        "critical_unit_weight": {
+          "type": "number"
+        },
+        "due": {
+          "type": "boolean"
+        },
+        "eligible_memory_unit_count": {
+          "type": "integer"
+        },
+        "evaluated_at": {
+          "type": "string"
+        },
+        "fidelity_excluded_memory_unit_count": {
+          "type": "integer"
+        },
+        "opportunity": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reflection_scope": {
+          "type": "string"
+        },
+        "salience_remaining": {
+          "type": "number"
+        },
+        "salience_threshold": {
+          "type": "number"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "reflection_trigger_status.v1"
+          ]
+        },
+        "source_session_id": {
+          "type": "string"
+        },
+        "source_session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unchecked_memory_unit_count": {
+          "type": "integer"
+        },
+        "valid_memory_unit_count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "accumulated_salience",
+        "active_memory_unit_count",
+        "critical_unit_weight",
+        "due",
+        "eligible_memory_unit_count",
+        "evaluated_at",
+        "fidelity_excluded_memory_unit_count",
+        "opportunity",
+        "reason",
+        "reflection_scope",
+        "salience_remaining",
+        "salience_threshold",
+        "schema_version",
+        "source_session_id",
+        "source_session_ids",
+        "unchecked_memory_unit_count",
+        "valid_memory_unit_count"
+      ],
+      "additionalProperties": false
+    },
+    "SessionRecord": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "event_id": {
+                "type": "string"
+              },
+              "importance_hint": {
+                "type": "string"
+              },
+              "initial_weight": {
+                "type": "number"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "processing_mode": {
+                "type": "string"
+              },
+              "received_at": {
+                "type": "string"
+              },
+              "schema_version": {
+                "type": "string",
+                "enum": [
+                  "event.v1"
+                ]
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "theme": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "weight_reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event_id",
+              "importance_hint",
+              "initial_weight",
+              "payload",
+              "processing_mode",
+              "received_at",
+              "schema_version",
+              "session_id",
+              "source",
+              "tags",
+              "theme",
+              "timestamp",
+              "type",
+              "weight_reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "active_theme": {
+              "type": "string"
+            },
+            "archived_event_index_complete": {
+              "type": "boolean"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "event_count": {
+              "type": "integer"
+            },
+            "host_id": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "session.v1"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "archived_event_index_complete",
+            "created_at",
+            "event_count",
+            "host_id",
+            "schema_version",
+            "session_id",
+            "status",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "metadata"
+      ],
+      "additionalProperties": false
+    },
+    "SleepOutcome": {
+      "type": "object",
+      "properties": {
+        "archive_entry": {
+          "type": "object",
+          "properties": {
+            "archive_id": {
+              "type": "string"
+            },
+            "compact_memory": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "embedding": {
+              "type": "null"
+            },
+            "embedding_model_id": {
+              "type": "null"
+            },
+            "emotional_markers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "affect": {
+                    "type": "string"
+                  },
+                  "source_event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "strength": {
+                    "type": "number"
+                  },
+                  "target": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "affect",
+                  "source_event_ids",
+                  "strength",
+                  "target"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "facts": {
+              "type": "array"
+            },
+            "freshness": {
+              "type": "number"
+            },
+            "gist": {
+              "type": "string"
+            },
+            "last_recalled_at": {
+              "type": "null"
+            },
+            "links": {
+              "type": "array"
+            },
+            "llm_enhanced": {
+              "type": "boolean"
+            },
+            "memory_units": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "archive_id": {
+                    "type": "string"
+                  },
+                  "created_at": {
+                    "type": "string"
+                  },
+                  "fidelity_status": {
+                    "type": "string"
+                  },
+                  "memory_unit_id": {
+                    "type": "string"
+                  },
+                  "reflection_count": {
+                    "type": "integer"
+                  },
+                  "schema_version": {
+                    "type": "string",
+                    "enum": [
+                      "memory_unit.v1"
+                    ]
+                  },
+                  "source_event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "source_session_id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "thesis": {
+                    "type": "string"
+                  },
+                  "updated_at": {
+                    "type": "string"
+                  },
+                  "weight": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "archive_id",
+                  "created_at",
+                  "fidelity_status",
+                  "memory_unit_id",
+                  "reflection_count",
+                  "schema_version",
+                  "source_event_ids",
+                  "source_session_id",
+                  "status",
+                  "thesis",
+                  "updated_at",
+                  "weight"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "narrative": {
+              "type": "string"
+            },
+            "personal_signals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "category": {
+                    "type": "string"
+                  },
+                  "confidence": {
+                    "type": "number"
+                  },
+                  "source_event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "category",
+                  "confidence",
+                  "source_event_ids",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "quotes": {
+              "type": "array"
+            },
+            "recall_count": {
+              "type": "integer"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "archive_entry.v1"
+              ]
+            },
+            "source_event_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "source_session_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "theme": {
+              "type": "null"
+            },
+            "time_range": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end",
+                "start"
+              ],
+              "additionalProperties": false
+            },
+            "topic_thread": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source_event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "topic": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source_event_ids",
+                  "summary",
+                  "topic"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "archive_id",
+            "created_at",
+            "embedding",
+            "embedding_model_id",
+            "facts",
+            "freshness",
+            "gist",
+            "last_recalled_at",
+            "links",
+            "llm_enhanced",
+            "narrative",
+            "prompt_id",
+            "prompt_version",
+            "quotes",
+            "recall_count",
+            "schema_version",
+            "source_event_ids",
+            "source_session_id",
+            "status",
+            "tags",
+            "theme",
+            "time_range",
+            "updated_at",
+            "weight"
+          ],
+          "additionalProperties": false
+        },
+        "budget_exhausted": {
+          "type": "boolean"
+        },
+        "completion_mode": {
+          "type": "string"
+        },
+        "core_summary": {
+          "type": "object",
+          "properties": {
+            "created": {
+              "type": "integer"
+            },
+            "review_candidates": {
+              "type": "integer"
+            },
+            "skipped": {
+              "type": "integer"
+            },
+            "updated": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "created",
+            "review_candidates",
+            "skipped",
+            "updated"
+          ],
+          "additionalProperties": false
+        },
+        "failed_passes": {
+          "type": "array"
+        },
+        "fidelity_requests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "expected_output_schema": {
+                "type": "string"
+              },
+              "prompt_id": {
+                "type": "string"
+              },
+              "prompt_inputs": {
+                "type": "object"
+              },
+              "prompt_version": {
+                "type": "integer"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "role_hint": {
+                "type": "string"
+              },
+              "task_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "expected_output_schema",
+              "prompt_id",
+              "prompt_inputs",
+              "prompt_version",
+              "request_id",
+              "role_hint",
+              "task_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "max_provider_calls": {
+          "type": "integer"
+        },
+        "pass_reports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "attempts": {
+                "type": "integer"
+              },
+              "completed": {
+                "type": "boolean"
+              },
+              "errors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "prompt_id": {
+                "type": "string"
+              },
+              "recovered_after_retry": {
+                "type": "boolean"
+              },
+              "track": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "attempts",
+              "completed",
+              "prompt_id",
+              "recovered_after_retry",
+              "track"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "provider_calls_issued": {
+          "type": "integer"
+        },
+        "skipped_passes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "archive_entry",
+        "budget_exhausted",
+        "completion_mode",
+        "core_summary",
+        "failed_passes",
+        "pass_reports",
+        "provider_calls_issued",
+        "skipped_passes"
+      ],
+      "additionalProperties": false
+    },
+    "SleepRun": {
+      "type": "object",
+      "properties": {
+        "archive_id": {
+          "type": "string"
+        },
+        "budget_exhausted": {
+          "type": "boolean"
+        },
+        "completion_mode": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "consolidator_gist": {
+          "type": "null"
+        },
+        "consolidator_narrative": {
+          "type": "null"
+        },
+        "emotional_pass": {
+          "type": "null"
+        },
+        "enabled_tracks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failed_passes": {
+          "type": "array"
+        },
+        "max_pass_attempts": {
+          "type": "integer"
+        },
+        "max_provider_calls": {
+          "type": "integer"
+        },
+        "memory_unit_result": {
+          "type": "null"
+        },
+        "memory_unit_task_id": {
+          "type": "string"
+        },
+        "personal_signal_pass": {
+          "type": "null"
+        },
+        "provider_calls_issued": {
+          "type": "integer"
+        },
+        "relational_pass": {
+          "type": "null"
+        },
+        "requests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "attempts": {
+                "type": "integer"
+              },
+              "completed": {
+                "type": "boolean"
+              },
+              "last_error": {
+                "type": "null"
+              },
+              "request": {
+                "type": "object",
+                "properties": {
+                  "expected_output_schema": {
+                    "type": "string"
+                  },
+                  "prompt_id": {
+                    "type": "string"
+                  },
+                  "prompt_inputs": {
+                    "type": "object"
+                  },
+                  "prompt_version": {
+                    "type": "integer"
+                  },
+                  "request_id": {
+                    "type": "string"
+                  },
+                  "role_hint": {
+                    "type": "string"
+                  },
+                  "task_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_output_schema",
+                  "prompt_id",
+                  "prompt_inputs",
+                  "prompt_version",
+                  "request_id",
+                  "role_hint",
+                  "task_id"
+                ],
+                "additionalProperties": false
+              },
+              "track": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "attempts",
+              "completed",
+              "last_error",
+              "request",
+              "track"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "sleep_run.v1"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "shared_prompt_context": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "context_id": {
+              "type": "string"
+            },
+            "estimated_tokens": {
+              "type": "integer"
+            },
+            "event_count": {
+              "type": "integer"
+            },
+            "rendered_chars": {
+              "type": "integer"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "sleep_prompt_context.v1"
+              ]
+            },
+            "source_event_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "source_text_chars": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "content",
+            "context_id",
+            "estimated_tokens",
+            "event_count",
+            "rendered_chars",
+            "schema_version",
+            "source_event_ids",
+            "source_text_chars"
+          ],
+          "additionalProperties": false
+        },
+        "skipped_passes": {
+          "type": "array"
+        },
+        "sleep_task_id": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "topic_thread_pass": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "archive_id",
+        "budget_exhausted",
+        "completion_mode",
+        "consolidator_gist",
+        "consolidator_narrative",
+        "emotional_pass",
+        "enabled_tracks",
+        "failed_passes",
+        "max_pass_attempts",
+        "memory_unit_result",
+        "memory_unit_task_id",
+        "personal_signal_pass",
+        "provider_calls_issued",
+        "relational_pass",
+        "requests",
+        "schema_version",
+        "session_id",
+        "shared_prompt_context",
+        "skipped_passes",
+        "sleep_task_id",
+        "stage",
+        "topic_thread_pass"
+      ],
+      "additionalProperties": false
+    },
+    "SleepRunStep": {
+      "type": "object",
+      "properties": {
+        "batch": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "expected_output_schema": {
+                    "type": "string"
+                  },
+                  "prompt_id": {
+                    "type": "string"
+                  },
+                  "prompt_inputs": {
+                    "type": "object"
+                  },
+                  "prompt_version": {
+                    "type": "integer"
+                  },
+                  "request_id": {
+                    "type": "string"
+                  },
+                  "role_hint": {
+                    "type": "string"
+                  },
+                  "task_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_output_schema",
+                  "prompt_id",
+                  "prompt_inputs",
+                  "prompt_version",
+                  "request_id",
+                  "role_hint",
+                  "task_id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "shared_context": {
+              "type": "object",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "context_id": {
+                  "type": "string"
+                },
+                "estimated_tokens": {
+                  "type": "integer"
+                },
+                "event_count": {
+                  "type": "integer"
+                },
+                "rendered_chars": {
+                  "type": "integer"
+                },
+                "schema_version": {
+                  "type": "string",
+                  "enum": [
+                    "sleep_prompt_context.v1"
+                  ]
+                },
+                "source_event_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "source_text_chars": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "content",
+                "context_id",
+                "estimated_tokens",
+                "event_count",
+                "rendered_chars",
+                "schema_version",
+                "source_event_ids",
+                "source_text_chars"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "requests",
+            "shared_context"
+          ],
+          "additionalProperties": false
+        },
+        "run": {
+          "type": "object",
+          "properties": {
+            "archive_id": {
+              "type": "string"
+            },
+            "budget_exhausted": {
+              "type": "boolean"
+            },
+            "completion_mode": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "consolidator_gist": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "consolidator_narrative": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "emotional_pass": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "emotional_markers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "emotional_markers"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "enabled_tracks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "failed_passes": {
+              "type": "array"
+            },
+            "max_pass_attempts": {
+              "type": "integer"
+            },
+            "max_provider_calls": {
+              "type": "integer"
+            },
+            "memory_unit_result": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "archive_id": {
+                      "type": "string"
+                    },
+                    "memory_units": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "schema_version": {
+                      "type": "string",
+                      "enum": [
+                        "memory_units_result.v1"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "archive_id",
+                    "memory_units",
+                    "schema_version"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "memory_unit_task_id": {
+              "type": "string"
+            },
+            "personal_signal_pass": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "personal_signals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "personal_signals"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "provider_calls_issued": {
+              "type": "integer"
+            },
+            "relational_pass": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "relational_tone": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "relational_tone"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "requests": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "attempt_errors": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attempts": {
+                    "type": "integer"
+                  },
+                  "completed": {
+                    "type": "boolean"
+                  },
+                  "last_error": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "request": {
+                    "type": "object"
+                  },
+                  "track": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "attempts",
+                  "completed",
+                  "last_error",
+                  "request",
+                  "track"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "sleep_run.v1"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "shared_prompt_context": {
+              "type": "object",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "context_id": {
+                  "type": "string"
+                },
+                "estimated_tokens": {
+                  "type": "integer"
+                },
+                "event_count": {
+                  "type": "integer"
+                },
+                "rendered_chars": {
+                  "type": "integer"
+                },
+                "schema_version": {
+                  "type": "string",
+                  "enum": [
+                    "sleep_prompt_context.v1"
+                  ]
+                },
+                "source_event_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "source_text_chars": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "content",
+                "context_id",
+                "estimated_tokens",
+                "event_count",
+                "rendered_chars",
+                "schema_version",
+                "source_event_ids",
+                "source_text_chars"
+              ],
+              "additionalProperties": false
+            },
+            "skipped_passes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sleep_task_id": {
+              "type": "string"
+            },
+            "stage": {
+              "type": "string"
+            },
+            "topic_thread_pass": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "topic_thread": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "topic_thread"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "archive_id",
+            "budget_exhausted",
+            "completion_mode",
+            "consolidator_gist",
+            "consolidator_narrative",
+            "emotional_pass",
+            "enabled_tracks",
+            "failed_passes",
+            "max_pass_attempts",
+            "memory_unit_result",
+            "memory_unit_task_id",
+            "personal_signal_pass",
+            "provider_calls_issued",
+            "relational_pass",
+            "requests",
+            "schema_version",
+            "session_id",
+            "shared_prompt_context",
+            "skipped_passes",
+            "sleep_task_id",
+            "stage",
+            "topic_thread_pass"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "additionalProperties": false
+    },
+    "SleepStage1Result": {
+      "type": "object",
+      "properties": {
+        "archive_entry": {
+          "type": "object",
+          "properties": {
+            "archive_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "embedding": {
+              "type": "null"
+            },
+            "embedding_model_id": {
+              "type": "null"
+            },
+            "facts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "confidence": {
+                    "type": "number"
+                  },
+                  "source_event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confidence",
+                  "source_event_ids",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "freshness": {
+              "type": "number"
+            },
+            "gist": {
+              "type": "string"
+            },
+            "last_recalled_at": {
+              "type": "null"
+            },
+            "links": {
+              "type": "array"
+            },
+            "llm_enhanced": {
+              "type": "boolean"
+            },
+            "narrative": {
+              "type": "string"
+            },
+            "prompt_id": {
+              "type": "null"
+            },
+            "prompt_version": {
+              "type": "null"
+            },
+            "quotes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source_event_id": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source_event_id",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "recall_count": {
+              "type": "integer"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "archive_entry.v1"
+              ]
+            },
+            "source_event_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "source_session_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "theme": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "time_range": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end",
+                "start"
+              ],
+              "additionalProperties": false
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "archive_id",
+            "created_at",
+            "embedding",
+            "embedding_model_id",
+            "facts",
+            "freshness",
+            "gist",
+            "last_recalled_at",
+            "links",
+            "llm_enhanced",
+            "narrative",
+            "prompt_id",
+            "prompt_version",
+            "quotes",
+            "recall_count",
+            "schema_version",
+            "source_event_ids",
+            "source_session_id",
+            "status",
+            "tags",
+            "theme",
+            "time_range",
+            "updated_at",
+            "weight"
+          ],
+          "additionalProperties": false
+        },
+        "memory_unit_task": {
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "array"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "expected_output_schema": {
+              "type": "string"
+            },
+            "inputs": {
+              "type": "object"
+            },
+            "last_error": {
+              "type": "null"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "role_hint": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "pending_task.v1"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "task_type": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempts",
+            "created_at",
+            "expected_output_schema",
+            "inputs",
+            "last_error",
+            "prompt_id",
+            "prompt_version",
+            "role_hint",
+            "schema_version",
+            "state",
+            "task_id",
+            "task_type",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        },
+        "pending_task": {
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "array"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "expected_output_schema": {
+              "type": "string"
+            },
+            "inputs": {
+              "type": "object"
+            },
+            "last_error": {
+              "type": "null"
+            },
+            "prompt_id": {
+              "type": "string"
+            },
+            "prompt_version": {
+              "type": "integer"
+            },
+            "role_hint": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "pending_task.v1"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "task_type": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempts",
+            "created_at",
+            "expected_output_schema",
+            "inputs",
+            "last_error",
+            "prompt_id",
+            "prompt_version",
+            "role_hint",
+            "schema_version",
+            "state",
+            "task_id",
+            "task_type",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "archive_entry",
+        "memory_unit_task",
+        "pending_task"
+      ],
+      "additionalProperties": false
+    },
+    "VectorScopeState": {
+      "type": "object",
+      "properties": {
+        "dim": {
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "rows": {
+          "type": "integer"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "vector_scope_state.v1"
+          ]
+        },
+        "scope": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rows",
+        "schema_version",
+        "scope",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "int": {
+      "type": "integer"
+    },
+    "list[CandidateBelief]": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "candidate_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "core_scope": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "evidence_summary": {
+            "type": "string"
+          },
+          "promotion_checks": {
+            "type": "object",
+            "properties": {
+              "manual_review_required": {
+                "type": "boolean"
+              },
+              "min_sources_met": {
+                "type": "boolean"
+              },
+              "no_recent_contradiction": {
+                "type": "boolean"
+              },
+              "weight_threshold_met": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "manual_review_required",
+              "min_sources_met",
+              "no_recent_contradiction",
+              "weight_threshold_met"
+            ],
+            "additionalProperties": false
+          },
+          "schema_version": {
+            "type": "string",
+            "enum": [
+              "candidate_belief.v1"
+            ]
+          },
+          "source_memory_unit_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source_session_id": {
+            "type": "string"
+          },
+          "source_session_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "supporting_archive_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "text": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "category",
+          "confidence",
+          "core_scope",
+          "created_at",
+          "evidence_summary",
+          "promotion_checks",
+          "schema_version",
+          "source_memory_unit_ids",
+          "source_session_id",
+          "source_session_ids",
+          "status",
+          "supporting_archive_ids",
+          "tags",
+          "text",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "list[LlmRequest]": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "expected_output_schema": {
+            "type": "string"
+          },
+          "prompt_id": {
+            "type": "string"
+          },
+          "prompt_inputs": {
+            "type": "object"
+          },
+          "prompt_version": {
+            "type": "integer"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "role_hint": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_output_schema",
+          "prompt_id",
+          "prompt_inputs",
+          "prompt_version",
+          "request_id",
+          "role_hint",
+          "task_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "list[PendingTask]": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "attempts": {
+            "type": "array"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "expected_output_schema": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "last_error": {
+            "type": "null"
+          },
+          "prompt_id": {
+            "type": "string"
+          },
+          "prompt_version": {
+            "type": "integer"
+          },
+          "role_hint": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string",
+            "enum": [
+              "pending_task.v1"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "task_type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempts",
+          "created_at",
+          "expected_output_schema",
+          "inputs",
+          "last_error",
+          "prompt_id",
+          "prompt_version",
+          "role_hint",
+          "schema_version",
+          "state",
+          "task_id",
+          "task_type",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "list[SleepRun]": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "archive_id": {
+            "type": "string"
+          },
+          "budget_exhausted": {
+            "type": "boolean"
+          },
+          "completion_mode": {
+            "type": "null"
+          },
+          "consolidator_gist": {
+            "type": "null"
+          },
+          "consolidator_narrative": {
+            "type": "null"
+          },
+          "emotional_pass": {
+            "type": "null"
+          },
+          "enabled_tracks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "failed_passes": {
+            "type": "array"
+          },
+          "max_pass_attempts": {
+            "type": "integer"
+          },
+          "memory_unit_result": {
+            "type": "null"
+          },
+          "memory_unit_task_id": {
+            "type": "string"
+          },
+          "personal_signal_pass": {
+            "type": "null"
+          },
+          "provider_calls_issued": {
+            "type": "integer"
+          },
+          "relational_pass": {
+            "type": "null"
+          },
+          "requests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attempts": {
+                  "type": "integer"
+                },
+                "completed": {
+                  "type": "boolean"
+                },
+                "last_error": {
+                  "type": "null"
+                },
+                "request": {
+                  "type": "object",
+                  "properties": {
+                    "expected_output_schema": {
+                      "type": "string"
+                    },
+                    "prompt_id": {
+                      "type": "string"
+                    },
+                    "prompt_inputs": {
+                      "type": "object"
+                    },
+                    "prompt_version": {
+                      "type": "integer"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "role_hint": {
+                      "type": "string"
+                    },
+                    "task_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "expected_output_schema",
+                    "prompt_id",
+                    "prompt_inputs",
+                    "prompt_version",
+                    "request_id",
+                    "role_hint",
+                    "task_id"
+                  ],
+                  "additionalProperties": false
+                },
+                "track": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attempts",
+                "completed",
+                "last_error",
+                "request",
+                "track"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "schema_version": {
+            "type": "string",
+            "enum": [
+              "sleep_run.v1"
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "shared_prompt_context": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "context_id": {
+                "type": "string"
+              },
+              "estimated_tokens": {
+                "type": "integer"
+              },
+              "event_count": {
+                "type": "integer"
+              },
+              "rendered_chars": {
+                "type": "integer"
+              },
+              "schema_version": {
+                "type": "string",
+                "enum": [
+                  "sleep_prompt_context.v1"
+                ]
+              },
+              "source_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source_text_chars": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "content",
+              "context_id",
+              "estimated_tokens",
+              "event_count",
+              "rendered_chars",
+              "schema_version",
+              "source_event_ids",
+              "source_text_chars"
+            ],
+            "additionalProperties": false
+          },
+          "skipped_passes": {
+            "type": "array"
+          },
+          "sleep_task_id": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "topic_thread_pass": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "archive_id",
+          "budget_exhausted",
+          "completion_mode",
+          "consolidator_gist",
+          "consolidator_narrative",
+          "emotional_pass",
+          "enabled_tracks",
+          "failed_passes",
+          "max_pass_attempts",
+          "memory_unit_result",
+          "memory_unit_task_id",
+          "personal_signal_pass",
+          "provider_calls_issued",
+          "relational_pass",
+          "requests",
+          "schema_version",
+          "session_id",
+          "shared_prompt_context",
+          "skipped_passes",
+          "sleep_task_id",
+          "stage",
+          "topic_thread_pass"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "str": {
+      "type": "string"
+    }
+  }
+}

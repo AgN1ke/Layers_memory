@@ -14,12 +14,12 @@ import memory_engine
 
 
 @pytest.fixture
-def engine(tmp_path: Path) -> memory_engine.MemoryEngine:
-    return memory_engine.MemoryEngine(str(tmp_path), host_id="pytest_host")
+def engine(tmp_path: Path, engine_factory) -> memory_engine.MemoryEngine:
+    return engine_factory(tmp_path, host_id="pytest_host")
 
 
-def test_build_info_is_available_without_opening_memory():
-    info = memory_engine.build_info()
+def test_build_info_is_available_without_opening_memory(check_api_response):
+    info = check_api_response("build_info", memory_engine.build_info())
     assert set(info) == {"version", "commit", "dirty"}
     assert info["version"] == memory_engine.__version__
     commit = info["commit"]
@@ -29,9 +29,9 @@ def test_build_info_is_available_without_opening_memory():
     assert info["dirty"] is None or type(info["dirty"]) is bool
 
 
-def test_constructor_accepts_vector_tuning(tmp_path: Path):
-    configured = memory_engine.MemoryEngine(
-        str(tmp_path / "configured"),
+def test_constructor_accepts_vector_tuning(tmp_path: Path, engine_factory):
+    configured = engine_factory(
+        tmp_path / "configured",
         host_id="pytest_stage2",
         stage2_candidate_limit=7,
         stage2_vector_weight=0.25,
@@ -913,14 +913,14 @@ def test_empty_session_payload_and_prompt_plan_are_available_through_adapter(
     assert plan["dialogue_events"][0]["payload"]["telegram_message_id"] == 101
 
 
-def test_repeated_sleep_start_resumes_after_adapter_restart(tmp_path: Path):
-    engine = memory_engine.MemoryEngine(str(tmp_path), host_id="pytest_host")
+def test_repeated_sleep_start_resumes_after_adapter_restart(tmp_path: Path, engine_factory):
+    engine = engine_factory(tmp_path, host_id="pytest_host")
     _ingest(engine, "sleep_retry", "Keep this source event.")
     run = json.loads(engine.begin_sleep_run("sleep_retry"))
     step = json.loads(engine.next_sleep_batch(json.dumps(run)))
     del engine
 
-    reopened = memory_engine.MemoryEngine(str(tmp_path), host_id="pytest_host")
+    reopened = engine_factory(tmp_path, host_id="pytest_host")
     resumed = json.loads(reopened.begin_sleep_run("sleep_retry"))
     assert resumed == step["run"]
     assert json.loads(reopened.pending_sleep_runs()) == [resumed]
