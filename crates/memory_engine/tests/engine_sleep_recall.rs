@@ -1,13 +1,13 @@
 use memory_engine::archive::{
-    ArchiveStatus, EmotionalMarker, FidelityReview, FidelityStatus, MemoryUnitStatus,
-    PersonalSignal, RelationalTone, TopicThreadItem,
+    ArchiveFilters, ArchiveStatus, EmotionalMarker, FidelityReview, FidelityStatus,
+    MemoryUnitStatus, PersonalSignal, RelationalTone, TopicThreadItem,
 };
 use memory_engine::core_store::{
     CoreContextRequest, CoreContextTokenBudget, CoreFactInput, CoreFactPatchInput, CoreFactStatus,
 };
 use memory_engine::event::IngestEvent;
 use memory_engine::fidelity::EvidenceEventRole;
-use memory_engine::llm::{LlmErrorKind, LlmResponse, SleepRunStage, SleepTrack};
+use memory_engine::llm::{LlmErrorKind, LlmResponse, SleepRunOptions, SleepRunStage, SleepTrack};
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::storage::Storage;
@@ -2901,6 +2901,82 @@ fn engine_repair_falls_back_to_archive_tracks_when_provider_blocks() {
 }
 
 #[test]
+fn engine_repeated_sleep_start_returns_the_persisted_run() {
+    let root = unique_temp_dir("engine_repeated_sleep_start_returns_the_persisted_run");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "A memory to consolidate.",
+        vec![],
+    );
+
+    let first = std::thread::scope(|scope| {
+        let start = || engine.begin_sleep_run("live_session").expect("begin Sleep");
+        let left = scope.spawn(start);
+        let right = scope.spawn(start);
+        let first = left.join().unwrap();
+        assert_eq!(right.join().unwrap(), first);
+        first
+    });
+    let progressed = engine.next_sleep_batch(first).expect("next batch").run;
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    let resumed = reopened
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![],
+                max_provider_calls: Some(0),
+                ..Default::default()
+            },
+        )
+        .expect("resume existing Sleep after restart");
+    assert_eq!(resumed, progressed);
+    assert!(reopened.sleep("live_session").is_err());
+    assert_eq!(reopened.pending_sleep_runs().unwrap(), vec![progressed]);
+    assert_eq!(reopened.pending_tasks().unwrap().len(), 2);
+    assert_eq!(
+        storage
+            .read_archive(&ArchiveFilters::default())
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_start_rejects_preexisting_duplicate_runs() {
+    let root = unique_temp_dir("engine_sleep_start_rejects_preexisting_duplicate_runs");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "A memory to consolidate.",
+        vec![],
+    );
+    let first = engine.begin_sleep_run("live_session").unwrap();
+    engine.cancel_sleep_run(&first.sleep_task_id).unwrap();
+    let second = engine.begin_sleep_run("live_session").unwrap();
+    storage.save_sleep_run(&first).unwrap();
+
+    let error = engine.begin_sleep_run("live_session").unwrap_err();
+    assert!(error.to_string().contains("multiple open Sleep runs"));
+    assert_eq!(engine.pending_sleep_runs().unwrap().len(), 2);
+
+    engine.cancel_sleep_run(&first.sleep_task_id).unwrap();
+    assert_eq!(engine.begin_sleep_run("live_session").unwrap(), second);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_cancel_sleep_run_unblocks_unarchived_events() {
     let root = unique_temp_dir("engine_cancel_sleep_run_unblocks_unarchived_events");
     let storage = FileStorage::with_host_id(&root, "terminal");
@@ -2931,6 +3007,10 @@ fn engine_cancel_sleep_run_unblocks_unarchived_events() {
         .begin_sleep_run("live_session")
         .expect("begin sleep run after cancel");
     assert_ne!(next_run.sleep_task_id, run.sleep_task_id);
+    assert!(engine.next_sleep_batch(run.clone()).is_err());
+    assert!(engine.submit_sleep_batch(run.clone(), vec![]).is_err());
+    assert!(engine.finish_sleep_run_with_available(run).is_err());
+    assert_eq!(engine.pending_sleep_runs().unwrap(), vec![next_run.clone()]);
     assert_eq!(
         next_run
             .shared_prompt_context

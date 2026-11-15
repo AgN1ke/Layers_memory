@@ -902,6 +902,20 @@ def test_empty_session_payload_and_prompt_plan_are_available_through_adapter(
     assert plan["dialogue_events"][0]["payload"]["telegram_message_id"] == 101
 
 
+def test_repeated_sleep_start_resumes_after_adapter_restart(tmp_path: Path):
+    engine = memory_engine.MemoryEngine(str(tmp_path), host_id="pytest_host")
+    _ingest(engine, "sleep_retry", "Keep this source event.")
+    run = json.loads(engine.begin_sleep_run("sleep_retry"))
+    step = json.loads(engine.next_sleep_batch(json.dumps(run)))
+    del engine
+
+    reopened = memory_engine.MemoryEngine(str(tmp_path), host_id="pytest_host")
+    resumed = json.loads(reopened.begin_sleep_run("sleep_retry"))
+    assert resumed == step["run"]
+    assert json.loads(reopened.pending_sleep_runs()) == [resumed]
+    assert len(json.loads(reopened.pending_tasks())) == 2
+
+
 def test_sleep_budget_and_early_finish_are_available_through_adapter(
     engine: memory_engine.MemoryEngine,
 ):

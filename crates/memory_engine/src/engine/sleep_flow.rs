@@ -10,6 +10,11 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         self.with_resource_lock(session_lock_key(session_id), || {
+            if self.open_sleep_run_for_session(session_id)?.is_some() {
+                return Err(MemoryEngineError::Validation(format!(
+                    "session already has an open Sleep run; resume it with begin_sleep_run: {session_id}"
+                )));
+            }
             self.sleep_stage1_unlocked(session_id)
         })
     }
@@ -31,11 +36,38 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         self.with_resource_lock(session_lock_key(session_id), || {
+            if let Some(run) = self.open_sleep_run_for_session(session_id)? {
+                return Ok(run);
+            }
             let sleep_result = self.sleep_stage1_unlocked(session_id)?;
             let run = sleep_run_from_stage1_with_options(sleep_result, options)?;
             self.storage.save_sleep_run(&run)?;
             Ok(run)
         })
+    }
+
+    fn open_sleep_run_for_session(&self, session_id: &str) -> Result<Option<SleepRun>> {
+        let stored = self.storage.load_sleep_runs()?;
+        if !stored.warnings.is_empty() {
+            return Err(MemoryEngineError::Storage(
+                "cannot check for an open Sleep run while stored Sleep runs are unreadable"
+                    .to_string(),
+            ));
+        }
+        let mut matching = stored
+            .items
+            .into_iter()
+            .filter(|run| run.session_id == session_id && run.stage != SleepRunStage::Finished);
+        let existing = matching.next();
+        if matching.next().is_some() {
+            return Err(MemoryEngineError::Validation(format!(
+                "session has multiple open Sleep runs; resolve them by ID before starting Sleep: {session_id}"
+            )));
+        }
+        if let Some(run) = &existing {
+            validate_sleep_run(run)?;
+        }
+        Ok(existing)
     }
 
     pub(super) fn sleep_stage1_unlocked(&self, session_id: &str) -> Result<SleepStage1Result> {
@@ -79,8 +111,48 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(result)
     }
 
-    pub fn next_sleep_batch(&self, mut run: SleepRun) -> Result<SleepRunStep> {
+    fn current_sleep_run(&self, run: &SleepRun) -> Result<SleepRun> {
+        let current = self.storage.load_sleep_run(&run.sleep_task_id)?;
+        validate_sleep_run(&current)?;
+        if current.session_id != run.session_id
+            || current.archive_id != run.archive_id
+            || current.sleep_task_id != run.sleep_task_id
+            || current.memory_unit_task_id != run.memory_unit_task_id
+        {
+            return Err(MemoryEngineError::Validation(
+                "sleep run does not match its persisted identity".to_string(),
+            ));
+        }
+        Ok(current)
+    }
+
+    fn require_open_sleep_run(&self, run: &SleepRun) -> Result<()> {
+        if run.stage == SleepRunStage::Finished {
+            return Err(MemoryEngineError::Validation(format!(
+                "sleep run is already finished: {}",
+                run.sleep_task_id
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn next_sleep_batch(&self, run: SleepRun) -> Result<SleepRunStep> {
         validate_sleep_run(&run)?;
+        self.with_resource_lock(session_lock_key(&run.session_id), || {
+            let current = self.current_sleep_run(&run)?;
+            if current.stage == SleepRunStage::Finished && run.stage == SleepRunStage::Finished {
+                return Ok(SleepRunStep {
+                    run: current,
+                    batch: None,
+                });
+            }
+            self.require_open_sleep_run(&current)?;
+            self.require_open_sleep_run(&run)?;
+            self.next_sleep_batch_unlocked(run)
+        })
+    }
+
+    fn next_sleep_batch_unlocked(&self, mut run: SleepRun) -> Result<SleepRunStep> {
         migrate_legacy_sleep_prompt_context(&mut run)?;
 
         let batch = loop {
@@ -127,11 +199,23 @@ impl<S: Storage> MemoryEngine<S> {
 
     pub fn submit_sleep_batch(
         &self,
-        mut run: SleepRun,
+        run: SleepRun,
         responses: Vec<LlmResponse>,
     ) -> Result<SleepRunStep> {
         validate_sleep_run(&run)?;
+        let session_id = run.session_id.clone();
+        self.with_resource_lock(session_lock_key(&session_id), || {
+            self.require_open_sleep_run(&self.current_sleep_run(&run)?)?;
+            self.require_open_sleep_run(&run)?;
+            self.submit_sleep_batch_unlocked(run, responses)
+        })
+    }
 
+    fn submit_sleep_batch_unlocked(
+        &self,
+        mut run: SleepRun,
+        responses: Vec<LlmResponse>,
+    ) -> Result<SleepRunStep> {
         for response in responses {
             let request_id = llm_response_request_id(&response).to_string();
             let Some(index) = run
@@ -154,13 +238,12 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         self.storage.save_sleep_run(&run)?;
-        self.next_sleep_batch(run)
+        self.next_sleep_batch_unlocked(run)
     }
 
     pub fn finish_sleep_run(&self, mut run: SleepRun) -> Result<SleepOutcome> {
         validate_sleep_run(&run)?;
         advance_sleep_run_stage(&mut run)?;
-        self.storage.save_sleep_run(&run)?;
         if run.stage != SleepRunStage::ReadyToFinish {
             return Err(MemoryEngineError::Validation(
                 "sleep run is not ready to finish".to_string(),
@@ -169,6 +252,8 @@ impl<S: Storage> MemoryEngine<S> {
 
         let session_id = run.session_id.clone();
         self.with_resource_lock(session_lock_key(&session_id), || {
+            self.require_open_sleep_run(&self.current_sleep_run(&run)?)?;
+            self.storage.save_sleep_run(&run)?;
             let mut sleep_result = assemble_sleep_compression_from_tracks(&run)?;
             if let Some(gist) = run
                 .consolidator_gist
@@ -255,7 +340,6 @@ impl<S: Storage> MemoryEngine<S> {
             fallback_unfinished_sleep_requests(&mut run, "host_budget_stop");
             advance_sleep_run_stage(&mut run)?;
         }
-        self.storage.save_sleep_run(&run)?;
         self.finish_sleep_run(run)
     }
 
@@ -570,6 +654,9 @@ impl<S: Storage> MemoryEngine<S> {
         self.with_resource_lock(session_lock_key(&session_id), || {
             let mut run = self.storage.load_sleep_run(sleep_task_id)?;
             validate_sleep_run(&run)?;
+            if run.stage == SleepRunStage::Finished {
+                return Ok(run);
+            }
             cancel_task_if_active(&self.storage, &run.sleep_task_id, "sleep run cancelled")?;
             if let Some(memory_unit_task_id) = run.memory_unit_task_id.as_deref() {
                 cancel_task_if_active(&self.storage, memory_unit_task_id, "sleep run cancelled")?;

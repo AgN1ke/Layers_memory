@@ -46,6 +46,19 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-15 — FileStorage resumes an existing multi-pass Sleep run
+
+`begin_sleep_run` and `begin_sleep_run_with_options` return an existing open
+run for the session with its original options and progress. Reopening the
+engine preserves this behavior. The multi-pass driver rejects stale requests
+to continue a cancelled or finished run. Cancelling a terminal run returns its
+stored state.
+
+If a session already has multiple open runs, the host can list their IDs and
+resolve them explicitly. Existing preliminary archives without an attached
+run stay available for diagnosis. See the
+[Sleep contract](wiki/pages/foundation/contracts.md#94-multi-pass-sleep-provider-contract).
+
 ## 2026-11-15 — Smartest2 archive and Core rendering fixes merged into `main`
 
 Merge `bfbfd9f` brings the source of the Smartest2 `0.1.2` wheel into local

@@ -8,6 +8,13 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] update | H1.1 Sleep resume contract
+
+Documented the [FileStorage Sleep driver contract](pages/foundation/contracts.md#94-multi-pass-sleep-provider-contract)
+for repeated starts, restart, and explicit handling of duplicate legacy runs.
+Recorded branch progress in the [integration plan](pages/planning/integration-hardening-plan-2026-11-15.md)
+and [roadmap](pages/planning/roadmap.md).
+
 ## [2026-11-15] update | Local H0 integration checks
 
 Recorded merge `bfbfd9f` in the [integration plan](pages/planning/integration-hardening-plan-2026-11-15.md)

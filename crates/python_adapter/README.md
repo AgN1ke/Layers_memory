@@ -82,6 +82,12 @@ Sleep is an explicit host decision in v0.1. A host calls `engine.sleep(session_i
 manually, from token-budget pressure, or from an idle schedule, then executes the
 returned tasks through its own LLM provider.
 
+For the multi-pass driver, `begin_sleep_run(session_id)` returns the current
+open run for that session, including after restart. The run keeps its original
+options and saved progress. Continue from the returned state. To abandon it,
+call `cancel_sleep_run(sleep_task_id)` before starting again. Share one engine
+instance across workers that write to the same FileStorage directory.
+
 Autonomous reflection is also an explicit host execution opportunity while
 eligibility remains Rust-core policy:
 
