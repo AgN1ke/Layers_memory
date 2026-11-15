@@ -15,6 +15,7 @@ and [roadmap](pages/planning/roadmap.md). Updated the [Core prompt contract](pag
 and the Storage v2 planning pages to reflect the external logical acceptance
 of the transactional Sleep reference at `c57e3cc`. Local verification is in
 [DEVLOG Entry 177](../DEVLOG.md#запис-177--2026-11-15--локальне-злиття-й-перевірки-h0).
+The verified H0 revision `3956ec1` was pushed to `origin/main`.
 
 ## [2026-11-15] move | September memory design notes
 

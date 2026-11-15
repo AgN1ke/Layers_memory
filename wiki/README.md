@@ -67,10 +67,10 @@ repositories.
 
 Three facts from that check qualify the statements further down this page:
 
-- **Local `main` has the Smartest2 `0.1.2` engine sources.** H0 merge `bfbfd9f`
+- **`main` has the Smartest2 `0.1.2` engine sources.** H0 merge `bfbfd9f`
   brought in both fixes from `7a18569`, the source revision for the host's wheel.
-  The H0 checks passed, including all 11 host conformance scenarios. The
-  merge is local and remote synchronization is tracked by H0.7.
+  The H0 checks passed, including all 11 host conformance scenarios.
+  The verified H0 revision `3956ec1` was pushed to `origin/main`.
 - **The Smartest validation evidence is not authoritative.** The host reported
   privacy and provenance defects in its own exporter, so the Phase 1 numbers
   and the checkpoint A `QUALIFIED` status await a new qualification. The
