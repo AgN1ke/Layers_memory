@@ -43,6 +43,14 @@ impl IRefCounted for MemoryEngineGodot {
 #[godot_api]
 impl MemoryEngineGodot {
     #[func]
+    fn build_info(&self) -> GString {
+        match dump_json(&memory_engine::build_info(), "build info") {
+            Ok(json) => gstring(json),
+            Err(err) => err_json(err),
+        }
+    }
+
+    #[func]
     fn open(&mut self, memory_dir: GString, host_id: GString) -> GString {
         let path = PathBuf::from(memory_dir.to_string());
         let storage = FileStorage::with_host_id(&path, host_id.to_string());

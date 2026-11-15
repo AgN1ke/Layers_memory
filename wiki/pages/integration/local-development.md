@@ -467,6 +467,20 @@ pytest tests/ -v
 
 `maturin develop` компілює Rust extension і ставить його в активний venv як editable wheel під ім'ям `memory_engine`. Імпорт у Python - `import memory_engine`.
 
+### Як звірити джерело збірки
+
+У Python `memory_engine.build_info()` повертає словник із полями `version`,
+`commit` і `dirty`. У Godot `MemoryEngineGodot.new().build_info()` повертає
+ті самі поля як JSON. Обидва виклики доступні до відкриття сховища.
+`commit` містить повний SHA, а `dirty` враховує індексовані та локальні зміни
+файлів під контролем Git. Невідоме значення повертається як `None` або `null`.
+
+Під час збірки з `git archive` передайте повний SHA саме архівованого коміту
+через `MEMORY_ENGINE_BUILD_COMMIT`, а стан джерел через
+`MEMORY_ENGINE_BUILD_DIRTY` (`false` для незміненого знімка коміту, `true`
+для змінених джерел). Передані поля мають пріоритет, а пропущене поле в такій
+збірці лишається невідомим. Значення вбудовуються під час збірки.
+
 ### Свіже Розгортання
 
 Якщо `.venv` не існує:

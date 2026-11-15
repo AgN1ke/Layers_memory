@@ -14,6 +14,27 @@ func _init() -> void:
         return
 
     engine = MemoryEngineGodot.new()
+    var build: Variant = _loads(engine.build_info())
+    if not (build is Dictionary) or not build.has_all(["version", "commit", "dirty"]):
+        _fail("build_info must return version, commit and dirty before open")
+        return
+    if not (build.version is String) or build.version.is_empty():
+        _fail("build_info is missing the package version")
+        return
+    if build.commit != null and (not (build.commit is String) or build.commit.length() not in [40, 64]):
+        _fail("build_info must report a full SHA or null")
+        return
+    if build.dirty != null and not (build.dirty is bool):
+        _fail("build_info dirty must be a boolean or null")
+        return
+    var expected_commit := OS.get_environment("MEMORY_ENGINE_BUILD_COMMIT")
+    var expected_dirty := OS.get_environment("MEMORY_ENGINE_BUILD_DIRTY")
+    if not expected_commit.is_empty() and build.commit != expected_commit.to_lower():
+        _fail("binary commit does not match the build input")
+        return
+    if not expected_dirty.is_empty() and build.dirty != (expected_dirty == "true"):
+        _fail("binary dirty flag does not match the build input")
+        return
     _expect_ok(engine.open(runtime_dir.path_join("memory"), "godot_headless_conformance"))
     if failed:
         return

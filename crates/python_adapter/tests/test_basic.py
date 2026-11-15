@@ -18,6 +18,17 @@ def engine(tmp_path: Path) -> memory_engine.MemoryEngine:
     return memory_engine.MemoryEngine(str(tmp_path), host_id="pytest_host")
 
 
+def test_build_info_is_available_without_opening_memory():
+    info = memory_engine.build_info()
+    assert set(info) == {"version", "commit", "dirty"}
+    assert info["version"] == memory_engine.__version__
+    commit = info["commit"]
+    if commit is not None:
+        assert len(commit) in (40, 64)
+        assert all(character in "0123456789abcdef" for character in commit)
+    assert info["dirty"] is None or type(info["dirty"]) is bool
+
+
 def test_constructor_accepts_vector_tuning(tmp_path: Path):
     configured = memory_engine.MemoryEngine(
         str(tmp_path / "configured"),

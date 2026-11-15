@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -641,9 +642,20 @@ fn map_err(err: MemoryEngineError) -> PyErr {
     }
 }
 
+#[pyfunction]
+fn build_info(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
+    let info = ::memory_engine::build_info();
+    let fields = PyDict::new_bound(py);
+    fields.set_item("version", info.version)?;
+    fields.set_item("commit", info.commit)?;
+    fields.set_item("dirty", info.dirty)?;
+    Ok(fields)
+}
+
 #[pymodule(name = "memory_engine")]
 fn memory_engine_py(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyMemoryEngine>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    module.add_function(wrap_pyfunction!(build_info, module)?)?;
     Ok(())
 }

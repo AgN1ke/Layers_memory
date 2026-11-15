@@ -8,6 +8,11 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-15] update | H1.2 build identity
+
+Documented [build identity](pages/integration/local-development.md#як-звірити-джерело-збірки)
+for Python and Godot. Updated the H1 status in the integration plan and roadmap.
+
 ## [2026-11-15] update | H1.1 Sleep resume contract
 
 Documented the [FileStorage Sleep driver contract](pages/foundation/contracts.md#94-multi-pass-sleep-provider-contract)

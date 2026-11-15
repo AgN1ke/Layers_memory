@@ -5,6 +5,7 @@
 //! storage boundaries, and serialization tests.
 
 pub mod archive;
+mod build_info;
 pub mod config;
 pub mod core_store;
 pub mod engine;
@@ -30,6 +31,7 @@ pub mod tasks;
 pub mod types;
 pub mod vector;
 
+pub use build_info::{build_info, BuildInfo};
 pub use engine::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult, MemoryEngine,
     RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result, SleepWorkflowInput,

@@ -22,6 +22,13 @@ pytest tests/
 `maturin develop` builds the Rust extension and installs it into the
 active virtual environment under the import name `memory_engine`.
 
+`memory_engine.build_info()` returns `version`, the full Git `commit`, and
+`dirty` (whether tracked files had staged or unstaged changes at build time).
+Unknown values are `None`. This function is available without creating a
+`MemoryEngine`. For builds from `git archive`, the builder can supply
+`MEMORY_ENGINE_BUILD_COMMIT` and `MEMORY_ENGINE_BUILD_DIRTY` before invoking
+Maturin. `dirty` accepts `true` or `false`.
+
 ## Public API
 
 ```python

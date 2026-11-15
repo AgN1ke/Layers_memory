@@ -46,6 +46,15 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-15 — Adapters report the source of their build
+
+Python exposes `memory_engine.build_info()` and Godot exposes
+`MemoryEngineGodot.build_info()` before opening storage. The result reports the
+package version, full Git commit and tracked changes at build time. Builders
+can supply the source identity for archives without `.git`. Unknown fields
+are `None` in Python and `null` in Godot. See the
+[build identity instructions](wiki/pages/integration/local-development.md#як-звірити-джерело-збірки).
+
 ## 2026-11-15 — FileStorage resumes an existing multi-pass Sleep run
 
 `begin_sleep_run` and `begin_sleep_run_with_options` return an existing open
