@@ -8,6 +8,13 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | FileStorage lifecycle for completed operations
+
+Recorded replay expiration and recovery dependencies in the
+[FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and [host guide](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю).
+Updated H2 progress.
+
 ## [2026-11-16] update | Recoverable FileStorage extraction publication
 
 Recorded completeness and accepted empty results in the

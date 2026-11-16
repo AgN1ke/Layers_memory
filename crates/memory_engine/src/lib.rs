@@ -33,6 +33,7 @@ pub mod types;
 pub mod vector;
 
 pub use build_info::{build_info, BuildInfo};
+pub use engine::MemoryOperationPruneReport;
 pub use engine::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, IdempotentIngestResult, IngestResult,
     MemoryEngine, RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result,

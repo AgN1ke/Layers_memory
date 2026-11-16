@@ -115,6 +115,7 @@ mod options;
 mod recall_api;
 mod recall_stage1;
 mod reflection_flow;
+mod retention;
 mod session_ops;
 mod sleep_driver;
 mod sleep_flow;
@@ -136,6 +137,7 @@ pub use options::{
 };
 use recall_api::*;
 use recall_stage1::*;
+pub use retention::MemoryOperationPruneReport;
 use sleep_driver::*;
 use sleep_flow::session_is_multi_speaker;
 pub use transactional_core::{

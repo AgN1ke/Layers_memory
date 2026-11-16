@@ -78,6 +78,11 @@ returns host work. The explicit recovery method is available for startup
 diagnostics and returns only the number of `started` journal operations it
 completed; it does not call a provider.
 
+Call `prune_completed_memory_operations()` to apply FileStorage's retention
+policy and get a JSON report with counts of compacted tasks and Sleep runs,
+removed journals, retired ingest receipts and skipped records. Pruning runs
+locally and requires no model calls.
+
 For a queued write, capture `write_generation(session_id, personality_scope_id)`
 when accepting the event. Keep the returned JSON together with the event JSON
 and its stable operation ID. Pass all three to

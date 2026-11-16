@@ -46,6 +46,14 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage can prune expired operation payloads
+
+The explicit maintenance call removes expired copies from terminal tasks,
+Sleep checkpoints and completed journals. It respects dependencies still
+needed for recovery and preserves Archive completeness. An expired result
+can become unavailable after pruning. Expired and erased ingest receipts
+leave opaque markers, so retrying an old ID cannot append the event again.
+
 ## 2026-11-16 — FileStorage recovers accepted extraction as a complete set
 
 Archive publication journals the full accepted extraction result before

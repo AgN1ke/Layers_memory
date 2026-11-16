@@ -2600,6 +2600,41 @@
       ],
       "additionalProperties": false
     },
+    "MemoryOperationPruneReport": {
+      "type": "object",
+      "properties": {
+        "ingest_receipts_retired": {
+          "type": "integer"
+        },
+        "journals_removed": {
+          "type": "integer"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "memory_operation_prune_report.v1"
+          ]
+        },
+        "skipped_records": {
+          "type": "integer"
+        },
+        "sleep_runs_compacted": {
+          "type": "integer"
+        },
+        "tasks_compacted": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ingest_receipts_retired",
+        "journals_removed",
+        "schema_version",
+        "skipped_records",
+        "sleep_runs_compacted",
+        "tasks_compacted"
+      ],
+      "additionalProperties": false
+    },
     "MemoryPromptPlan": {
       "type": "object",
       "properties": {

@@ -152,9 +152,14 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn load_task_for_response(&self, task_id: &str) -> Result<PendingTask> {
-        self.storage
+        let task = self
+            .storage
             .load_task(task_id)
-            .map_err(|error| self.task_after_erasure_error(task_id, error))
+            .map_err(|error| self.task_after_erasure_error(task_id, error))?;
+        if super::retention::task_payload_compacted(&task) {
+            return Err(MemoryEngineError::OperationResultUnavailable);
+        }
+        Ok(task)
     }
 
     pub(super) fn load_sleep_run_for_response(&self, task_id: &str) -> Result<SleepRun> {

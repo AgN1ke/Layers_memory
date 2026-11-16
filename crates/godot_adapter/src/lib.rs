@@ -433,6 +433,16 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn prune_completed_memory_operations(&self) -> GString {
+        self.with_engine(|engine| {
+            dump_operation_result(
+                engine.prune_completed_memory_operations(),
+                "memory operation prune report",
+            )
+        })
+    }
+
+    #[func]
     fn delete_session(&self, session_id: GString) -> GString {
         self.with_engine(|engine| {
             dump_operation_result(

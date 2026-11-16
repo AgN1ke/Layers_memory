@@ -7,7 +7,9 @@ const PUBLICATION_SCHEMA: &str = "memory_unit_task_outcome.v1";
 struct PublicationReceipt {
     schema_version: String,
     archive_id: String,
+    #[serde(default)]
     task_id: String,
+    #[serde(default)]
     request_digest: String,
     memory_unit_ids: Vec<String>,
 }
@@ -217,6 +219,9 @@ impl<S: Storage> MemoryEngine<S> {
 
 impl PublicationReceipt {
     fn require_request(&self, task: &PendingTask, request_digest: &str) -> Result<()> {
+        if self.task_id.is_empty() || self.request_digest.is_empty() {
+            return Err(MemoryEngineError::OperationResultUnavailable);
+        }
         if self.schema_version != PUBLICATION_SCHEMA
             || self.task_id != task.task_id
             || self.request_digest != request_digest

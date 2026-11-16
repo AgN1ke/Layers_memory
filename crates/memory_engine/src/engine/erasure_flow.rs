@@ -483,7 +483,7 @@ fn clean_storage_collection<T>(collection: StorageCollection<T>) -> Result<Vec<T
     Ok(collection.items)
 }
 
-fn sleep_run_task_ids(run: &SleepRun) -> Vec<String> {
+pub(super) fn sleep_run_task_ids(run: &SleepRun) -> Vec<String> {
     let mut ids = vec![run.sleep_task_id.clone()];
     ids.extend(run.memory_unit_task_id.iter().cloned());
     ids.extend(
@@ -534,7 +534,7 @@ fn journal_operation_matches_erasure(
         })
 }
 
-fn json_references_any(value: &Value, identifiers: &BTreeSet<String>) -> bool {
+pub(super) fn json_references_any(value: &Value, identifiers: &BTreeSet<String>) -> bool {
     match value {
         Value::String(value) => identifiers.contains(value),
         Value::Array(values) => values

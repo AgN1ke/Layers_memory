@@ -39,6 +39,11 @@ func _init() -> void:
     if failed:
         return
 
+    var pruned: Variant = _loads(engine.prune_completed_memory_operations())
+    if not (pruned is Dictionary) or pruned.get("schema_version") != "memory_operation_prune_report.v1" or pruned.get("tasks_compacted") != 0:
+        _fail("pruning a fresh FileStorage must return an empty maintenance report")
+        return
+
     _assert_idempotent_ingest(runtime_dir.path_join("memory"))
     if failed:
         return

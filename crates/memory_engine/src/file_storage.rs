@@ -3,6 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -36,6 +37,7 @@ mod idempotent_ingest;
 pub(crate) use idempotent_ingest::JournaledIngest;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PUBLICATION_RECEIPT_RETIREMENT: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone)]
 pub struct FileStorage {
@@ -1521,6 +1523,12 @@ impl Storage for FileStorage {
     fn apply_memory_erasure_plan(&self, plan: &MemoryErasurePlan) -> Result<()> {
         self.ensure_layout()?;
         validate_memory_erasure_plan(plan)?;
+        self.retire_erased_ingest_receipts(plan)?;
+        if plan.operation == crate::erasure::MemoryErasureKind::DeleteSession {
+            for archive in self.read_sleep_archives(&plan.target_id)? {
+                self.retire_archive_replay_receipt(&archive.archive_id, None)?;
+            }
+        }
 
         for id in plan.task_ids.iter().chain(&plan.sleep_task_ids) {
             let marker = erased_task_path(&self.root, id);
@@ -1589,6 +1597,7 @@ impl Storage for FileStorage {
             remove_file_if_exists(&self.memory_unit_path(memory_unit_id))?;
         }
         for archive_id in &plan.archive_ids {
+            let _guard = lock_publication_receipt_retirement()?;
             remove_file_if_exists(&self.memory_unit_publication_receipt_path(archive_id))?;
         }
         for session_id in &plan.session_ids {
@@ -1634,6 +1643,36 @@ fn read_json_from_collection<T: DeserializeOwned>(
 }
 
 impl FileStorage {
+    pub(crate) fn retire_archive_replay_receipt(
+        &self,
+        archive_id: &str,
+        task_id: Option<&str>,
+    ) -> Result<()> {
+        // A session can be reused in a new scope while its older Archive
+        // remains in the former scope. Coordinate this rewrite with purge.
+        let _guard = lock_publication_receipt_retirement()?;
+        let Some(mut receipt) = self.read_memory_unit_publication_receipt(archive_id)? else {
+            return Ok(());
+        };
+        if receipt["archive_id"].as_str() != Some(archive_id)
+            || !receipt["memory_unit_ids"].is_array()
+        {
+            return Err(MemoryEngineError::OperationResultUnavailable);
+        }
+        if task_id.is_some_and(|id| receipt["task_id"].as_str() != Some(id)) {
+            return Ok(());
+        }
+        let Some(fields) = receipt.as_object_mut() else {
+            return Err(MemoryEngineError::OperationResultUnavailable);
+        };
+        let task = fields.remove("task_id");
+        let request = fields.remove("request_digest");
+        if task.is_some() || request.is_some() {
+            self.write_memory_unit_publication_receipt(archive_id, &receipt)?;
+        }
+        Ok(())
+    }
+
     fn memory_unit_publication_receipt_path(&self, archive_id: &str) -> PathBuf {
         self.root
             .join("journal")
@@ -1755,6 +1794,12 @@ impl FileStorage {
             .to_string_lossy()
             .replace('\\', "/")
     }
+}
+
+fn lock_publication_receipt_retirement() -> Result<std::sync::MutexGuard<'static, ()>> {
+    PUBLICATION_RECEIPT_RETIREMENT.lock().map_err(|_| {
+        MemoryEngineError::Storage("publication receipt retirement lock was poisoned".into())
+    })
 }
 
 fn matches_publication_ids(units: &[MemoryUnit], ids: &HashSet<String>) -> bool {

@@ -486,6 +486,11 @@ impl PyMemoryEngine {
         run_without_gil(py, || self.inner.recover_pending_memory_operations())
     }
 
+    fn prune_completed_memory_operations(&self, py: Python<'_>) -> PyResult<String> {
+        let report = run_without_gil(py, || self.inner.prune_completed_memory_operations())?;
+        dump_json(&report, "memory operation prune report")
+    }
+
     fn delete_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
         let report = run_without_gil(py, || self.inner.delete_session(session_id))?;
         dump_json(&report, "session deletion report")

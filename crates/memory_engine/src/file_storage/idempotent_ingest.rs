@@ -6,13 +6,12 @@ use time::{Duration, OffsetDateTime};
 
 use super::*;
 use crate::engine::storage_digest;
-use crate::erasure::WriteGeneration;
+use crate::erasure::{erasure_key, MemoryErasureKind, WriteGeneration};
 use crate::journal::{JournalOperationType, RecoveryPolicy};
 use crate::storage_v2::{WorkUnitCommit, WorkUnitIntent};
 use crate::types::JOURNAL_OPERATION_SCHEMA_VERSION;
 
 const INGEST_INTENT_SCHEMA: &str = "file_ingest_intent.v1";
-const INGEST_RECEIPT_SCHEMA: &str = "file_ingest_receipt.v1";
 const INGEST_REPLAY_WINDOW: Duration = Duration::days(30);
 
 #[derive(Serialize, Deserialize)]
@@ -37,19 +36,39 @@ struct PreparedIngest {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct IngestReceipt {
-    schema_version: String,
     pub(crate) request_digest: String,
     pub(crate) commit: WorkUnitCommit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<IngestReceiptOrigin>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct IngestReceiptOrigin {
+    session_key: String,
+    scope_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "schema_version")]
+enum IngestReceiptRecord {
+    #[serde(rename = "file_ingest_receipt.v1")]
+    Committed(IngestReceipt),
+    #[serde(rename = "file_ingest_retired.v1")]
+    Retired,
 }
 
 impl IngestReceipt {
     pub(crate) fn require_replayable(&self) -> Result<()> {
-        let accepted_at = OffsetDateTime::parse(&self.commit.committed_at, &Rfc3339)
-            .map_err(|error| MemoryEngineError::Storage(error.to_string()))?;
-        if OffsetDateTime::now_utc() - accepted_at >= INGEST_REPLAY_WINDOW {
+        if self.is_expired_at(OffsetDateTime::now_utc())? {
             return Err(MemoryEngineError::OperationResultUnavailable);
         }
         Ok(())
+    }
+
+    fn is_expired_at(&self, now: OffsetDateTime) -> Result<bool> {
+        let accepted_at = OffsetDateTime::parse(&self.commit.committed_at, &Rfc3339)
+            .map_err(|error| MemoryEngineError::Storage(error.to_string()))?;
+        Ok(now - accepted_at >= INGEST_REPLAY_WINDOW)
     }
 }
 
@@ -94,11 +113,12 @@ impl FileStorage {
         self.session_dir(session).join("pending-ingest.json")
     }
 
+    fn ingest_receipt_dir(&self) -> PathBuf {
+        self.root.join("journal").join("ingest-receipts")
+    }
+
     fn ingest_receipt_path(&self, key: &str) -> PathBuf {
-        self.root
-            .join("journal")
-            .join("ingest-receipts")
-            .join(format!("{key}.json"))
+        self.ingest_receipt_dir().join(format!("{key}.json"))
     }
 
     pub(super) fn require_complete_ingest(&self, session: &str) -> Result<()> {
@@ -110,19 +130,133 @@ impl FileStorage {
 
     pub(crate) fn ingest_receipt(&self, key: &str) -> Result<Option<IngestReceipt>> {
         validate_erasure_path_component("ingest journal key", key)?;
-        let path = self.ingest_receipt_path(key);
-        if !path.try_exists()? {
-            return Ok(None);
+        match read_json::<IngestReceiptRecord>(&self.ingest_receipt_path(key)) {
+            Ok(IngestReceiptRecord::Committed(receipt)) => {
+                receipt.commit.validate()?;
+                Ok(Some(receipt))
+            }
+            Ok(IngestReceiptRecord::Retired) => Err(MemoryEngineError::OperationResultUnavailable),
+            Err(MemoryEngineError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
         }
-        let receipt: IngestReceipt = read_json(&path)?;
-        if receipt.schema_version != INGEST_RECEIPT_SCHEMA {
-            return Err(MemoryEngineError::IncompatibleSchema {
-                expected: INGEST_RECEIPT_SCHEMA.into(),
-                actual: receipt.schema_version,
-            });
+    }
+
+    pub(crate) fn retire_expired_ingest_receipts(
+        &self,
+        now: OffsetDateTime,
+    ) -> Result<(usize, usize)> {
+        let mut paths = Vec::new();
+        collect_json_files_shallow(&self.ingest_receipt_dir(), &mut paths)?;
+        let mut retired = 0;
+        let mut skipped = 0;
+        for path in paths {
+            let receipt = match read_json(&path) {
+                Ok(IngestReceiptRecord::Committed(receipt)) => receipt,
+                Ok(IngestReceiptRecord::Retired) => continue,
+                Err(MemoryEngineError::Json(_)) => {
+                    skipped += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if !receipt.is_expired_at(now)? {
+                continue;
+            }
+            // Recovery can still need the receipt to verify that the append
+            // finished before the intent and session marker were removed.
+            let pending = self
+                .root
+                .join("journal")
+                .join(path.file_name().ok_or_else(|| {
+                    MemoryEngineError::Storage("ingest receipt path has no filename".to_string())
+                })?)
+                .try_exists()?;
+            if !pending {
+                atomic_write_json(&path, &IngestReceiptRecord::Retired)?;
+                retired += 1;
+            }
         }
-        receipt.commit.validate()?;
-        Ok(Some(receipt))
+        Ok((retired, skipped))
+    }
+
+    pub(super) fn retire_erased_ingest_receipts(&self, plan: &MemoryErasurePlan) -> Result<()> {
+        let target = erasure_key(plan.operation, &plan.target_id);
+        let mut paths = Vec::new();
+        collect_json_files_shallow(&self.ingest_receipt_dir(), &mut paths)?;
+        let mut legacy = Vec::new();
+        for path in paths {
+            let receipt = match read_json(&path) {
+                Ok(IngestReceiptRecord::Committed(receipt)) => receipt,
+                // A damaged receipt has no verified owner or replay result.
+                // It must not prevent erasure of another scope.
+                Ok(IngestReceiptRecord::Retired) | Err(MemoryEngineError::Json(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            let Some(origin) = receipt.origin else {
+                legacy.push((path, receipt.commit));
+                continue;
+            };
+            let key = match plan.operation {
+                MemoryErasureKind::DeleteSession => origin.session_key,
+                MemoryErasureKind::PurgeScope => origin.scope_key,
+            };
+            if key == target {
+                atomic_write_json(&path, &IngestReceiptRecord::Retired)?;
+            }
+        }
+        if !legacy.is_empty() {
+            self.retire_legacy_ingest_receipts(plan, &target, &legacy)?;
+        }
+        Ok(())
+    }
+
+    fn retire_legacy_ingest_receipts(
+        &self,
+        plan: &MemoryErasurePlan,
+        target: &str,
+        receipts: &[(PathBuf, WorkUnitCommit)],
+    ) -> Result<()> {
+        // Existing receipts have no owner field. A match needs both the event
+        // ID and its exact digest while the target's source is still present.
+        let by_event: HashMap<_, _> = receipts
+            .iter()
+            .map(|(path, commit)| {
+                (
+                    commit.result_reference.as_str(),
+                    (path, commit.result_digest.as_str()),
+                )
+            })
+            .collect();
+        let sessions = match plan.operation {
+            MemoryErasureKind::DeleteSession => std::slice::from_ref(&plan.target_id),
+            MemoryErasureKind::PurgeScope => &plan.session_ids,
+        };
+        let mut retired = HashSet::new();
+        for session in sessions {
+            let mut files = vec![self.events_path(session)];
+            collect_jsonl_files_shallow(&self.archived_events_dir(session), &mut files)?;
+            for path in files {
+                for event in read_jsonl::<StoredEvent>(&path)? {
+                    let Some(&(receipt_path, digest)) = by_event.get(event.event_id.as_str())
+                    else {
+                        continue;
+                    };
+                    let owner = match plan.operation {
+                        MemoryErasureKind::DeleteSession => &event.session_id,
+                        MemoryErasureKind::PurgeScope => event.effective_personality_scope_id(),
+                    };
+                    if erasure_key(plan.operation, owner) == target
+                        && storage_digest(&event)? == digest
+                        && retired.insert(receipt_path)
+                    {
+                        atomic_write_json(receipt_path, &IngestReceiptRecord::Retired)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn start_journaled_ingest(
@@ -259,11 +393,20 @@ impl FileStorage {
                 markdown.as_bytes(),
             )?;
             let receipt = IngestReceipt {
-                schema_version: INGEST_RECEIPT_SCHEMA.into(),
                 request_digest,
                 commit,
+                origin: Some(IngestReceiptOrigin {
+                    session_key: erasure_key(MemoryErasureKind::DeleteSession, session),
+                    scope_key: erasure_key(
+                        MemoryErasureKind::PurgeScope,
+                        event.effective_personality_scope_id(),
+                    ),
+                }),
             };
-            atomic_write_json(&self.ingest_receipt_path(key), &receipt)?;
+            atomic_write_json(
+                &self.ingest_receipt_path(key),
+                &IngestReceiptRecord::Committed(receipt),
+            )?;
         }
         if current_marker.as_deref().is_none_or(|owner| owner == key) {
             remove_file_if_exists(&marker_path)?;
@@ -428,17 +571,141 @@ mod tests {
     fn a_receipt_past_the_replay_window_cannot_return_a_result() {
         let accepted_at = OffsetDateTime::now_utc() - INGEST_REPLAY_WINDOW;
         let receipt = IngestReceipt {
-            schema_version: INGEST_RECEIPT_SCHEMA.into(),
             request_digest: "unused".into(),
             commit: WorkUnitCommit {
                 committed_at: accepted_at.format(&Rfc3339).unwrap(),
                 result_reference: "event_old".into(),
                 result_digest: "unused".into(),
             },
+            origin: None,
         };
         assert!(matches!(
             receipt.require_replayable(),
             Err(MemoryEngineError::OperationResultUnavailable)
         ));
+    }
+
+    #[test]
+    fn expired_receipt_reserves_the_operation_after_retirement_and_restart() {
+        let storage = fixture_storage("ingest_receipt_retention");
+        let engine = MemoryEngine::new(storage.clone());
+        let request = fixture_event("expiry_session", "expiry_scope");
+        engine.ingest_idempotent("expiry", request.clone()).unwrap();
+        let key = fixture_operation_key("expiry");
+        let now = OffsetDateTime::now_utc() + INGEST_REPLAY_WINDOW + Duration::seconds(1);
+
+        // Reproduce the window after the receipt has been written but before
+        // the operation intent has been removed.
+        atomic_write_json(&storage.journal_path(&key), &true).unwrap();
+        assert_eq!(storage.retire_expired_ingest_receipts(now).unwrap(), (0, 0));
+        assert!(storage.ingest_receipt(&key).unwrap().is_some());
+        remove_file_if_exists(&storage.journal_path(&key)).unwrap();
+
+        assert_eq!(storage.retire_expired_ingest_receipts(now).unwrap(), (1, 0));
+        assert_eq!(storage.retire_expired_ingest_receipts(now).unwrap(), (0, 0));
+        assert_receipt_retired(&storage, &key);
+        drop(engine);
+        let reopened = MemoryEngine::new(storage.clone());
+        assert!(matches!(
+            reopened.ingest_idempotent("expiry", request),
+            Err(MemoryEngineError::OperationResultUnavailable)
+        ));
+        assert_eq!(
+            reopened
+                .read_session("expiry_session")
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
+        fs::remove_dir_all(storage.root()).unwrap();
+    }
+
+    #[test]
+    fn erasure_retires_exact_scope_receipts_including_legacy_rotated_events() {
+        let storage = fixture_storage("ingest_receipt_erasure");
+        let engine = MemoryEngine::new(storage.clone());
+        let target = fixture_event("erase_session", "erase_scope");
+        let sibling = fixture_event("sibling_session", "erase_scope");
+        let unrelated = fixture_event("other_session", "other_scope");
+        let old_event = engine
+            .ingest_idempotent("legacy", target.clone())
+            .unwrap()
+            .event;
+        engine.ingest_idempotent("modern", target.clone()).unwrap();
+        engine
+            .ingest_idempotent("sibling", sibling.clone())
+            .unwrap();
+        engine
+            .ingest_idempotent("other", unrelated.clone())
+            .unwrap();
+
+        let legacy_key = fixture_operation_key("legacy");
+        let path = storage.ingest_receipt_path(&legacy_key);
+        let mut legacy: serde_json::Value = read_json(&path).unwrap();
+        legacy.as_object_mut().unwrap().remove("origin");
+        atomic_write_json(&path, &legacy).unwrap();
+        storage
+            .rotate_session_events(&target.session_id, &[old_event.event_id])
+            .unwrap();
+
+        engine.delete_session(&target.session_id).unwrap();
+        assert_receipt_retired(&storage, &legacy_key);
+        assert_receipt_retired(&storage, &fixture_operation_key("modern"));
+        assert!(
+            engine
+                .ingest_idempotent("sibling", sibling.clone())
+                .unwrap()
+                .already_applied
+        );
+        engine.purge_scope("erase_scope").unwrap();
+        assert_receipt_retired(&storage, &fixture_operation_key("sibling"));
+        assert!(
+            engine
+                .ingest_idempotent("other", unrelated)
+                .unwrap()
+                .already_applied
+        );
+        assert!(matches!(
+            engine.ingest_idempotent("legacy", target),
+            Err(MemoryEngineError::OperationResultUnavailable)
+        ));
+        fs::remove_dir_all(storage.root()).unwrap();
+    }
+
+    fn fixture_storage(case: &str) -> FileStorage {
+        let root = std::env::temp_dir().join(format!(
+            "memory_engine_{}_{}_{}",
+            case,
+            std::process::id(),
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        FileStorage::with_host_id(&root, "test")
+    }
+
+    fn fixture_event(session_id: &str, scope: &str) -> IngestEvent {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "event.v1",
+            "type": "user_message",
+            "source": "test",
+            "timestamp": "2026-11-16T12:00:00Z",
+            "session_id": session_id,
+            "personality_scope_id": scope,
+            "payload": {"text": "A private message."}
+        }))
+        .unwrap()
+    }
+
+    fn fixture_operation_key(operation_id: &str) -> String {
+        let hash = storage_digest(&("ingest_event", "test", operation_id)).unwrap();
+        format!("ingest_{}", hash.strip_prefix("sha256:").unwrap())
+    }
+
+    fn assert_receipt_retired(storage: &FileStorage, key: &str) {
+        let record: serde_json::Value = read_json(&storage.ingest_receipt_path(key)).unwrap();
+        assert_eq!(
+            record,
+            serde_json::json!({"schema_version": "file_ingest_retired.v1"})
+        );
     }
 }

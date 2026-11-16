@@ -27,6 +27,7 @@
   "MemoryEngine.pending_memory_unit_repairs": {"request": {}, "result": "list[LlmRequest]"},
   "MemoryEngine.pending_sleep_runs": {"request": {}, "result": "list[SleepRun]"},
   "MemoryEngine.pending_tasks": {"request": {}, "result": "list[PendingTask]"},
+  "MemoryEngine.prune_completed_memory_operations": {"request": {}, "result": "MemoryOperationPruneReport"},
   "MemoryEngine.purge_scope": {"request": {}, "result": "MemoryErasureReport"},
   "MemoryEngine.read_session": {"request": {}, "result": "SessionRecord"},
   "MemoryEngine.rebuild_vectors": {"request": {}, "result": "VectorScopeState"},

@@ -76,6 +76,18 @@ def _verify_unit(unit):
     }
 
 
+def test_prune_completed_memory_operations_on_a_fresh_store(engine_factory, tmp_path):
+    engine = engine_factory(tmp_path)
+    assert json.loads(engine.prune_completed_memory_operations()) == {
+        "schema_version": "memory_operation_prune_report.v1",
+        "tasks_compacted": 0,
+        "sleep_runs_compacted": 0,
+        "journals_removed": 0,
+        "ingest_receipts_retired": 0,
+        "skipped_records": 0,
+    }
+
+
 def test_sleep_repairs_and_legacy_compact_task(engine_factory, tmp_path):
     engine = engine_factory(tmp_path)
     session = "legacy_sleep"

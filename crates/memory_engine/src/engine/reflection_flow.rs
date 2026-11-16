@@ -765,6 +765,9 @@ impl<S: Storage> MemoryEngine<S> {
                 actual: intent.schema_version,
             });
         }
+        if operation.state == JournalState::Completed {
+            return Ok(intent.outcome);
+        }
 
         for effect in intent.prepared_actions.clone() {
             let action_id = match &effect {
