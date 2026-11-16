@@ -24,6 +24,7 @@ use memory_engine::{
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 
 #[test]
 fn engine_sleep_creates_preliminary_archive_and_pending_task() {
@@ -1980,6 +1981,151 @@ fn context_feedback_counts_only_memory_that_survives_the_final_budget() {
     assert!(archive.last_recalled_at.is_none());
 
     fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn archive_recall_after_ten_passive_context_packages() {
+    const SCOPE: &str = "exposure_fixture";
+    const LIMIT: usize = 5;
+    const EXPOSURES: u64 = 10;
+    const MEMORIES: [&str; 8] = [
+        "My telescope is Orion.",
+        "My bakery is Brioche.",
+        "My bicycle is Comet.",
+        "My guitar is Maple.",
+        "My garden is Jasmine.",
+        "My sailing boat is Spray.",
+        "My painting is Sunrise.",
+        "My camera is Lumix.",
+    ];
+
+    let mut current = EngineOptions::default();
+    // Keep feedback active in scoring and local to each replay.
+    current.recall.stats_flush_interval = 0;
+    let mut without_bonus = current.clone();
+    without_bonus.recall.max_recall_boost_factor = 1.0;
+    let mut decaying = current.clone();
+    decaying.recall.recall_count_log_bonus = 0.0;
+    decaying.recall.recent_recall_bonus = 0.06;
+    decaying.recall.recent_recall_half_life_days = 7.0;
+    decaying.recall.max_recall_boost_factor = 1.06;
+    let mut stronger_query = current.clone();
+    stronger_query.recall.text_match_bonus = 2.0;
+    let policies = [
+        ("current", current.clone()),
+        ("no selection bonus", without_bonus),
+        ("bounded decay", decaying),
+        ("stronger text match", stronger_query),
+    ];
+
+    // Keep ages relative to the real context clock and scores below their ceiling.
+    let oldest = OffsetDateTime::now_utc() - Duration::days(250);
+    let histories = [
+        (None, "What is my telescope called?", [6, 1, 1, 1]),
+        (
+            Some("Please continue."),
+            "Do you happen to know what my telescope is called these days?",
+            [6, 1, 6, 6],
+        ),
+        (Some("Please continue."), "telescope", [1, 1, 1, 1]),
+    ];
+
+    for (neutral, question, expected_ranks) in histories {
+        let root = unique_temp_dir("archive_recall_passive_exposure");
+        let storage = FileStorage::with_host_id(&root, "terminal");
+        let mut seed = MemoryEngine::with_options(storage.clone(), current.clone());
+        let mut archive_ids = Vec::new();
+        for (index, text) in MEMORIES.into_iter().enumerate() {
+            let session = format!("past_session_{index}");
+            let timestamp = (oldest + Duration::minutes(index as i64))
+                .format(&Rfc3339)
+                .unwrap();
+            ingest_text_with_scope(&mut seed, &session, SCOPE, &timestamp, text, vec![]);
+            let sleep = seed.sleep(&session).unwrap();
+            resume_test_sleep(&mut seed, &sleep, text, text);
+            archive_ids.push(sleep.archive_entry.archive_id);
+        }
+        let target = &archive_ids[0];
+        let request = |query_text: Option<&str>| CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.into(),
+            session_id: "current_session".into(),
+            domain_state: json!({}),
+            core_scope: Some(SCOPE.into()),
+            query_text: query_text.map(str::to_owned),
+            query_embedding: None,
+            explain_recall: true,
+            recall_limit: LIMIT,
+            session_recent_limit: 0,
+            session_trace_event_limit: 0,
+            include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
+            token_budget: None,
+        };
+        let clean = seed.core_context_package(request(Some(question))).unwrap();
+        assert_eq!(&clean.archive_relevant[0].id, target);
+        drop(seed);
+
+        for ((policy, options), expected_rank) in policies.iter().zip(expected_ranks) {
+            // Each engine sees the same persisted archives and starts with an empty feedback buffer.
+            let engine = MemoryEngine::with_options(storage.clone(), options.clone());
+            let first = engine.core_context_package(request(neutral)).unwrap();
+            let exposed = first
+                .archive_relevant
+                .iter()
+                .map(|item| &item.id)
+                .collect::<Vec<_>>();
+            assert_eq!(exposed.len(), LIMIT);
+            assert!(!exposed.contains(&target));
+            for _ in 1..EXPOSURES {
+                let package = engine.core_context_package(request(neutral)).unwrap();
+                assert!(package
+                    .archive_relevant
+                    .iter()
+                    .map(|item| &item.id)
+                    .eq(exposed.iter().copied()));
+            }
+            let directed = engine
+                .core_context_package(request(Some(question)))
+                .unwrap();
+            let ranking = &directed.recall_debug.as_ref().unwrap().candidates;
+            let candidate = ranking
+                .iter()
+                .find(|item| &item.archive_id == target)
+                .unwrap();
+            let shown = directed
+                .archive_relevant
+                .iter()
+                .any(|item| &item.id == target);
+            let largest_boost = ranking
+                .iter()
+                .map(|item| item.components.recall_boost)
+                .fold(1.0_f64, f64::max);
+            eprintln!("{policy} | {question} | rank {} | shown {shown} | largest bonus ×{largest_boost:.3}", candidate.final_rank);
+            assert_eq!(candidate.final_rank, expected_rank, "{policy}: {question}");
+            assert_eq!(shown, expected_rank <= LIMIT, "{policy}: {question}");
+            assert!((candidate.components.recall_boost - 1.0).abs() < f64::EPSILON);
+
+            if *policy == "bounded decay" {
+                assert!((largest_boost - 1.06).abs() < 0.0001);
+                let later = (OffsetDateTime::parse(&directed.created_at, &Rfc3339).unwrap()
+                    + Duration::days(21))
+                .format(&Rfc3339)
+                .unwrap();
+                let mut query = make_recall_query(question, &later, "decay_check");
+                query.session_id = None;
+                query.personality_scope_id = Some(SCOPE.into());
+                let later = engine.recall(query).unwrap().debug.unwrap();
+                let largest_boost = later
+                    .candidates
+                    .iter()
+                    .map(|item| item.components.recall_boost)
+                    .fold(1.0_f64, f64::max);
+                assert!((largest_boost - 1.0075).abs() < 0.0001);
+            }
+        }
+        fs::remove_dir_all(root).ok();
+    }
 }
 
 #[test]

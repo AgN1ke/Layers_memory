@@ -8,6 +8,11 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Archive recall after repeated context exposure
+
+Recorded the [H4.1 test and four scoring variants](pages/planning/integration-hardening-plan-2026-11-15.md#h4--якість-пригадування-і-час)
+and marked the owner decision pending in the roadmap.
+
 ## [2026-11-16] update | H3 conformance evidence
 
 Mapped the FileStorage matrix and Smartest2 host criteria to the
