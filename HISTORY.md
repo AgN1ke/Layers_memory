@@ -82,8 +82,9 @@ the same operation. The scope generation fences delayed writes.
 New events can identify quotes by source event ID. Removing a typed quote
 preserves the other speaker's authored text. For a known legacy reply with
 an inseparable copy, erasure removes its text and keeps author and time.
-Mixed derivatives are withheld from recall. Reports surface uncertain
-attribution as `incomplete`.
+Mixed derivatives with identified dependencies are withheld from recall.
+Reports surface detected uncertain attribution as `incomplete`. Unlinked
+copies in host text and payloads can remain in ordinary recall or context.
 
 ## 2026-11-16 — FileStorage exposes scope-bound inspection and restoration
 

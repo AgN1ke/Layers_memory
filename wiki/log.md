@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Quote handling in subject erasure
+
+Clarified the [subject erasure contract](pages/foundation/contracts.md#145-перегляд-і-стирання-памяті-за-людиною)
+and recorded Smartest's remaining integration work in the
+[H3 plan](pages/planning/integration-hardening-plan-2026-11-15.md#h3--канонічне-читання-і-перегляд-у-межах-scope-та-людини).
+
 ## [2026-11-16] update | Archive recall after repeated context exposure
 
 Recorded the [H4.1 test and four scoring variants](pages/planning/integration-hardening-plan-2026-11-15.md#h4--якість-пригадування-і-час)

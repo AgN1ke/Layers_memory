@@ -109,8 +109,12 @@ For one person, use `inspect_subject(scope_id, subject_id)` and
 and subject from authenticated identities. Use the same operation ID after an
 interruption or for an exact retry. `incomplete` reports gaps such as mixed
 evidence or opaque legacy quotes. For new events, `quoted_event_ids` lists the
-original events and the text fields carry the current author's own words.
-Use `[]` for an event without quotes.
+original events. The host keeps the current author's words in `memory_text`
+and keeps copies of the quoted text out of both `memory_text` and `payload`.
+Use `[]` for an event without quotes. The engine trusts this declaration.
+A copy in free text or a host payload can remain in ordinary context if the
+engine cannot link it to the original. For existing stores, the host must
+account for the quote formats it previously wrote when enabling erasure.
 
 Correct a fact in place with `correct_core_fact_attribution(request_json)`.
 Send the current fact's `updated_at` as the expected version, a stable
