@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Subject memory and quote provenance
+
+Recorded the [subject inspection and erasure contract](pages/foundation/contracts.md#145-перегляд-і-стирання-памяті-за-людиною)
+and the additive event quote reference in the FileStorage contracts.
+Updated H3 progress in the plan and roadmap.
+
 ## [2026-11-16] update | Scope-bound memory inspection
 
 Recorded the [Rust inspection and restoration contract](pages/foundation/contracts.md#144-перегляд-і-відновлення-в-межах-scope)

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
-use crate::erasure::MemoryErasurePlan;
+use crate::erasure::{MemoryErasurePlan, SubjectErasurePlan};
 use crate::event::StoredEvent;
 use crate::hypothesis::{HypothesisEvidenceLink, HypothesisNode, HypothesisRelation};
 use crate::journal::JournalOperation;
@@ -61,6 +61,24 @@ impl<T> StorageCollection<T> {
 }
 
 pub trait Storage {
+    fn apply_subject_erasure_plan(&self, _plan: &SubjectErasurePlan) -> Result<()> {
+        Err(crate::MemoryEngineError::Storage(
+            "subject erasure is unavailable on this storage".into(),
+        ))
+    }
+
+    fn read_subject_erasure_receipt(&self, _key: &str) -> Result<Option<Value>> {
+        Err(crate::MemoryEngineError::Storage(
+            "subject erasure is unavailable on this storage".into(),
+        ))
+    }
+
+    fn write_subject_erasure_receipt(&self, _key: &str, _receipt: &Value) -> Result<()> {
+        Err(crate::MemoryEngineError::Storage(
+            "subject erasure is unavailable on this storage".into(),
+        ))
+    }
+
     fn manifest_exists(&self) -> Result<bool>;
     fn read_manifest(&self) -> Result<Manifest>;
     fn write_manifest(&self, manifest: &Manifest) -> Result<()>;

@@ -29,6 +29,7 @@ pub mod session;
 pub mod sleep;
 pub mod storage;
 pub mod storage_v2;
+pub mod subject_memory;
 pub mod tasks;
 pub mod types;
 pub mod vector;

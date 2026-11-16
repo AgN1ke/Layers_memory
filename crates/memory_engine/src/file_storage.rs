@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
-use crate::erasure::MemoryErasurePlan;
+use crate::erasure::{MemoryErasurePlan, SubjectErasurePlan};
 use crate::event::StoredEvent;
 use crate::hypothesis::{
     evidence_links_from_candidate, validate_hypothesis_storage_id, HypothesisEvidenceLink,
@@ -35,6 +35,7 @@ use crate::{MemoryEngineError, Result};
 
 mod archive_reader;
 mod idempotent_ingest;
+mod subject_erasure;
 pub(crate) use idempotent_ingest::JournaledIngest;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1479,7 +1480,45 @@ impl Storage for FileStorage {
                 self.retire_archive_replay_receipt(&archive.archive_id, None)?;
             }
         }
+        self.apply_erasure_records(plan)
+    }
 
+    fn apply_subject_erasure_plan(&self, plan: &SubjectErasurePlan) -> Result<()> {
+        self.ensure_layout()?;
+        validate_memory_erasure_plan(&plan.records)?;
+        if !plan.records.session_ids.is_empty() || !plan.records.vector_scopes.is_empty() {
+            return Err(MemoryEngineError::OperationResultUnavailable);
+        }
+        self.apply_subject_erasure_records(plan)
+    }
+
+    fn read_subject_erasure_receipt(&self, key: &str) -> Result<Option<serde_json::Value>> {
+        let path = self.subject_erasure_receipt_path(key)?;
+        match read_json(&path) {
+            Ok(receipt) => Ok(Some(receipt)),
+            Err(MemoryEngineError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn write_subject_erasure_receipt(&self, key: &str, receipt: &serde_json::Value) -> Result<()> {
+        atomic_write_json(&self.subject_erasure_receipt_path(key)?, receipt)
+    }
+}
+
+impl FileStorage {
+    fn subject_erasure_receipt_path(&self, key: &str) -> Result<PathBuf> {
+        validate_erasure_path_component("subject erasure receipt key", key)?;
+        Ok(self
+            .root
+            .join("generations")
+            .join("subject-erasures")
+            .join(format!("{key}.json")))
+    }
+
+    fn apply_erasure_records(&self, plan: &MemoryErasurePlan) -> Result<()> {
         for id in plan.task_ids.iter().chain(&plan.sleep_task_ids) {
             let marker = erased_task_path(&self.root, id);
             if !marker.try_exists()? {

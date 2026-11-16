@@ -473,6 +473,7 @@ fn ingest_request(operation_id: &str, session_id: &str, text: &str) -> Transacti
             theme: Some("test".to_string()),
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: vec![],
             importance_hint: Default::default(),
             processing_mode: Default::default(),

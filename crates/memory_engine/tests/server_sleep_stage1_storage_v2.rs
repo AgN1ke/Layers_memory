@@ -1880,6 +1880,7 @@ fn ingest_with_times<S: memory_engine::TransactionalStorage>(
         theme: None,
         emotional_tone: Some("neutral".to_string()),
         speaker: None,
+        quoted_event_ids: None,
         links: vec![],
         importance_hint: if high {
             ImportanceHint::High

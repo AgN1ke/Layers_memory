@@ -140,29 +140,34 @@ impl<S: Storage> MemoryEngine<S> {
             input.event.effective_personality_scope_id(),
             &input.event.session_id,
             &operation.op_id,
-            || {
-                // A concurrent recovery or erasure can finish after the scan.
-                let Some(current) = self.storage.load_journaled_operation(&operation.op_id)? else {
-                    return Ok(false);
-                };
-                let current_generation = self.current_write_generation_unlocked(
-                    input.event.effective_personality_scope_id(),
-                    &input.event.session_id,
-                    &input.host_id,
-                )?;
-                let obsolete = input.generation.as_ref().map_or(
-                    current_generation.scope_generation != 0
-                        || current_generation.session_generation != 0,
-                    |generation| generation != &current_generation,
-                );
-                if obsolete {
-                    self.storage
-                        .discard_journaled_ingest(&operation.op_id, &input.event.session_id)?;
-                    return Ok(false);
-                }
-                self.storage.recover_journaled_ingest(&current)?;
-                Ok(true)
-            },
+            || self.replay_ingest_unlocked(&operation.op_id, &input),
         )
+    }
+
+    pub(super) fn replay_ingest_unlocked(
+        &self,
+        operation_id: &str,
+        input: &JournaledIngest,
+    ) -> Result<bool> {
+        // A concurrent recovery or erasure can finish after the scan.
+        let Some(current) = self.storage.load_journaled_operation(operation_id)? else {
+            return Ok(false);
+        };
+        let current_generation = self.current_write_generation_unlocked(
+            input.event.effective_personality_scope_id(),
+            &input.event.session_id,
+            &input.host_id,
+        )?;
+        let obsolete = input.generation.as_ref().map_or(
+            current_generation.scope_generation != 0 || current_generation.session_generation != 0,
+            |generation| generation != &current_generation,
+        );
+        if obsolete {
+            self.storage
+                .discard_journaled_ingest(operation_id, &input.event.session_id)?;
+            return Ok(false);
+        }
+        self.storage.recover_journaled_ingest(&current)?;
+        Ok(true)
     }
 }

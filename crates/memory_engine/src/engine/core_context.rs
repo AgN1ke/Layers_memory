@@ -6,9 +6,16 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         let category_name = normalize_whitespace(&input.category);
-        self.with_resource_lock(core_lock_key(&category_name), || {
-            self.upsert_core_fact_unlocked(input, category_name)
-        })
+        let scope = normalize_optional_string(input.scope.as_deref());
+        let apply = || {
+            self.with_resource_lock(core_lock_key(&category_name), || {
+                self.upsert_core_fact_unlocked(input, category_name.clone())
+            })
+        };
+        match scope {
+            Some(scope) => self.with_scope_memory_write(&scope, apply),
+            None => apply(),
+        }
     }
 
     pub(super) fn upsert_core_fact_unlocked(
@@ -55,17 +62,23 @@ impl<S: Storage> MemoryEngine<S> {
                 ))
             })?;
 
-        self.with_resource_lock(core_lock_key(&category_name), || {
-            let category = self.storage.read_core_store_category(&category_name)?;
-            let (category, result) = core_policy::apply_core_fact_patch(
-                category,
-                &input,
-                category_name.clone(),
-                now.clone(),
-            )?;
-            self.storage.write_core_store_category(&category)?;
-            Ok(result)
-        })
+        let apply = || {
+            self.with_resource_lock(core_lock_key(&category_name), || {
+                let category = self.storage.read_core_store_category(&category_name)?;
+                let (category, result) = core_policy::apply_core_fact_patch(
+                    category,
+                    &input,
+                    category_name.clone(),
+                    now,
+                )?;
+                self.storage.write_core_store_category(&category)?;
+                Ok(result)
+            })
+        };
+        match scope {
+            Some(scope) => self.with_scope_memory_write(&scope, apply),
+            None => apply(),
+        }
     }
 
     pub fn core_context_package(&self, request: CoreContextRequest) -> Result<CoreContextPackage> {
@@ -88,6 +101,10 @@ impl<S: Storage> MemoryEngine<S> {
         let effective_personality_scope_id = personality_scope_id
             .clone()
             .unwrap_or_else(|| request.session_id.clone());
+        self.require_erasure_complete(
+            MemoryErasureKind::PurgeScope,
+            &effective_personality_scope_id,
+        )?;
         let recent_limit = if request.session_recent_limit == 0 {
             self.options.context.default_session_recent_limit
         } else {

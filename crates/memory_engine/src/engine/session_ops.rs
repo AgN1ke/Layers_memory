@@ -33,6 +33,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn prepare_ingest_event(&self, event: IngestEvent) -> Result<StoredEvent> {
+        self.require_local_quote_sources(&event)?;
         let (initial_weight, weight_reason) = self.options.event_scoring.score_ingest_event(&event);
         Ok(StoredEvent::from_ingest(
             event,
@@ -40,6 +41,54 @@ impl<S: Storage> MemoryEngine<S> {
             now_rfc3339()?,
             initial_weight,
             weight_reason,
+        ))
+    }
+
+    fn require_local_quote_sources(&self, event: &IngestEvent) -> Result<()> {
+        let Some(ids) = event
+            .quoted_event_ids
+            .as_ref()
+            .filter(|ids| !ids.is_empty())
+        else {
+            return Ok(());
+        };
+        let scope = event
+            .personality_scope_id
+            .as_deref()
+            .unwrap_or(&event.session_id);
+        let mut missing = ids.iter().map(String::as_str).collect::<HashSet<_>>();
+        let mut sessions = self
+            .storage
+            .read_sessions()?
+            .items
+            .into_iter()
+            .filter(|metadata| {
+                metadata.effective_personality_scope_id() == scope
+                    && metadata.session_id != event.session_id
+                    && super::scope_inspection::inspection_id_is_valid(&metadata.session_id)
+            })
+            .map(|metadata| metadata.session_id)
+            .collect::<Vec<_>>();
+        sessions.push(event.session_id.clone());
+        for session in sessions.into_iter().rev() {
+            for source in self.read_session_events_with_archived(&session)? {
+                if source.session_id == session
+                    && source.effective_personality_scope_id() == scope
+                    && source
+                        .speaker
+                        .as_ref()
+                        .is_some_and(|speaker| !speaker.id.trim().is_empty())
+                    && source.validate().is_ok()
+                {
+                    missing.remove(source.event_id.as_str());
+                }
+            }
+            if missing.is_empty() {
+                return Ok(());
+            }
+        }
+        Err(MemoryEngineError::Validation(
+            "quoted event is unavailable in the requested scope".into(),
         ))
     }
 
@@ -104,7 +153,12 @@ impl<S: Storage> MemoryEngine<S> {
     /// Read a coherent session snapshot while local writes or Sleep rotate it.
     pub fn read_session(&self, session_id: &str) -> Result<SessionRecord> {
         self.with_resource_lock(session_lock_key(session_id), || {
-            self.storage.read_session(session_id)
+            let session = self.storage.read_session(session_id)?;
+            self.require_erasure_complete(
+                MemoryErasureKind::PurgeScope,
+                session.metadata.effective_personality_scope_id(),
+            )?;
+            Ok(session)
         })
     }
 

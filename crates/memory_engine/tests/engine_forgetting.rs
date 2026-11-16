@@ -372,6 +372,7 @@ fn create_archive_with_units(
             theme: Some("routine".to_string()),
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: vec![],
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),

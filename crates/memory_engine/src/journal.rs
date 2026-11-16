@@ -13,6 +13,7 @@ pub enum JournalOperationType {
     CandidateReview,
     DeleteSession,
     PurgeScope,
+    EraseSubject,
     IngestEvent,
     MemoryUnitPublish,
 }

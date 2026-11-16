@@ -37,6 +37,7 @@ fn restarting_after_a_partial_extraction_write_recovers_the_whole_result() {
             theme: None,
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: Vec::new(),
             importance_hint: Default::default(),
             processing_mode: Default::default(),

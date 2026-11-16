@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::types::{Id, Timestamp};
 
@@ -134,4 +135,50 @@ pub struct MemoryErasureOperationIntent {
     pub plan: MemoryErasurePlan,
     pub planned_counts: MemoryErasureCounts,
     pub archived_memory_preserved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubjectErasurePlan {
+    pub scope_id: String,
+    pub event_ids_by_session: BTreeMap<String, Vec<Id>>,
+    pub suppressed_event_ids_by_session: BTreeMap<String, Vec<Id>>,
+    pub detached_quote_event_ids_by_session: BTreeMap<String, Vec<Id>>,
+    pub suppressed_archive_ids: Vec<Id>,
+    pub records: MemoryErasurePlan,
+    pub incomplete: bool,
+}
+
+impl SubjectErasurePlan {
+    pub(crate) fn has_changes(&self) -> bool {
+        !self.event_ids_by_session.is_empty()
+            || !self.suppressed_event_ids_by_session.is_empty()
+            || !self.detached_quote_event_ids_by_session.is_empty()
+            || !self.suppressed_archive_ids.is_empty()
+            || !self.records.archive_ids.is_empty()
+            || !self.records.memory_unit_ids.is_empty()
+            || !self.records.core_facts.is_empty()
+            || !self.records.candidate_ids.is_empty()
+            || !self.records.hypothesis_node_ids.is_empty()
+            || !self.records.task_ids.is_empty()
+            || !self.records.journal_operation_ids.is_empty()
+    }
+}
+
+pub const SUBJECT_ERASURE_REPORT_SCHEMA: &str = "subject_erasure_report.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubjectErasureReport {
+    pub schema_version: String,
+    pub completed_at: Timestamp,
+    pub deleted_events: usize,
+    pub suppressed_events: usize,
+    pub detached_quotes: usize,
+    pub suppressed_archives: usize,
+    pub deleted_archives: usize,
+    pub deleted_memory_units: usize,
+    pub deleted_core_facts: usize,
+    pub deleted_candidates: usize,
+    pub deleted_hypotheses: usize,
+    pub retired_tasks: usize,
+    pub incomplete: bool,
 }

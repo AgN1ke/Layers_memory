@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use super::*;
 use crate::archive::render_compact_memory_from_units;
+use crate::erasure::{erasure_key, MemoryErasureKind};
 use crate::storage::{archive_in_scope, MEMORY_UNIT_TASK_OUTCOME_SCHEMA};
 use crate::types::{ARCHIVE_ENTRY_SCHEMA_VERSION, MEMORY_UNIT_SCHEMA_VERSION};
 
@@ -120,6 +121,7 @@ impl FileStorage {
         }
         let unit = read_unit_file(&self.memory_unit_path(memory_unit_id))?;
         let archive = read_archive_file(&self.archive_entry_path_by_id(&unit.archive_id)?)?;
+        self.require_archive_scope_visible(&archive)?;
         if !unit_belongs_to_archive(&unit, &archive) {
             return Err(MemoryEngineError::OperationResultUnavailable);
         }
@@ -164,6 +166,9 @@ impl FileStorage {
             let Ok(archive) = read_archive_file(&path) else {
                 continue;
             };
+            if self.require_archive_scope_visible(&archive).is_err() {
+                continue;
+            }
             let Ok(published) = self.visible_publication_ids(&archive.archive_id) else {
                 continue;
             };
@@ -203,6 +208,13 @@ impl FileStorage {
         mut archive: ArchiveEntry,
         scanned: Option<&[MemoryUnit]>,
     ) -> Result<ArchiveProjection> {
+        if self.require_archive_scope_visible(&archive).is_err() {
+            return Ok(ArchiveProjection {
+                warnings: vec![archive_warning(&archive, "incomplete scope erasure")],
+                entry: None,
+                publication_incomplete: true,
+            });
+        }
         // After a batch scan, check the journal and then the receipt. If a
         // publication committed during that scan, re-read missing members by ID.
         let published = match self.visible_publication_ids(&archive.archive_id) {
@@ -316,6 +328,17 @@ impl FileStorage {
             warnings,
             publication_incomplete: false,
         })
+    }
+
+    fn require_archive_scope_visible(&self, archive: &ArchiveEntry) -> Result<()> {
+        let key = erasure_key(
+            MemoryErasureKind::PurgeScope,
+            archive.effective_personality_scope_id(),
+        );
+        if self.has_erasure_intent(&key)? {
+            return Err(MemoryEngineError::OperationIncomplete);
+        }
+        Ok(())
     }
 
     pub(super) fn visible_publication_ids(

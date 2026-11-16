@@ -23,6 +23,7 @@ impl<S: Storage> MemoryEngine<S> {
             .or_else(|| query.session_id.clone())
         {
             self.with_resource_lock(format!("archive_scope:{scope_id}"), || {
+                self.require_erasure_complete(MemoryErasureKind::PurgeScope, &scope_id)?;
                 self.recall_unlocked(query, record_feedback)
             })
         } else {

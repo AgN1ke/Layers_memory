@@ -46,6 +46,19 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage supports inspection and erasure by subject
+
+The Rust API identifies people by a stable subject ID within a scope.
+Inspection returns attributable, separable records with source type and
+time. FileStorage journals subject erasure and replays a saved report for
+the same operation. The scope generation fences delayed writes.
+
+New events can identify quotes by source event ID. Removing a typed quote
+preserves the other speaker's authored text. For a known legacy reply with
+an inseparable copy, erasure removes its text and keeps author and time.
+Mixed derivatives are withheld from recall. Reports surface uncertain
+attribution as `incomplete`.
+
 ## 2026-11-16 — FileStorage exposes scope-bound inspection and restoration
 
 The Rust API provides scope metadata, canonical Archive and unit details,

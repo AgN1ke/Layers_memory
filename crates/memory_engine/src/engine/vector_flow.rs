@@ -244,6 +244,7 @@ impl<S: Storage> MemoryEngine<S> {
         validate_vector_scope(&query.scope)?;
 
         self.with_resource_lock(vectors_lock_key(&query.scope), || {
+            self.require_erasure_complete(MemoryErasureKind::PurgeScope, &query.scope)?;
             let root_manifest = self.storage.read_manifest()?;
             if !root_manifest.features.embeddings_enabled {
                 return Ok(deep_recall_empty("disabled"));

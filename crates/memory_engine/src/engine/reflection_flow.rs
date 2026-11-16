@@ -1095,7 +1095,9 @@ impl<S: Storage> MemoryEngine<S> {
         operations.items.sort_by_key(|operation| {
             !matches!(
                 operation.op_type,
-                JournalOperationType::DeleteSession | JournalOperationType::PurgeScope
+                JournalOperationType::DeleteSession
+                    | JournalOperationType::PurgeScope
+                    | JournalOperationType::EraseSubject
             )
         });
         let mut recovered = 0usize;
@@ -1157,7 +1159,7 @@ impl<S: Storage> MemoryEngine<S> {
                 JournalOperationType::CandidateReview => {
                     let intent: CandidateReviewOperationIntent =
                         serde_json::from_value(operation.intent.clone())?;
-                    recovered +=
+                    let apply = || {
                         self.with_resource_lock(candidate_lock_key(&intent.candidate_id), || {
                             let Some(current) =
                                 self.storage.load_journaled_operation(&operation.op_id)?
@@ -1166,7 +1168,12 @@ impl<S: Storage> MemoryEngine<S> {
                             };
                             self.execute_candidate_review_operation_unlocked(current)?;
                             Ok(1)
-                        })?;
+                        })
+                    };
+                    recovered += match &intent.desired_candidate.core_scope {
+                        Some(scope) => self.with_scope_memory_write(scope, apply)?,
+                        None => apply()?,
+                    };
                 }
                 JournalOperationType::Migration => {
                     recovered +=
@@ -1197,12 +1204,20 @@ impl<S: Storage> MemoryEngine<S> {
                         else {
                             return Ok(0);
                         };
+                        if current.op_type != operation.op_type
+                            || current.created_at != operation.created_at
+                        {
+                            return Ok(0);
+                        }
                         self.execute_memory_erasure_operation_unlocked(current)?;
                         Ok(1)
                     })?;
                 }
                 JournalOperationType::IngestEvent => {
                     recovered += usize::from(self.recover_ingest_operation(operation)?);
+                }
+                JournalOperationType::EraseSubject => {
+                    recovered += usize::from(self.recover_subject_erasure(operation)?);
                 }
                 JournalOperationType::MemoryUnitPublish => {
                     recovered += usize::from(self.recover_memory_unit_publication(operation)?);
@@ -1221,10 +1236,28 @@ impl<S: Storage> MemoryEngine<S> {
     pub fn review_candidate(&self, input: CandidateReviewInput) -> Result<CandidateReviewResult> {
         validate_candidate_review_input(&input)?;
         self.ensure_manifest()?;
+        let scope = self
+            .storage
+            .read_candidate_belief(&input.candidate_id)?
+            .core_scope;
+        let apply = || self.review_candidate_in_scope(input, scope.as_deref());
+        match &scope {
+            Some(scope) => self.with_scope_memory_write(scope, apply),
+            None => apply(),
+        }
+    }
 
+    fn review_candidate_in_scope(
+        &self,
+        input: CandidateReviewInput,
+        scope: Option<&str>,
+    ) -> Result<CandidateReviewResult> {
         self.with_resource_lock(candidate_lock_key(&input.candidate_id), || {
             let now = now_rfc3339()?;
             let candidate = self.storage.read_candidate_belief(&input.candidate_id)?;
+            if candidate.core_scope.as_deref() != scope {
+                return Err(MemoryEngineError::OperationStale);
+            }
             if !matches!(
                 candidate.status,
                 CandidateStatus::Draft | CandidateStatus::ReadyForReview

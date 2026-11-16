@@ -212,6 +212,38 @@ impl FileStorage {
         Ok(())
     }
 
+    pub(super) fn retire_subject_ingest_receipts(&self, plan: &SubjectErasurePlan) -> Result<()> {
+        let ids = plan
+            .event_ids_by_session
+            .values()
+            .chain(plan.suppressed_event_ids_by_session.values())
+            .chain(plan.detached_quote_event_ids_by_session.values())
+            .flatten()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let scope_key = erasure_key(MemoryErasureKind::PurgeScope, &plan.scope_id);
+        let mut paths = Vec::new();
+        collect_json_files_shallow(&self.ingest_receipt_dir(), &mut paths)?;
+        for path in paths {
+            let receipt = match read_json(&path) {
+                Ok(IngestReceiptRecord::Committed(receipt)) => receipt,
+                Ok(IngestReceiptRecord::Retired) | Err(MemoryEngineError::Json(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            if ids.contains(receipt.commit.result_reference.as_str())
+                && receipt
+                    .origin
+                    .is_none_or(|origin| origin.scope_key == scope_key)
+            {
+                atomic_write_json(&path, &IngestReceiptRecord::Retired)?;
+            }
+        }
+        Ok(())
+    }
+
     fn retire_legacy_ingest_receipts(
         &self,
         plan: &MemoryErasurePlan,

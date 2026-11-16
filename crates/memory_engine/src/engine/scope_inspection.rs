@@ -351,7 +351,7 @@ impl<S: Storage> MemoryEngine<S> {
     }
 }
 
-fn inspection_id_is_valid(id: &str) -> bool {
+pub(super) fn inspection_id_is_valid(id: &str) -> bool {
     !id.trim().is_empty()
         && id.trim() == id
         && !matches!(id, "." | "..")
@@ -360,7 +360,7 @@ fn inspection_id_is_valid(id: &str) -> bool {
         && !id.chars().any(char::is_control)
 }
 
-fn validate_inspection_scope(scope_id: &str) -> Result<()> {
+pub(super) fn validate_inspection_scope(scope_id: &str) -> Result<()> {
     if scope_id.trim().is_empty() || scope_id.chars().any(char::is_control) {
         return Err(MemoryEngineError::Validation(
             "scope_id must be provided for scoped inspection".into(),
