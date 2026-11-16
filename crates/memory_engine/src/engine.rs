@@ -110,6 +110,7 @@ mod forgetting_flow;
 mod generation;
 mod hypothesis_flow;
 mod idempotent_ingest;
+mod memory_unit_publication;
 mod options;
 mod recall_api;
 mod recall_stage1;

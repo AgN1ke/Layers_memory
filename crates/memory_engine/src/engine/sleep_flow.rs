@@ -1,3 +1,4 @@
+use super::transactional_support::serializable_digest;
 use super::*;
 
 impl<S: Storage> MemoryEngine<S> {
@@ -406,15 +407,28 @@ impl<S: Storage> MemoryEngine<S> {
                 self.resume_sleep_compression_unlocked(&run.sleep_task_id, sleep_result, false)?;
 
             if let Some(memory_unit_task_id) = run.memory_unit_task_id.clone() {
+                let successful_pass = run.requests.iter().any(|state| {
+                    state.track == SleepTrack::MemoryUnit
+                        && state.completed
+                        && state.last_error.is_none()
+                });
                 let memory_unit_result = run
                     .memory_unit_result
                     .clone()
                     .map(serde_json::from_value::<MemoryUnitPassResult>)
-                    .transpose()?
-                    .unwrap_or_else(|| empty_memory_unit_result(&run.archive_id));
+                    .transpose()?;
                 let mut task = self.load_task_for_response(&memory_unit_task_id)?;
-                archive_entry =
-                    self.resume_memory_unit_pass_unlocked(&mut task, memory_unit_result)?;
+                if let Some(result) = memory_unit_result
+                    .filter(|result| successful_pass || !result.memory_units.is_empty())
+                {
+                    archive_entry = self.resume_memory_unit_pass_unlocked(&mut task, result)?;
+                } else if task.state != TaskState::Completed {
+                    // A failed or skipped pass has no accepted result. Keep
+                    // repair available even if its local fallback was empty.
+                    task.state = TaskState::Completed;
+                    task.updated_at = now_rfc3339()?;
+                    self.storage.save_task(&task)?;
+                }
             }
 
             let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
@@ -560,6 +574,9 @@ impl<S: Storage> MemoryEngine<S> {
             let now = now_rfc3339()?;
             let mut requests = Vec::new();
             for archive in archives {
+                if self.memory_unit_publication_exists(&archive.archive_id)? {
+                    continue;
+                }
                 let events = archive
                     .source_event_ids
                     .iter()
@@ -656,7 +673,7 @@ impl<S: Storage> MemoryEngine<S> {
         archive_id: &str,
         failure_detail: String,
     ) -> Result<ArchiveEntry> {
-        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
+        let archive_entry = self.storage.read_archive_entry_raw(archive_id)?;
         if archive_entry.status == ArchiveStatus::Superseded || task.state == TaskState::Cancelled {
             return Err(MemoryEngineError::Validation(format!(
                 "memory unit task belongs to a retired sleep run: {}",
@@ -664,13 +681,6 @@ impl<S: Storage> MemoryEngine<S> {
             )));
         }
         let now = now_rfc3339()?;
-        if task.state == TaskState::Completed || !archive_entry.memory_units.is_empty() {
-            task.state = TaskState::Completed;
-            task.updated_at = now;
-            task.last_error = None;
-            self.storage.save_task(task)?;
-            return Ok(archive_entry);
-        }
 
         let mut units = Vec::new();
         let mut seen = HashSet::new();
@@ -775,25 +785,10 @@ impl<S: Storage> MemoryEngine<S> {
             )?;
         }
 
-        for unit in &units {
-            self.storage.write_memory_unit(unit)?;
-        }
-
-        archive_entry.updated_at = now.clone();
-        archive_entry.memory_units = units;
-        archive_entry.compact_memory =
-            render_compact_memory_from_units(&archive_entry.memory_units);
-        self.storage
-            .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
-
-        task.state = TaskState::Completed;
-        task.updated_at = now;
-        task.last_error = Some(format!(
-            "memory unit repair used archive-track fallback after LLM failure: {failure_detail}"
-        ));
-        self.storage.save_task(task)?;
-
-        Ok(archive_entry)
+        self.publish_memory_units(
+            task, archive_id, serializable_digest(&("repair_from_archive", archive_id))?, units,
+            Some(format!("memory unit repair used archive-track fallback after LLM failure: {failure_detail}")),
+        )
     }
 
     pub fn cancel_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun> {
@@ -1356,21 +1351,14 @@ impl<S: Storage> MemoryEngine<S> {
             .map(AttributionEvent::from)
             .collect::<Vec<_>>();
 
-        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
+        let archive_entry = self.storage.read_archive_entry_raw(archive_id)?;
         if archive_entry.status == ArchiveStatus::Superseded || task.state == TaskState::Cancelled {
             return Err(MemoryEngineError::Validation(format!(
                 "memory unit task belongs to a retired sleep run: {task_id}"
             )));
         }
         let now = now_rfc3339()?;
-        if task.state == TaskState::Completed || !archive_entry.memory_units.is_empty() {
-            task.state = TaskState::Completed;
-            task.updated_at = now;
-            task.last_error = None;
-            self.storage.save_task(task)?;
-            return Ok(archive_entry);
-        }
-
+        let request_digest = serializable_digest(&result)?;
         let mut units = Vec::new();
         for draft in result.memory_units {
             let thesis = normalize_whitespace(&draft.thesis);
@@ -1407,23 +1395,7 @@ impl<S: Storage> MemoryEngine<S> {
             });
         }
 
-        for unit in &units {
-            self.storage.write_memory_unit(unit)?;
-        }
-
-        archive_entry.updated_at = now.clone();
-        archive_entry.memory_units = units;
-        archive_entry.compact_memory =
-            render_compact_memory_from_units(&archive_entry.memory_units);
-        self.storage
-            .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
-
-        task.state = TaskState::Completed;
-        task.updated_at = now;
-        task.last_error = None;
-        self.storage.save_task(task)?;
-
-        Ok(archive_entry)
+        self.publish_memory_units(task, archive_id, request_digest, units, None)
     }
 
     pub(super) fn with_archive_task_response<T>(
@@ -1443,7 +1415,7 @@ impl<S: Storage> MemoryEngine<S> {
         let archive_id = workflow_task_archive_id(&snapshot, archive_field)?;
         let archive = self
             .storage
-            .read_archive_entry_by_id(archive_id)
+            .read_archive_entry_raw(archive_id)
             .map_err(|error| self.task_after_erasure_error(task_id, error))?;
         self.with_memory_write(
             archive.effective_personality_scope_id(),
@@ -1457,6 +1429,9 @@ impl<S: Storage> MemoryEngine<S> {
         task: &mut PendingTask,
         detail: String,
     ) {
+        if matches!(task.state, TaskState::Completed | TaskState::Cancelled) {
+            return;
+        }
         task.state = TaskState::Failed;
         task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
         task.last_error = Some(detail);

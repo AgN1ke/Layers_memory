@@ -18,7 +18,9 @@ use memory_engine::types::{
     MEMORY_UNITS_RESULT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
     SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
-use memory_engine::{EngineOptions, FileStorage, MemoryEngine, SleepStage1Result};
+use memory_engine::{
+    EngineOptions, FileStorage, MemoryEngine, MemoryEngineError, SleepStage1Result,
+};
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -125,6 +127,60 @@ fn memory_unit_pass_rejects_event_outside_frozen_sleep_input() {
         )
         .expect_err("invented provenance must fail closed");
     assert!(error.to_string().contains("outside frozen sleep input"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn completed_extraction_replay_returns_same_units_and_rejects_changed_result() {
+    let root = unique_temp_dir("completed_extraction_replay");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said their cat is named Irzha.",
+        vec!["pet"],
+    );
+    let sleep = engine.sleep("live_session").expect("sleep stage1");
+    let task_id = sleep.memory_unit_task.expect("memory unit task").task_id;
+    let archive_id = sleep.archive_entry.archive_id;
+    let result = MemoryUnitPassResult {
+        schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+        archive_id: archive_id.clone(),
+        memory_units: vec![MemoryUnitDraft {
+            thesis: "The user has a cat named Irzha.".to_string(),
+            subject_hint: None,
+            speaker_id: None,
+            source_event_ids: sleep.archive_entry.source_event_ids,
+            evidence: None,
+            tags: vec!["pet".to_string()],
+            weight: 0.8,
+        }],
+    };
+    let published = engine
+        .resume_memory_unit_pass(&task_id, result.clone())
+        .expect("publish accepted result");
+    assert_eq!(published.memory_units.len(), 1);
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage);
+    let replayed = reopened
+        .resume_memory_unit_pass(&task_id, result.clone())
+        .expect("replay accepted result after restart");
+    assert_eq!(replayed.memory_units, published.memory_units);
+
+    let mut changed = result;
+    changed.memory_units[0].thesis = "The user has a cat named Lada.".to_string();
+    let error = reopened
+        .resume_memory_unit_pass(&task_id, changed)
+        .expect_err("completed extraction cannot accept different content");
+    assert!(matches!(error, MemoryEngineError::OperationConflict));
+    let archive = reopened
+        .storage()
+        .read_archive_entry_by_id(&archive_id)
+        .unwrap();
+    assert_eq!(archive.memory_units, published.memory_units);
 
     fs::remove_dir_all(root).ok();
 }
@@ -2647,10 +2703,144 @@ fn engine_memory_unit_retry_escalates_final_attempt_to_reasoning() {
 }
 
 #[test]
+fn successful_empty_extraction_stays_complete_without_repair_after_restart() {
+    let root = unique_temp_dir("successful_empty_extraction");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Please pass the salt.",
+        vec!["conversation"],
+    );
+
+    let run = engine
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![SleepTrack::MemoryUnit],
+                ..SleepRunOptions::default()
+            },
+        )
+        .expect("begin extraction-only Sleep run");
+    let task_id = run.memory_unit_task_id.clone().expect("memory unit task");
+    let archive_id = run.archive_id.clone();
+    let step = engine.next_sleep_batch(run).expect("extraction batch");
+    let requests = step.batch.expect("one extraction request").requests;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].prompt_id, "memory_unit_pass");
+    let step = engine
+        .submit_sleep_batch(
+            step.run,
+            vec![LlmResponse::Ok {
+                request_id: requests[0].request_id.clone(),
+                text: json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": archive_id,
+                    "memory_units": []
+                })
+                .to_string(),
+            }],
+        )
+        .expect("submit an explicit empty result");
+    assert_eq!(step.run.stage, SleepRunStage::ReadyToFinish);
+    let outcome = engine.finish_sleep_run(step.run).expect("finish Sleep");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert!(outcome.archive_entry.memory_units.is_empty());
+    assert!(outcome.failed_passes.is_empty());
+    assert_eq!(
+        engine.storage().load_task(&task_id).unwrap().state,
+        TaskState::Completed
+    );
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage);
+    assert!(reopened
+        .pending_memory_unit_repairs("live_session")
+        .expect("inspect repair work after restart")
+        .is_empty());
+    let archive = reopened
+        .storage()
+        .read_archive_entry_by_id(&archive_id)
+        .unwrap();
+    assert!(archive.memory_units.is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn successful_empty_repair_stays_final_after_restart() {
+    let root = unique_temp_dir("successful_empty_repair");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Please pass the salt.",
+        vec!["conversation"],
+    );
+    let run = engine
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![SleepTrack::MemoryUnit],
+                max_pass_attempts: Some(1),
+                ..SleepRunOptions::default()
+            },
+        )
+        .expect("begin extraction-only Sleep run");
+    let step = engine.next_sleep_batch(run).expect("extraction batch");
+    let request_id = step.batch.unwrap().requests[0].request_id.clone();
+    let step = engine
+        .submit_sleep_batch(
+            step.run,
+            vec![LlmResponse::Err {
+                request_id,
+                kind: LlmErrorKind::Transport,
+                detail: "simulated provider outage".to_string(),
+            }],
+        )
+        .expect("finish failed extraction pass");
+    let outcome = engine.finish_sleep_run(step.run).expect("finish Sleep");
+    assert!(outcome
+        .failed_passes
+        .contains(&"memory_unit_pass".to_string()));
+    let repair = engine
+        .pending_memory_unit_repairs("live_session")
+        .expect("failed extraction remains repairable");
+    assert_eq!(repair.len(), 1);
+    let repaired = engine
+        .submit_memory_unit_repair_response(
+            &repair[0].task_id,
+            LlmResponse::Ok {
+                request_id: repair[0].request_id.clone(),
+                text: json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": outcome.archive_entry.archive_id,
+                    "memory_units": []
+                })
+                .to_string(),
+            },
+        )
+        .expect("submit an explicit empty repair")
+        .expect("repaired archive");
+    assert!(repaired.memory_units.is_empty());
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage);
+    assert!(reopened
+        .pending_memory_unit_repairs("live_session")
+        .expect("inspect repair work after restart")
+        .is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_repairs_complete_archive_without_memory_units() {
     let root = unique_temp_dir("repairs_complete_archive_without_memory_units");
     let storage = FileStorage::with_host_id(&root, "terminal");
-    let mut engine = MemoryEngine::new(storage);
+    let mut engine = MemoryEngine::new(storage.clone());
 
     ingest_text(
         &mut engine,
@@ -2739,6 +2929,8 @@ fn engine_repairs_complete_archive_without_memory_units() {
         .iter()
         .any(|event| event.event_id == event_id));
 
+    drop(engine);
+    let engine = MemoryEngine::new(storage);
     let repair_requests = engine
         .pending_memory_unit_repairs("live_session")
         .expect("repair requests");

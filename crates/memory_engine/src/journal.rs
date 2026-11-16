@@ -14,6 +14,7 @@ pub enum JournalOperationType {
     DeleteSession,
     PurgeScope,
     IngestEvent,
+    MemoryUnitPublish,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

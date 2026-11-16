@@ -46,6 +46,15 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage recovers accepted extraction as a complete set
+
+Archive publication journals the full accepted extraction result before
+writing any units. Restart resumes the same set with the original IDs.
+Readers get an incomplete result while publication is pending. A successful
+empty result is terminal and prevents an extra provider repair call.
+Archives from older interrupted runs can reuse matching standalone IDs when
+the host redelivers the complete result.
+
 ## 2026-11-16 — FileStorage checks review basis and preserves explicit restoration
 
 Fidelity checks the frozen thesis, subject and evidence before applying a

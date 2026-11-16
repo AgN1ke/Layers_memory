@@ -1201,6 +1201,9 @@ impl<S: Storage> MemoryEngine<S> {
                 JournalOperationType::IngestEvent => {
                     recovered += usize::from(self.recover_ingest_operation(operation)?);
                 }
+                JournalOperationType::MemoryUnitPublish => {
+                    recovered += usize::from(self.recover_memory_unit_publication(operation)?);
+                }
                 _ => {}
             }
         }

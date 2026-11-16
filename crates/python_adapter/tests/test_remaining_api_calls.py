@@ -3,7 +3,7 @@
 import json
 
 
-def _start_archive(engine, session):
+def _ingest_sleep_event(engine, session):
     engine.ingest(json.dumps({
         "schema_version": "event.v1",
         "type": "user_message",
@@ -13,6 +13,10 @@ def _start_archive(engine, session):
         "payload": {"text": "I saw the moon after lunch."},
         "importance_hint": "high",
     }))
+
+
+def _start_archive(engine, session):
+    _ingest_sleep_event(engine, session)
     return json.loads(engine.sleep(session))
 
 
@@ -98,6 +102,27 @@ def test_sleep_repairs_and_legacy_compact_task(engine_factory, tmp_path):
         sleep["memory_unit_task"]["task_id"], json.dumps(_units_payload(archive, None))
     ))
     assert not empty.get("memory_units")
+    assert not json.loads(engine.pending_memory_unit_repairs(session))
+    assert type(engine.flush_recall_stats()) is int
+
+
+def test_repair_retries_after_a_failed_extraction(engine_factory, tmp_path):
+    engine = engine_factory(tmp_path)
+    session = "repair_after_error"
+    _ingest_sleep_event(engine, session)
+    run = engine.begin_sleep_run_with_options(session, json.dumps({
+        "enabled_tracks": ["memory_unit"], "max_pass_attempts": 1,
+    }))
+    step = json.loads(engine.next_sleep_batch(run))
+    request, = step["batch"]["requests"]
+    step = json.loads(engine.submit_sleep_batch(json.dumps(step["run"]), json.dumps([{
+        "status": "err", "request_id": request["request_id"],
+        "kind": "transport", "detail": "Synthetic timeout",
+    }])))
+    outcome = json.loads(engine.finish_sleep_run(json.dumps(step["run"])))
+    assert "memory_unit_pass" in outcome["failed_passes"]
+    archive = outcome["archive_entry"]
+
     repair, = json.loads(engine.pending_memory_unit_repairs(session))
     no_repair = json.loads(engine.submit_memory_unit_repair_response(
         repair["task_id"],

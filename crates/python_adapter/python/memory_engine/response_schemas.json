@@ -556,7 +556,10 @@
               "type": "string"
             },
             "tags": {
-              "type": "array"
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "theme": {
               "type": "null"
@@ -3893,7 +3896,10 @@
           "additionalProperties": false
         },
         "failed_passes": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "fidelity_requests": {
           "type": "array",
@@ -4174,7 +4180,10 @@
           "additionalProperties": false
         },
         "skipped_passes": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "sleep_task_id": {
           "type": "string"
@@ -4378,7 +4387,10 @@
               }
             },
             "failed_passes": {
-              "type": "array"
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "max_pass_attempts": {
               "type": "integer"

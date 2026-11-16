@@ -425,30 +425,30 @@ impl MemoryEngineGodot {
     #[func]
     fn recover_pending_memory_operations(&self) -> GString {
         self.with_engine(|engine| {
-            let count = engine
-                .recover_pending_memory_operations()
-                .map_err(|err| err.to_string())?;
-            dump_json(&count, "recovered memory operation count")
+            dump_operation_result(
+                engine.recover_pending_memory_operations(),
+                "recovered memory operation count",
+            )
         })
     }
 
     #[func]
     fn delete_session(&self, session_id: GString) -> GString {
         self.with_engine(|engine| {
-            let report = engine
-                .delete_session(&session_id.to_string())
-                .map_err(|err| err.to_string())?;
-            dump_json(&report, "session deletion report")
+            dump_operation_result(
+                engine.delete_session(&session_id.to_string()),
+                "session deletion report",
+            )
         })
     }
 
     #[func]
     fn purge_scope(&self, personality_scope_id: GString) -> GString {
         self.with_engine(|engine| {
-            let report = engine
-                .purge_scope(&personality_scope_id.to_string())
-                .map_err(|err| err.to_string())?;
-            dump_json(&report, "scope purge report")
+            dump_operation_result(
+                engine.purge_scope(&personality_scope_id.to_string()),
+                "scope purge report",
+            )
         })
     }
 
@@ -596,20 +596,19 @@ fn dump_operation_result<T: Serialize>(
     result: memory_engine::Result<T>,
     label: &str,
 ) -> Result<String, String> {
-    match result {
-        Ok(value) => dump_json(&value, label),
-        Err(error @ MemoryEngineError::OperationStale) => Ok(serde_json::json!({
-            "code": "operation_stale",
-            "error": error.to_string(),
-        })
-        .to_string()),
-        Err(error @ MemoryEngineError::NeedsNewReview) => Ok(serde_json::json!({
-            "code": "needs_new_review",
-            "error": error.to_string(),
-        })
-        .to_string()),
-        Err(error) => Err(error.to_string()),
-    }
+    let error = match result {
+        Ok(value) => return dump_json(&value, label),
+        Err(error) => error,
+    };
+    let code = match error {
+        MemoryEngineError::OperationStale => "operation_stale",
+        MemoryEngineError::NeedsNewReview => "needs_new_review",
+        MemoryEngineError::OperationIncomplete => "operation_incomplete",
+        MemoryEngineError::OperationConflict => "operation_conflict",
+        MemoryEngineError::OperationResultUnavailable => "operation_result_unavailable",
+        _ => return Err(error.to_string()),
+    };
+    Ok(serde_json::json!({"code": code, "error": error.to_string()}).to_string())
 }
 
 fn normalize_godot_numbers(value: &mut Value) {

@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Recoverable FileStorage extraction publication
+
+Recorded completeness and accepted empty results in the
+[FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and [architecture](pages/foundation/architecture.md). Updated H2 progress.
+
 ## [2026-11-16] update | Fidelity basis and replay-safe forgetting
 
 Updated the [FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)

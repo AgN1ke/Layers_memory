@@ -11,6 +11,15 @@ use crate::session::{SessionMetadata, SessionRecord};
 use crate::tasks::PendingTask;
 use crate::vector::{VectorAppendRecord, VectorIndexData, VectorIndexManifest, VectorTombstone};
 use crate::Result;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+pub(crate) fn memory_unit_publication_key(archive_id: &str) -> String {
+    format!(
+        "memory_unit_publish_{:x}",
+        Sha256::digest(archive_id.as_bytes())
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageReadWarning {
@@ -68,6 +77,14 @@ pub trait Storage {
     fn update_archive_entry(&self, archive_id: &str, entry: &ArchiveEntry) -> Result<()>;
     fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry>;
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>>;
+    /// Internal publication view of the persisted Archive before unit hydration.
+    fn read_archive_entry_raw(&self, archive_id: &str) -> Result<ArchiveEntry> {
+        self.read_archive_entry_by_id(archive_id)
+    }
+    /// Physical Archive inventory for erasure, including unfinished publications.
+    fn read_archive_inventory(&self) -> Result<StorageCollection<ArchiveEntry>> {
+        self.read_archive(&ArchiveFilters::default())
+    }
     /// Read the persisted Archive entries needed to recover Sleep for a session.
     /// Coverage and publication status do not require hydrating memory units.
     fn read_sleep_archives(&self, session_id: &str) -> Result<Vec<ArchiveEntry>> {
@@ -85,6 +102,27 @@ pub trait Storage {
         &self,
         archive_id: &str,
     ) -> Result<StorageCollection<MemoryUnit>>;
+    /// Physical canonical-unit inventory for erasure.
+    fn read_memory_unit_inventory(&self) -> Result<StorageCollection<MemoryUnit>> {
+        self.read_memory_units()
+    }
+    /// Internal publication view, including legacy partial units.
+    fn read_memory_units_for_archive_raw(
+        &self,
+        archive_id: &str,
+    ) -> Result<StorageCollection<MemoryUnit>> {
+        self.read_memory_units_for_archive(archive_id)
+    }
+    fn read_memory_unit_publication_receipt(&self, _archive_id: &str) -> Result<Option<Value>> {
+        Ok(None)
+    }
+    fn write_memory_unit_publication_receipt(
+        &self,
+        _archive_id: &str,
+        _receipt: &Value,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory>;
     fn read_core_store_categories(&self) -> Result<StorageCollection<CoreStoreCategory>>;

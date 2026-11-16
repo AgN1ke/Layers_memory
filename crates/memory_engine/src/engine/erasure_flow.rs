@@ -215,7 +215,7 @@ impl<S: Storage> MemoryEngine<S> {
             .collect::<BTreeSet<_>>();
         identifiers.extend(task_ids.iter().cloned());
 
-        let journal_operation_ids =
+        let journal_operations =
             clean_storage_collection(self.storage.load_journaled_operations()?)?
                 .into_iter()
                 .filter(|operation| {
@@ -226,8 +226,21 @@ impl<S: Storage> MemoryEngine<S> {
                         &identifiers,
                     )
                 })
-                .map(|operation| operation.op_id)
-                .collect::<BTreeSet<_>>();
+                .collect::<Vec<_>>();
+        // This operation keeps derived memory. Let recovery finish an
+        // accepted batch before removing the session or its journal entries.
+        if journal_operations.iter().any(|operation| {
+            operation.op_type == JournalOperationType::MemoryUnitPublish
+                && operation.state == JournalState::Started
+        }) {
+            self.memory_operations_recovered
+                .store(false, Ordering::Release);
+            return Err(MemoryEngineError::OperationIncomplete);
+        }
+        let journal_operation_ids = journal_operations
+            .into_iter()
+            .map(|operation| operation.op_id)
+            .collect::<BTreeSet<_>>();
 
         counts.tasks = task_ids.len();
         counts.sleep_runs = sleep_task_ids.len();
@@ -276,16 +289,15 @@ impl<S: Storage> MemoryEngine<S> {
             counts.archived_events += self.storage.read_session_archived_events(session_id)?.len();
         }
 
-        let archives =
-            clean_storage_collection(self.storage.read_archive(&ArchiveFilters::default())?)?
-                .into_iter()
-                .filter(|archive| archive.effective_personality_scope_id() == scope)
-                .collect::<Vec<_>>();
+        let archives = clean_storage_collection(self.storage.read_archive_inventory()?)?
+            .into_iter()
+            .filter(|archive| archive.effective_personality_scope_id() == scope)
+            .collect::<Vec<_>>();
         let archive_ids = archives
             .iter()
             .map(|archive| archive.archive_id.clone())
             .collect::<BTreeSet<_>>();
-        let memory_unit_ids = clean_storage_collection(self.storage.read_memory_units()?)?
+        let memory_unit_ids = clean_storage_collection(self.storage.read_memory_unit_inventory()?)?
             .into_iter()
             .filter(|unit| {
                 unit.effective_personality_scope_id() == scope
@@ -498,6 +510,13 @@ fn journal_operation_matches_erasure(
     target: &str,
     identifiers: &BTreeSet<String>,
 ) -> bool {
+    if operation.op_type == JournalOperationType::MemoryUnitPublish {
+        let field = match kind {
+            MemoryErasureKind::DeleteSession => "source_session_id",
+            MemoryErasureKind::PurgeScope => "scope",
+        };
+        return operation.intent[field].as_str() == Some(target);
+    }
     if operation.op_type == JournalOperationType::IngestEvent {
         let event = &operation.intent["event"];
         let session = event["session_id"].as_str();

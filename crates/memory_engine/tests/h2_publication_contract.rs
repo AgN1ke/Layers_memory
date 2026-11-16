@@ -13,7 +13,6 @@ use memory_engine::{FileStorage, MemoryEngine};
 use serde_json::json;
 
 #[test]
-#[ignore = "H2.5 must recover partial extraction before marking the task completed"]
 fn restarting_after_a_partial_extraction_write_recovers_the_whole_result() {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let root = std::env::temp_dir().join(format!(
@@ -100,13 +99,17 @@ fn restarting_after_a_partial_extraction_write_recovers_the_whole_result() {
 
     let restarted = MemoryEngine::new(FileStorage::with_host_id(&root, "test_host"));
     let resumed = restarted
-        .resume_memory_unit_pass(&task.task_id, result)
+        .resume_memory_unit_pass(&task.task_id, result.clone())
         .expect("redeliver the complete extraction result after restart");
     let persisted = restarted
         .storage()
         .read_memory_units_for_archive(&archive.archive_id)
         .expect("read the published canonical units");
     assert!(persisted.warnings.is_empty());
+    assert!(persisted
+        .items
+        .iter()
+        .any(|unit| unit.memory_unit_id == "mu_partial_extraction" && unit.thesis == theses[0]));
     let mut published_theses = persisted
         .items
         .iter()
@@ -114,6 +117,10 @@ fn restarting_after_a_partial_extraction_write_recovers_the_whole_result() {
         .collect::<Vec<_>>();
     published_theses.sort_unstable();
     let final_state = restarted.storage().load_task(&task.task_id).unwrap().state;
+    let replay = restarted
+        .resume_memory_unit_pass(&task.task_id, result)
+        .unwrap();
+    assert_eq!(replay.memory_units, resumed.memory_units);
     drop(restarted);
     fs::remove_dir_all(root).ok();
 
