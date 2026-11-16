@@ -813,7 +813,7 @@ Patch шукає факт за `core_fact_id` і `scope`. Це захищає в
 
 #### Виправлення атрибуції факту Core
 
-FileStorage Rust API `correct_core_fact_attribution` приймає
+FileStorage API `correct_core_fact_attribution` приймає
 `core_fact_attribution_input.v1`. Обов'язкові поля — точний `scope_id`,
 `core_fact_id`, стабільний `operation_id`, `expected_updated_at` у RFC3339
 та `change`. Зміна має одну з двох форм:
@@ -2495,7 +2495,7 @@ review fidelity/forgetting, прибирання та міграція стар�
 
 ### 14.4 Перегляд і відновлення в межах scope
 
-Rust API FileStorage приймає обов'язковий `scope_id`. Хост бере його
+FileStorage API приймає обов'язковий `scope_id`. Хост бере його
 з автентифікованого контексту, наприклад із поточного чату.
 
 - `inspect_scope` повертає ID і стан архівів та одиниць, ID сесій,

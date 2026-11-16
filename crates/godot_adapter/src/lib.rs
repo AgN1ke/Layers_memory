@@ -10,7 +10,8 @@ use godot::classes::RefCounted;
 use godot::prelude::*;
 use memory_engine::archive::FidelityReview;
 use memory_engine::core_store::{
-    CandidateReviewInput, CoreContextPackage, CoreContextRequest, CoreFactInput, CoreFactPatchInput,
+    CandidateReviewInput, CoreContextPackage, CoreContextRequest, CoreFactAttributionInput,
+    CoreFactInput, CoreFactPatchInput,
 };
 use memory_engine::event::IngestEvent;
 use memory_engine::forgetting::ForgetReviewResult;
@@ -249,6 +250,18 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn correct_core_fact_attribution(&self, input_json: GString) -> GString {
+        self.with_engine(|engine| {
+            let input: CoreFactAttributionInput =
+                parse_json(&input_json.to_string(), "Core fact attribution input")?;
+            dump_operation_result(
+                engine.correct_core_fact_attribution(input),
+                "Core fact attribution result",
+            )
+        })
+    }
+
+    #[func]
     fn begin_memory_fidelity_pass(&self, memory_unit_id: GString) -> GString {
         self.with_engine(|engine| {
             let start = engine
@@ -460,6 +473,65 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn inspect_scope(&self, scope_id: GString) -> GString {
+        self.with_engine(|engine| {
+            dump_operation_result(
+                engine.inspect_scope(&scope_id.to_string()),
+                "scoped memory summary",
+            )
+        })
+    }
+
+    #[func]
+    fn inspect_archive(&self, scope_id: GString, archive_id: GString) -> GString {
+        self.with_engine(|engine| {
+            dump_operation_result(
+                engine.inspect_archive(&scope_id.to_string(), &archive_id.to_string()),
+                "scoped archive detail",
+            )
+        })
+    }
+
+    #[func]
+    fn inspect_memory_unit(&self, scope_id: GString, memory_unit_id: GString) -> GString {
+        self.with_engine(|engine| {
+            dump_operation_result(
+                engine.inspect_memory_unit(&scope_id.to_string(), &memory_unit_id.to_string()),
+                "scoped memory unit detail",
+            )
+        })
+    }
+
+    #[func]
+    fn inspect_subject(&self, scope_id: GString, subject_id: GString) -> GString {
+        self.with_engine(|engine| {
+            dump_operation_result(
+                engine.inspect_subject(&scope_id.to_string(), &subject_id.to_string()),
+                "subject memory view",
+            )
+        })
+    }
+
+    #[func]
+    fn erase_subject(
+        &self,
+        scope_id: GString,
+        subject_id: GString,
+        operation_id: GString,
+    ) -> GString {
+        self.with_engine(|engine| {
+            dump_operation_result(
+                engine.erase_subject(
+                    &scope_id.to_string(),
+                    &subject_id.to_string(),
+                    &operation_id.to_string(),
+                ),
+                "subject erasure report",
+            )
+        })
+    }
+
+    #[func]
     fn begin_forget_review(&self, session_id: GString) -> GString {
         self.with_engine(|engine| {
             let start = engine
@@ -509,6 +581,16 @@ impl MemoryEngineGodot {
                 .remember_back(&memory_unit_id.to_string())
                 .map_err(|err| err.to_string())?;
             dump_json(&unit, "memory unit")
+        })
+    }
+
+    #[func]
+    fn remember_back_in_scope(&self, scope_id: GString, memory_unit_id: GString) -> GString {
+        self.with_engine(|engine| {
+            dump_operation_result(
+                engine.remember_back_in_scope(&scope_id.to_string(), &memory_unit_id.to_string()),
+                "scoped memory unit",
+            )
         })
     }
 

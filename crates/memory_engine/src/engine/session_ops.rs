@@ -153,13 +153,64 @@ impl<S: Storage> MemoryEngine<S> {
     /// Read a coherent session snapshot while local writes or Sleep rotate it.
     pub fn read_session(&self, session_id: &str) -> Result<SessionRecord> {
         self.with_resource_lock(session_lock_key(session_id), || {
-            let session = self.storage.read_session(session_id)?;
-            self.require_erasure_complete(
-                MemoryErasureKind::PurgeScope,
-                session.metadata.effective_personality_scope_id(),
-            )?;
+            self.read_local_session_unlocked(session_id)
+        })
+    }
+
+    /// Enumerate local sessions for a trusted, store-wide maintenance worker.
+    pub fn list_local_sessions(&self) -> Result<Vec<String>> {
+        let mut sessions = Vec::new();
+        for metadata in self.storage.read_sessions()?.items {
+            if metadata.validate().is_err()
+                || !super::scope_inspection::inspection_id_is_valid(&metadata.session_id)
+            {
+                continue;
+            }
+            let erasure = self
+                .require_erasure_complete(
+                    MemoryErasureKind::PurgeScope,
+                    metadata.effective_personality_scope_id(),
+                )
+                .and_then(|_| {
+                    self.require_erasure_complete(
+                        MemoryErasureKind::DeleteSession,
+                        &metadata.session_id,
+                    )
+                });
+            match erasure {
+                Ok(()) => sessions.push(metadata.session_id),
+                Err(MemoryEngineError::OperationIncomplete) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        sessions.sort();
+        sessions.dedup();
+        Ok(sessions)
+    }
+
+    /// Read active events still eligible for Sleep in a trusted local session.
+    pub fn read_unarchived_session(&self, session_id: &str) -> Result<SessionRecord> {
+        if !super::scope_inspection::inspection_id_is_valid(session_id) {
+            return Err(MemoryEngineError::Validation("invalid session ID".into()));
+        }
+        self.with_session_memory_write(session_id, || {
+            let mut session = self.read_local_session_unlocked(session_id)?;
+            let covered = self.archived_event_ids_for_session_unlocked(session_id)?;
+            session
+                .events
+                .retain(|event| !covered.contains(&event.event_id));
             Ok(session)
         })
+    }
+
+    fn read_local_session_unlocked(&self, session_id: &str) -> Result<SessionRecord> {
+        self.require_erasure_complete(MemoryErasureKind::DeleteSession, session_id)?;
+        let session = self.storage.read_session(session_id)?;
+        self.require_erasure_complete(
+            MemoryErasureKind::PurgeScope,
+            session.metadata.effective_personality_scope_id(),
+        )?;
+        Ok(session)
     }
 
     pub(super) fn archived_event_ids_for_session_unlocked(
@@ -182,8 +233,7 @@ impl<S: Storage> MemoryEngine<S> {
 
         for entry in self
             .storage
-            .read_archive(&ArchiveFilters::default())?
-            .into_items()
+            .read_sleep_archives(session_id)?
             .into_iter()
             .filter(|entry| entry.source_session_id == session_id)
             .filter(|entry| entry.status == ArchiveStatus::Complete)

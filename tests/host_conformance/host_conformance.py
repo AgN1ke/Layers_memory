@@ -735,14 +735,20 @@ class EnglishDirectHostDriver(DirectHostDriver):
 class FakeTelegram:
     def __init__(self) -> None:
         self.messages: list[tuple[int, str]] = []
+        self.blocked_chat_ids: set[int] = set()
 
-    def send_message(self, chat_id: int, text: str) -> None:
+    def send_message(self, chat_id: int, text: str) -> list[int]:
+        if chat_id in self.blocked_chat_ids:
+            raise RuntimeError("fake Telegram private delivery unavailable")
         self.messages.append((chat_id, text))
+        return [1_900_000_000 + len(self.messages)]
 
 
 class FakeGemini:
     def __init__(self, telegram_bot: Any) -> None:
         self.telegram_bot = telegram_bot
+        self.last_chat_prompt = ""
+        self.calls = 0
 
     def generate_text(
         self,
@@ -755,6 +761,9 @@ class FakeGemini:
         telemetry: dict[str, Any] | None = None,
     ) -> Any:
         del system_instruction, response_mime_type, model_role, telemetry
+        self.calls += 1
+        if operation == "chat_reply":
+            self.last_chat_prompt = prompt
         if operation == "chat_reply" and "silver feather" in prompt.lower():
             text = "I remember the silver feather under the old bridge."
         elif operation == "chat_reply":
@@ -875,7 +884,6 @@ class TelegramLocalHostDriver:
 
     def _patch_runtime_paths(self) -> None:
         self.telegram_bot.MEMORY_DIR = self.runtime_dir / "memory"
-        self.telegram_bot.ARCHIVE_DIR = self.telegram_bot.MEMORY_DIR / "archive"
         self.telegram_bot.LOG_DIR = self.runtime_dir / "logs"
         self.telegram_bot.LOG_PATH = self.telegram_bot.LOG_DIR / "bot.log"
         self.telegram_bot.TOKEN_USAGE_PATH = self.telegram_bot.LOG_DIR / "token_usage.jsonl"
@@ -885,7 +893,17 @@ class TelegramLocalHostDriver:
         self.telegram_bot.LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.telegram_bot.STATE_DIR.mkdir(parents=True, exist_ok=True)
 
-    def send_user_message(self, text: str) -> str:
+    def send_user_message(
+        self,
+        text: str,
+        *,
+        chat_id: int | None = None,
+        sender_id: int | None = None,
+        chat_type: str = "private",
+        message_fields: dict[str, Any] | None = None,
+    ) -> str:
+        chat_id = self.chat_id if chat_id is None else chat_id
+        sender_id = chat_id if sender_id is None else sender_id
         self.turn_index += 1
         before = len(self.telegram.messages)
         update = {
@@ -893,9 +911,10 @@ class TelegramLocalHostDriver:
             "message": {
                 "message_id": self.turn_index,
                 "date": 1781080000 + self.turn_index,
-                "chat": {"id": self.chat_id, "type": "private"},
-                "from": {"id": 311422683, "first_name": "Mykyta"},
+                "chat": {"id": chat_id, "type": chat_type},
+                "from": {"id": sender_id, "first_name": "Mykyta"},
                 "text": text,
+                **(message_fields or {}),
             },
         }
         self.telegram_bot.handle_update(
@@ -910,16 +929,20 @@ class TelegramLocalHostDriver:
             raise ConformanceError("telegram-local host did not send a reply")
         return self.telegram.messages[-1][1]
 
-    def run_sleep(self) -> dict[str, Any]:
-        summary = self.telegram_bot.run_sleep(self.engine, self.gemini, self.llm_config, self.session_id)
+    def run_sleep(self, session_id: str | None = None) -> dict[str, Any]:
+        session_id = self.session_id if session_id is None else session_id
+        summary = self.telegram_bot.run_sleep(self.engine, self.gemini, self.llm_config, session_id)
         if "Archive:" not in summary:
             raise ConformanceError(f"telegram-local sleep returned unexpected summary:\n{summary}")
         if re.search(r"\b[1-9]\d* failed\b", summary):
             raise ConformanceError(f"telegram-local sleep had failed fidelity tasks:\n{summary}")
-        archives = self._completed_archives()
+        archives = self.telegram_bot.complete_archives(self.engine, session_id)
         if not archives:
             raise ConformanceError("telegram-local sleep produced no completed archive")
-        return {"archive_entry": archives[-1], "summary": summary}
+        detail = self.telegram_bot.inspect_archive(self.engine, session_id, archives[0]["archive_id"])
+        if not detail or not detail.get("archive"):
+            raise ConformanceError("telegram-local completed archive could not be inspected")
+        return {"archive_entry": detail["archive"], "summary": summary}
 
     def context_package(self, current_text: str) -> dict[str, Any]:
         return self.telegram_bot.context_package(self.engine, self.session_id, self.chat_id, current_text)
@@ -927,11 +950,6 @@ class TelegramLocalHostDriver:
     def render_memory_view(self, current_text: str) -> str:
         package = self.context_package(current_text)
         return self.telegram_bot.chat_prompt(self.engine, package, current_text)
-
-    def _completed_archives(self) -> list[dict[str, Any]]:
-        archives = self.telegram_bot.complete_archives()
-        return [archive for archive in archives if archive.get("source_session_id") == self.session_id]
-
 
 def run_direct(keep_runtime: bool) -> DriverResult:
     runtime = Path(tempfile.mkdtemp(prefix="memory_engine_host_conformance_"))
@@ -1263,6 +1281,7 @@ def run_telegram_local(keep_runtime: bool) -> DriverResult:
         assert_memory_view(view)
         package = driver.context_package("Що ти пам'ятаєш про Іржу?")
         assert_core(package)
+        assert_telegram_scoped_memory(driver, archive)
         return DriverResult(
             runtime_dir=runtime,
             archive_id=archive["archive_id"],
@@ -1272,6 +1291,87 @@ def run_telegram_local(keep_runtime: bool) -> DriverResult:
     finally:
         if not keep_runtime:
             shutil.rmtree(runtime, ignore_errors=True)
+
+
+def assert_telegram_scoped_memory(driver: TelegramLocalHostDriver, archive: dict[str, Any]) -> None:
+    if archive["archive_id"] not in driver.send_user_message("/archives"):
+        raise ConformanceError("Telegram did not list its own completed archive")
+    if "Completed archives: 1" not in driver.send_user_message("/memory_stats"):
+        raise ConformanceError("Telegram did not show scoped archive counters")
+
+    other_chat = driver.chat_id + 1
+    other_scope = f"telegram_{other_chat}"
+    driver.send_user_message("My private account prefers a green notebook.", chat_id=other_chat)
+    other = driver.run_sleep(other_scope)["archive_entry"]
+    other_unit = other["memory_units"][0]["memory_unit_id"]
+    provider_calls = driver.gemini.calls
+    if driver.send_user_message(f"/archive {other['archive_id']}") != driver.send_user_message("/archive missing"):
+        raise ConformanceError("Telegram distinguished foreign and missing archive IDs")
+    for command in ("/evidence", "/fidelity", "/remember_back"):
+        if driver.send_user_message(f"{command} {other_unit}") != "Memory unit not found.":
+            raise ConformanceError(f"Telegram exposed a foreign unit via {command}")
+    if driver.gemini.calls != provider_calls:
+        raise ConformanceError("Telegram contacted the model for a refused memory command")
+
+    group_chat = -driver.chat_id
+    group_scope = f"telegram_{group_chat}"
+    first_sender, second_sender = 90011, 90012
+    first_text, second_text = "I use a yellow folder.", "I use a purple folder."
+    driver.send_user_message(first_text, chat_id=group_chat, sender_id=first_sender, chat_type="group")
+    original_message_id = driver.turn_index
+    untrusted_quote = "COPIED_QUOTE_SENTINEL"
+    driver.send_user_message(
+        second_text,
+        chat_id=group_chat,
+        sender_id=second_sender,
+        chat_type="group",
+        message_fields={
+            "reply_to_message": {
+                "message_id": original_message_id,
+                "chat": {"id": group_chat, "type": "group"},
+                "text": untrusted_quote,
+            },
+            "quote": {"text": untrusted_quote},
+        },
+    )
+    events = loads(driver.engine.read_session(group_scope))["events"]
+    first = next(event for event in events if event["memory_text"] == first_text)
+    second = next(event for event in events if event["memory_text"] == second_text)
+    if second["quoted_event_ids"] != [first["event_id"]] or untrusted_quote in dumps(second):
+        raise ConformanceError("Telegram did not persist quote provenance without duplicate text")
+    if untrusted_quote in driver.gemini.last_chat_prompt:
+        raise ConformanceError("Telegram inserted the copied quote text into the prompt")
+
+    def group_command(command: str, **kwargs: Any) -> str:
+        return driver.send_user_message(
+            command, chat_id=group_chat, sender_id=first_sender, chat_type="group", **kwargs
+        )
+
+    provider_calls = driver.gemini.calls
+    offset = len(driver.telegram.messages)
+    group_notice = group_command("/my_memory")
+    delivered = dict(driver.telegram.messages[offset:])
+    if (
+        first_text not in delivered.get(first_sender, "")
+        or second_text in delivered.get(first_sender, "")
+        or first_text in group_notice
+    ):
+        raise ConformanceError("Telegram exposed personal inspection outside the private delivery")
+    driver.telegram.blocked_chat_ids.add(first_sender)
+    if "Start a private chat" not in group_command("/my_memory"):
+        raise ConformanceError("Telegram did not report failed private delivery")
+    if "your own Telegram account" not in group_command(
+        "/forget_me", message_fields={"sender_chat": {"id": group_chat}}
+    ):
+        raise ConformanceError("An anonymous group sender could erase individual memory")
+    if "Deleted events: 1" not in group_command("/forget_me"):
+        raise ConformanceError("Telegram did not report authenticated subject erasure")
+    remaining = loads(driver.engine.read_session(group_scope))["events"]
+    survivor = next(event for event in remaining if event["event_id"] == second["event_id"])
+    if first_text in dumps(remaining) or survivor.get("quoted_event_ids") != []:
+        raise ConformanceError("Telegram erasure kept the deleted text or a dangling typed quote")
+    if driver.gemini.calls != provider_calls:
+        raise ConformanceError("Telegram personal inspection or erasure called the model")
 
 
 def run_telegram_distant_gate(keep_runtime: bool) -> DriverResult:

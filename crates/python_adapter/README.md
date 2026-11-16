@@ -91,6 +91,57 @@ on delivery and retry. `OperationStaleError` means the session or scope was
 erased since capture. Treat that result as terminal for the queued event.
 Omit `personality_scope_id` when an event uses its session ID as its scope.
 
+## Scoped memory management
+
+Use `inspect_scope(scope_id)` for Archive and memory-unit summaries, counts,
+and unfinished operations. Use `inspect_archive(scope_id, archive_id)` and
+`inspect_memory_unit(scope_id, memory_unit_id)` for current records and their
+verified source events. These calls leave recall feedback and memory status
+alone. Restore a forgotten unit explicitly with
+`remember_back_in_scope(scope_id, memory_unit_id)`. Detail and restoration
+return JSON `null` for an unknown or out-of-scope ID.
+`begin_memory_fidelity_pass_in_scope(scope_id, memory_unit_id)` starts review
+only after the same scope check. `seed_core_from_archives_in_scope(scope_id)`
+applies eligible Archive signals within that scope.
+
+For one person, use `inspect_subject(scope_id, subject_id)` and
+`erase_subject(scope_id, subject_id, operation_id)`. The host derives scope
+and subject from authenticated identities. Use the same operation ID after an
+interruption or for an exact retry. `incomplete` reports gaps such as mixed
+evidence or opaque legacy quotes. For new events, `quoted_event_ids` lists the
+original events and the text fields carry the current author's own words.
+Use `[]` for an event without quotes.
+
+Correct a fact in place with `correct_core_fact_attribution(request_json)`.
+Send the current fact's `updated_at` as the expected version, a stable
+operation ID, the authorized scope, and a typed assign or clear action:
+
+```python
+corrected = json.loads(engine.correct_core_fact_attribution(json.dumps({
+    "schema_version": "core_fact_attribution_input.v1",
+    "scope_id": scope_id,
+    "core_fact_id": fact["core_fact_id"],
+    "operation_id": operation_id,
+    "expected_updated_at": fact["updated_at"],
+    "change": {"action": "assign", "subject": {"id": subject_id, "name": display_name}},
+})))
+```
+
+`{"action": "clear"}` removes the subject assignment. A missing or
+out-of-scope fact returns JSON `null`. A stale version raises
+`OperationStaleError`. Destination collisions and operation-ID reuse with
+different input raise `OperationConflictError`.
+
+The existing `read_session`, `list_forgotten_memory_units`, `remember_back`,
+`pending_tasks`, `pending_sleep_runs`, `begin_memory_fidelity_pass`, and
+`seed_core_from_archives` methods are trusted local inspection or work-queue
+APIs. Use the scoped methods for user-facing memory management.
+`list_local_sessions()` enumerates the host's local session IDs, and
+`read_unarchived_session(session_id)` reads events eligible for future Sleep.
+These methods support a trusted local scheduler.
+
+## Recall and Sleep
+
 Stage 2 recall tuning is optional and remains Rust-core policy:
 
 ```python

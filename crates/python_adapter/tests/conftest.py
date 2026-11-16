@@ -134,6 +134,8 @@ def observed_schema(values, depth=0, field=None):
         schema = {"type": kind}
         if kind == "string" and field == "schema_version":
             schema["enum"] = sorted(set(examples))
+        elif kind == "object" and field == "pending_by_type":
+            schema["additionalProperties"] = {"type": "integer", "minimum": 0}
         elif kind == "object" and depth < 3 and field not in OPEN_OBJECTS:
             keys = sorted(set().union(*(value.keys() for value in examples)))
             schema["properties"] = {

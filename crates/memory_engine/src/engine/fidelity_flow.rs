@@ -55,9 +55,101 @@ impl<S: Storage> MemoryEngine<S> {
         let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
         let source_ids = self.fidelity_source_ids(&unit)?;
         let events = self.read_session_events_with_archived(&unit.source_session_id)?;
-        let evidence_pack = self.build_evidence_pack_from(&unit, &source_ids, &events)?;
+        self.begin_memory_fidelity_pass_from(&unit, &source_ids, &events)
+    }
+
+    pub fn begin_memory_fidelity_pass_in_scope(
+        &self,
+        scope: &str,
+        memory_unit_id: &str,
+    ) -> Result<Option<MemoryFidelityPassStart>> {
+        super::scope_inspection::validate_inspection_scope(scope)?;
+        if !super::scope_inspection::inspection_id_is_valid(memory_unit_id) {
+            return Err(MemoryEngineError::Validation(
+                "invalid memory unit ID".into(),
+            ));
+        }
+        let lookup = || {
+            self.storage
+                .read_memory_units_by_id(&[memory_unit_id])
+                .map(|mut units| {
+                    units.remove(memory_unit_id).filter(|unit| {
+                        unit.effective_personality_scope_id() == scope
+                            && super::scope_inspection::inspection_id_is_valid(
+                                &unit.source_session_id,
+                            )
+                    })
+                })
+        };
+        let Some(snapshot) = lookup()? else {
+            return Ok(None);
+        };
+        self.ensure_manifest()?;
+        self.with_memory_write(scope, &snapshot.source_session_id, || {
+            let Some(unit) = lookup()? else {
+                return Ok(None);
+            };
+            if unit.archive_id != snapshot.archive_id
+                || unit.source_session_id != snapshot.source_session_id
+            {
+                return Err(MemoryEngineError::OperationStale);
+            }
+            let Some(parent) = self
+                .storage
+                .read_archive_detail_scoped(scope, &unit.archive_id)?
+                .and_then(|projection| projection.items.into_iter().next())
+            else {
+                return Ok(None);
+            };
+            if parent.source_session_id != unit.source_session_id
+                || !parent
+                    .memory_units
+                    .iter()
+                    .any(|member| member.memory_unit_id == memory_unit_id)
+            {
+                return Ok(None);
+            }
+            let parent_ids = parent
+                .source_event_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
+            let source_ids: BTreeSet<String> = if unit.source_event_ids.is_empty() {
+                parent.source_event_ids.iter().cloned().collect()
+            } else {
+                unit.source_event_ids.iter().cloned().collect()
+            };
+            let mut events = self.read_session_events_with_archived(&unit.source_session_id)?;
+            events.retain(|event| {
+                event.session_id == unit.source_session_id
+                    && event.effective_personality_scope_id() == scope
+                    && event.validate().is_ok()
+            });
+            let resolved = events
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<HashSet<_>>();
+            if source_ids.is_empty()
+                || source_ids
+                    .iter()
+                    .any(|id| !parent_ids.contains(id.as_str()) || !resolved.contains(id.as_str()))
+            {
+                return Err(MemoryEngineError::OperationResultUnavailable);
+            }
+            self.begin_memory_fidelity_pass_from(&unit, &source_ids, &events)
+                .map(Some)
+        })
+    }
+
+    fn begin_memory_fidelity_pass_from(
+        &self,
+        unit: &MemoryUnit,
+        source_ids: &BTreeSet<String>,
+        events: &[StoredEvent],
+    ) -> Result<MemoryFidelityPassStart> {
+        let evidence_pack = self.build_evidence_pack_from(unit, source_ids, events)?;
         let basis = FrozenFidelityBasis {
-            digest: fidelity_basis_digest(&unit, &source_ids, &evidence_pack.events)?,
+            digest: fidelity_basis_digest(unit, source_ids, &evidence_pack.events)?,
             max_event_text_chars: self.options.fidelity.max_event_text_chars,
         };
         let mut inputs = serde_json::to_value(&evidence_pack)?;

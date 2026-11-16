@@ -118,6 +118,9 @@
               "memory_unit_id": {
                 "type": "string"
               },
+              "personality_scope_id": {
+                "type": "string"
+              },
               "reflection_count": {
                 "type": "integer"
               },
@@ -138,6 +141,22 @@
               },
               "status": {
                 "type": "string"
+              },
+              "subject": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
               },
               "tags": {
                 "type": "array",
@@ -208,6 +227,9 @@
             ],
             "additionalProperties": false
           }
+        },
+        "personality_scope_id": {
+          "type": "string"
         },
         "prompt_id": {
           "anyOf": [
@@ -1217,6 +1239,141 @@
       ],
       "additionalProperties": false
     },
+    "CoreFactAttributionResult | null": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "already_applied": {
+              "type": "boolean"
+            },
+            "applied_at": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string"
+            },
+            "fact": {
+              "type": "object",
+              "properties": {
+                "attribution_changed_at": {
+                  "type": "string"
+                },
+                "attribution_history": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "applied_at": {
+                        "type": "string"
+                      },
+                      "assertion_digest": {
+                        "type": "string"
+                      },
+                      "assigned_subject_digest": {
+                        "type": "string"
+                      },
+                      "operation_digest": {
+                        "type": "string"
+                      },
+                      "previous_subject_digest": {
+                        "type": "string"
+                      },
+                      "request_digest": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "applied_at",
+                      "assertion_digest",
+                      "assigned_subject_digest",
+                      "operation_digest",
+                      "previous_subject_digest",
+                      "request_digest"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "confidence": {
+                  "type": "number"
+                },
+                "core_fact_id": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "schema_version": {
+                  "type": "string",
+                  "enum": [
+                    "core_fact.v1"
+                  ]
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "text": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attribution_changed_at",
+                "attribution_history",
+                "confidence",
+                "core_fact_id",
+                "created_at",
+                "schema_version",
+                "scope",
+                "status",
+                "subject",
+                "text",
+                "updated_at"
+              ],
+              "additionalProperties": false
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "core_fact_attribution_result.v1"
+              ]
+            }
+          },
+          "required": [
+            "already_applied",
+            "applied_at",
+            "category",
+            "fact",
+            "schema_version"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "CoreFactPatchResult": {
       "type": "object",
       "properties": {
@@ -1320,6 +1477,22 @@
             "status": {
               "type": "string"
             },
+            "subject": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            },
             "tags": {
               "type": "array",
               "items": {
@@ -1340,7 +1513,6 @@
             "schema_version",
             "scope",
             "status",
-            "tags",
             "text",
             "updated_at"
           ],
@@ -1582,6 +1754,9 @@
               "memory_unit_id": {
                 "type": "string"
               },
+              "personality_scope_id": {
+                "type": "string"
+              },
               "reflection_count": {
                 "type": "integer"
               },
@@ -1603,6 +1778,22 @@
               "status": {
                 "type": "string"
               },
+              "subject": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
               "tags": {
                 "type": "array",
                 "items": {
@@ -1622,7 +1813,6 @@
             "required": [
               "archive_id",
               "created_at",
-              "fidelity_review",
               "fidelity_status",
               "forget_review",
               "memory_unit_id",
@@ -2240,11 +2430,20 @@
             "initial_weight": {
               "type": "number"
             },
+            "memory_text": {
+              "type": "string"
+            },
             "payload": {
               "type": "object"
             },
+            "personality_scope_id": {
+              "type": "string"
+            },
             "processing_mode": {
               "type": "string"
+            },
+            "quoted_event_ids": {
+              "type": "array"
             },
             "received_at": {
               "type": "string"
@@ -2260,6 +2459,22 @@
             },
             "source": {
               "type": "string"
+            },
+            "speaker": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
             },
             "tags": {
               "type": "array",
@@ -2600,6 +2815,214 @@
       ],
       "additionalProperties": false
     },
+    "MemoryFidelityPassStart | null": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "evidence_pack": {
+              "type": "object",
+              "properties": {
+                "archive_id": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "estimated_tokens": {
+                  "type": "integer"
+                },
+                "events": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "event_id": {
+                        "type": "string"
+                      },
+                      "role": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "speaker": {
+                        "type": "object"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "timestamp": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "event_id",
+                      "role",
+                      "source",
+                      "speaker",
+                      "text",
+                      "timestamp",
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "evidence_pack_id": {
+                  "type": "string"
+                },
+                "max_estimated_tokens": {
+                  "type": "integer"
+                },
+                "memory_unit_id": {
+                  "type": "string"
+                },
+                "schema_version": {
+                  "type": "string",
+                  "enum": [
+                    "evidence_pack.v1"
+                  ]
+                },
+                "source_session_id": {
+                  "type": "string"
+                },
+                "target_thesis": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "archive_id",
+                "created_at",
+                "estimated_tokens",
+                "events",
+                "evidence_pack_id",
+                "max_estimated_tokens",
+                "memory_unit_id",
+                "schema_version",
+                "source_session_id",
+                "target_thesis",
+                "truncated"
+              ],
+              "additionalProperties": false
+            },
+            "pending_task": {
+              "type": "object",
+              "properties": {
+                "attempts": {
+                  "type": "array"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "expected_output_schema": {
+                  "type": "string"
+                },
+                "inputs": {
+                  "type": "object"
+                },
+                "last_error": {
+                  "type": "null"
+                },
+                "prompt_id": {
+                  "type": "string"
+                },
+                "prompt_version": {
+                  "type": "integer"
+                },
+                "role_hint": {
+                  "type": "string"
+                },
+                "schema_version": {
+                  "type": "string",
+                  "enum": [
+                    "pending_task.v1"
+                  ]
+                },
+                "state": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "task_type": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attempts",
+                "created_at",
+                "expected_output_schema",
+                "inputs",
+                "last_error",
+                "prompt_id",
+                "prompt_version",
+                "role_hint",
+                "schema_version",
+                "state",
+                "task_id",
+                "task_type",
+                "updated_at"
+              ],
+              "additionalProperties": false
+            },
+            "request": {
+              "type": "object",
+              "properties": {
+                "expected_output_schema": {
+                  "type": "string"
+                },
+                "prompt_id": {
+                  "type": "string"
+                },
+                "prompt_inputs": {
+                  "type": "object"
+                },
+                "prompt_version": {
+                  "type": "integer"
+                },
+                "request_id": {
+                  "type": "string"
+                },
+                "role_hint": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_output_schema",
+                "prompt_id",
+                "prompt_inputs",
+                "prompt_version",
+                "request_id",
+                "role_hint",
+                "task_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "evidence_pack",
+            "pending_task",
+            "request"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "MemoryOperationPruneReport": {
       "type": "object",
       "properties": {
@@ -2844,6 +3267,124 @@
         "weight"
       ],
       "additionalProperties": false
+    },
+    "MemoryUnit | null": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "archive_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "fidelity_status": {
+              "type": "string"
+            },
+            "forget_review": {
+              "type": "object",
+              "properties": {
+                "decision": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "reviewed_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "decision",
+                "reason",
+                "reviewed_at"
+              ],
+              "additionalProperties": false
+            },
+            "memory_unit_id": {
+              "type": "string"
+            },
+            "personality_scope_id": {
+              "type": "string"
+            },
+            "reflection_count": {
+              "type": "integer"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "memory_unit.v1"
+              ]
+            },
+            "source_event_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "source_session_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "thesis": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "archive_id",
+            "created_at",
+            "fidelity_status",
+            "forget_review",
+            "memory_unit_id",
+            "personality_scope_id",
+            "reflection_count",
+            "schema_version",
+            "source_event_ids",
+            "source_session_id",
+            "status",
+            "subject",
+            "tags",
+            "thesis",
+            "updated_at",
+            "weight"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "RecallResult": {
       "type": "object",
@@ -3477,6 +4018,702 @@
       ],
       "additionalProperties": false
     },
+    "ScopedArchiveDetail | null": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "archive": {
+              "type": "object",
+              "properties": {
+                "archive_id": {
+                  "type": "string"
+                },
+                "compact_memory": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "embedding": {
+                  "type": "null"
+                },
+                "embedding_model_id": {
+                  "type": "null"
+                },
+                "facts": {
+                  "type": "array"
+                },
+                "freshness": {
+                  "type": "number"
+                },
+                "gist": {
+                  "type": "string"
+                },
+                "last_recalled_at": {
+                  "type": "null"
+                },
+                "links": {
+                  "type": "array"
+                },
+                "llm_enhanced": {
+                  "type": "boolean"
+                },
+                "memory_units": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "archive_id": {
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "fidelity_status": {
+                        "type": "string"
+                      },
+                      "forget_review": {
+                        "type": "object"
+                      },
+                      "memory_unit_id": {
+                        "type": "string"
+                      },
+                      "personality_scope_id": {
+                        "type": "string"
+                      },
+                      "reflection_count": {
+                        "type": "integer"
+                      },
+                      "schema_version": {
+                        "type": "string",
+                        "enum": [
+                          "memory_unit.v1"
+                        ]
+                      },
+                      "source_event_ids": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "source_session_id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "subject": {
+                        "type": "object"
+                      },
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "thesis": {
+                        "type": "string"
+                      },
+                      "updated_at": {
+                        "type": "string"
+                      },
+                      "weight": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "archive_id",
+                      "created_at",
+                      "fidelity_status",
+                      "memory_unit_id",
+                      "personality_scope_id",
+                      "reflection_count",
+                      "schema_version",
+                      "source_event_ids",
+                      "source_session_id",
+                      "status",
+                      "subject",
+                      "thesis",
+                      "updated_at",
+                      "weight"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "narrative": {
+                  "type": "string"
+                },
+                "personality_scope_id": {
+                  "type": "string"
+                },
+                "prompt_id": {
+                  "type": "string"
+                },
+                "prompt_version": {
+                  "type": "integer"
+                },
+                "quotes": {
+                  "type": "array"
+                },
+                "recall_count": {
+                  "type": "integer"
+                },
+                "schema_version": {
+                  "type": "string",
+                  "enum": [
+                    "archive_entry.v1"
+                  ]
+                },
+                "source_event_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "source_session_id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "tags": {
+                  "type": "array"
+                },
+                "theme": {
+                  "type": "null"
+                },
+                "time_range": {
+                  "type": "object",
+                  "properties": {
+                    "end": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "end",
+                    "start"
+                  ],
+                  "additionalProperties": false
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "weight": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "archive_id",
+                "compact_memory",
+                "created_at",
+                "embedding",
+                "embedding_model_id",
+                "facts",
+                "freshness",
+                "gist",
+                "last_recalled_at",
+                "links",
+                "llm_enhanced",
+                "memory_units",
+                "narrative",
+                "personality_scope_id",
+                "prompt_id",
+                "prompt_version",
+                "quotes",
+                "recall_count",
+                "schema_version",
+                "source_event_ids",
+                "source_session_id",
+                "status",
+                "tags",
+                "theme",
+                "time_range",
+                "updated_at",
+                "weight"
+              ],
+              "additionalProperties": false
+            },
+            "archive_id": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "scoped_archive_detail.v1"
+              ]
+            },
+            "scope_id": {
+              "type": "string"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "memory_text": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "speaker": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "timestamp": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "event_id",
+                  "memory_text",
+                  "source",
+                  "speaker",
+                  "timestamp",
+                  "type"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "collection": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "collection",
+                  "error",
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "archive_id",
+            "schema_version",
+            "scope_id",
+            "sources",
+            "warnings"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ScopedMemorySummary": {
+      "type": "object",
+      "properties": {
+        "archives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "archive_id": {
+                "type": "string"
+              },
+              "memory_units": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "fidelity_status": {
+                      "type": "string"
+                    },
+                    "memory_unit_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fidelity_status",
+                    "memory_unit_id",
+                    "status",
+                    "updated_at"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "source_session_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "time_range": {
+                "type": "object",
+                "properties": {
+                  "end": {
+                    "type": "string"
+                  },
+                  "start": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "end",
+                  "start"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "archive_id",
+              "memory_units",
+              "source_session_id",
+              "status",
+              "time_range"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "active_memory_units": {
+              "type": "integer"
+            },
+            "complete_archives": {
+              "type": "integer"
+            },
+            "core_facts": {
+              "type": "integer"
+            },
+            "pending_by_type": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "sessions": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "active_memory_units",
+            "complete_archives",
+            "core_facts",
+            "pending_by_type",
+            "sessions"
+          ],
+          "additionalProperties": false
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "created_at": {
+                "type": "string"
+              },
+              "needs_new_review": {
+                "type": "boolean"
+              },
+              "state": {
+                "type": "string"
+              },
+              "task_id": {
+                "type": "string"
+              },
+              "task_type": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "created_at",
+              "needs_new_review",
+              "state",
+              "task_id",
+              "task_type",
+              "updated_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "scoped_memory_summary.v1"
+          ]
+        },
+        "scope_id": {
+          "type": "string"
+        },
+        "session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "collection": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "collection",
+              "error",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "archives",
+        "counts",
+        "operations",
+        "schema_version",
+        "scope_id",
+        "session_ids",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "ScopedMemoryUnitDetail | null": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "scoped_memory_unit_detail.v1"
+              ]
+            },
+            "scope_id": {
+              "type": "string"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "memory_text": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "speaker": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "timestamp": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "event_id",
+                  "memory_text",
+                  "source",
+                  "speaker",
+                  "timestamp",
+                  "type"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "unit": {
+              "type": "object",
+              "properties": {
+                "archive_id": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "fidelity_status": {
+                  "type": "string"
+                },
+                "forget_review": {
+                  "type": "object",
+                  "properties": {
+                    "decision": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "reviewed_at": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "decision",
+                    "reason",
+                    "reviewed_at"
+                  ],
+                  "additionalProperties": false
+                },
+                "memory_unit_id": {
+                  "type": "string"
+                },
+                "personality_scope_id": {
+                  "type": "string"
+                },
+                "reflection_count": {
+                  "type": "integer"
+                },
+                "schema_version": {
+                  "type": "string",
+                  "enum": [
+                    "memory_unit.v1"
+                  ]
+                },
+                "source_event_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "source_session_id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "thesis": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "weight": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "archive_id",
+                "created_at",
+                "fidelity_status",
+                "forget_review",
+                "memory_unit_id",
+                "personality_scope_id",
+                "reflection_count",
+                "schema_version",
+                "source_event_ids",
+                "source_session_id",
+                "status",
+                "subject",
+                "tags",
+                "thesis",
+                "updated_at",
+                "weight"
+              ],
+              "additionalProperties": false
+            },
+            "warnings": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "schema_version",
+            "scope_id",
+            "sources",
+            "unit",
+            "warnings"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "SessionRecord": {
       "type": "object",
       "properties": {
@@ -3494,6 +4731,9 @@
               "initial_weight": {
                 "type": "number"
               },
+              "memory_text": {
+                "type": "string"
+              },
               "payload": {
                 "type": "object"
               },
@@ -3502,6 +4742,9 @@
               },
               "processing_mode": {
                 "type": "string"
+              },
+              "quoted_event_ids": {
+                "type": "array"
               },
               "received_at": {
                 "type": "string"
@@ -3517,6 +4760,22 @@
               },
               "source": {
                 "type": "string"
+              },
+              "speaker": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
               },
               "tags": {
                 "type": "array",
@@ -3547,8 +4806,6 @@
               "schema_version",
               "session_id",
               "source",
-              "tags",
-              "theme",
               "timestamp",
               "type",
               "weight_reason"
@@ -3562,8 +4819,20 @@
             "active_theme": {
               "type": "string"
             },
+            "archived_event_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "archived_event_index_complete": {
               "type": "boolean"
+            },
+            "archived_to": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "created_at": {
               "type": "string"
@@ -4741,6 +6010,9 @@
             "narrative": {
               "type": "string"
             },
+            "personality_scope_id": {
+              "type": "string"
+            },
             "prompt_id": {
               "type": "null"
             },
@@ -4985,6 +6257,124 @@
         "archive_entry",
         "memory_unit_task",
         "pending_task"
+      ],
+      "additionalProperties": false
+    },
+    "SubjectErasureReport": {
+      "type": "object",
+      "properties": {
+        "completed_at": {
+          "type": "string"
+        },
+        "deleted_archives": {
+          "type": "integer"
+        },
+        "deleted_candidates": {
+          "type": "integer"
+        },
+        "deleted_core_facts": {
+          "type": "integer"
+        },
+        "deleted_events": {
+          "type": "integer"
+        },
+        "deleted_hypotheses": {
+          "type": "integer"
+        },
+        "deleted_memory_units": {
+          "type": "integer"
+        },
+        "detached_quotes": {
+          "type": "integer"
+        },
+        "incomplete": {
+          "type": "boolean"
+        },
+        "retired_tasks": {
+          "type": "integer"
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "subject_erasure_report.v1"
+          ]
+        },
+        "suppressed_archives": {
+          "type": "integer"
+        },
+        "suppressed_events": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "completed_at",
+        "deleted_archives",
+        "deleted_candidates",
+        "deleted_core_facts",
+        "deleted_events",
+        "deleted_hypotheses",
+        "deleted_memory_units",
+        "detached_quotes",
+        "incomplete",
+        "retired_tasks",
+        "schema_version",
+        "suppressed_archives",
+        "suppressed_events"
+      ],
+      "additionalProperties": false
+    },
+    "SubjectMemoryView": {
+      "type": "object",
+      "properties": {
+        "incomplete": {
+          "type": "boolean"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "text",
+              "timestamp"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "subject_memory_view.v1"
+          ]
+        },
+        "scope_id": {
+          "type": "string"
+        },
+        "subject_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "incomplete",
+        "items",
+        "schema_version",
+        "scope_id",
+        "subject_id"
       ],
       "additionalProperties": false
     },
@@ -5484,6 +6874,12 @@
           "topic_thread_pass"
         ],
         "additionalProperties": false
+      }
+    },
+    "list[str]": {
+      "type": "array",
+      "items": {
+        "type": "string"
       }
     },
     "str": {

@@ -8,6 +8,11 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Scoped memory adapters and Telegram integration
+
+Recorded [scope-bound host calls and Telegram subject commands](pages/integration/local-development.md#перегляд-і-стирання-в-telegram)
+and updated H3 progress in the plan and roadmap.
+
 ## [2026-11-16] update | Core fact attribution correction
 
 Recorded the [Core attribution contract](pages/foundation/contracts.md#виправлення-атрибуції-факту-core)

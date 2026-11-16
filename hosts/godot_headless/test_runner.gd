@@ -86,6 +86,13 @@ func _init() -> void:
     if failed:
         return
 
+    _assert_scoped_memory(archive)
+    if failed:
+        return
+    _assert_subject_actions()
+    if failed:
+        return
+
     print("HOST CONFORMANCE PASSED")
     print("host=godot-headless")
     print("archive_id=%s" % archive.get("archive_id", ""))
@@ -168,6 +175,80 @@ func _send_user_message(text: String) -> String:
     var reply := "ACK %s: %s" % [turn_index, text.substr(0, 48)]
     _ingest("assistant_message", "godot_assistant", reply, ["host_conformance_reply"])
     return reply
+
+func _assert_scoped_memory(archive: Dictionary) -> void:
+    var archive_id: String = archive["archive_id"]
+    var memory_unit_id: String = archive["memory_units"][0]["memory_unit_id"]
+    var other_scope := "godot_idempotent_ingest"
+    var summary: Dictionary = _loads(engine.inspect_scope(CORE_SCOPE))
+    if failed:
+        return
+    var counts: Dictionary = summary.get("counts", {})
+    if summary.get("schema_version") != "scoped_memory_summary.v1" or counts.get("sessions") != 1 or counts.get("complete_archives") != 1:
+        _fail("scoped memory summary must describe only its own session and archive")
+        return
+    var episode: Dictionary = _loads(engine.inspect_archive(CORE_SCOPE, archive_id))
+    var unit: Dictionary = _loads(engine.inspect_memory_unit(CORE_SCOPE, memory_unit_id))
+    if failed:
+        return
+    if episode.get("archive", {}).get("archive_id") != archive_id or episode.get("sources", []).is_empty():
+        _fail("scoped archive detail must include its verified sources")
+        return
+    if unit.get("unit", {}).get("memory_unit_id") != memory_unit_id or unit.get("sources", []).is_empty():
+        _fail("scoped unit detail must include its verified sources")
+        return
+    if engine.inspect_archive(other_scope, archive_id) != "null" or engine.inspect_archive(other_scope, "unknown_archive") != "null":
+        _fail("a foreign archive ID must be indistinguishable from an unknown archive ID")
+        return
+    if engine.inspect_memory_unit(other_scope, memory_unit_id) != "null" or engine.remember_back_in_scope(other_scope, memory_unit_id) != "null":
+        _fail("a foreign unit ID must be invisible to scoped reads and writes")
+
+func _assert_subject_actions() -> void:
+    var scope := "godot_subject_conformance"
+    var previous_subject := {"id": "alex_first", "name": "Alex"}
+    var corrected_subject := {"id": "alex_second", "name": "Alex"}
+    var stored: Dictionary = _loads(engine.upsert_core_fact(_dumps({
+        "schema_version": "core_fact_input.v1",
+        "category": "godot_scoped_subjects",
+        "scope": scope,
+        "subject": previous_subject,
+        "text": "Alex collects postcards.",
+        "confidence": 1.0,
+    })))
+    if failed:
+        return
+    var fact: Dictionary = stored.get("fact", {})
+    if not fact.has_all(["core_fact_id", "updated_at"]):
+        _fail("Core fact fixture must exist before attribution correction")
+        return
+    var correction := {
+        "schema_version": "core_fact_attribution_input.v1",
+        "scope_id": scope,
+        "core_fact_id": fact["core_fact_id"],
+        "operation_id": "godot_correct_alex",
+        "expected_updated_at": "2000-01-01T00:00:00Z",
+        "change": {"action": "assign", "subject": corrected_subject},
+    }
+    var stale: Dictionary = _loads(engine.correct_core_fact_attribution(_dumps(correction)))
+    if stale.get("code") != "operation_stale":
+        _fail("stale attribution must return a typed Godot error")
+        return
+    correction["expected_updated_at"] = fact["updated_at"]
+    var applied: Dictionary = _loads(engine.correct_core_fact_attribution(_dumps(correction)))
+    if applied.get("fact", {}).get("subject") != corrected_subject:
+        _fail("attribution must accept a stable subject ID")
+        return
+    var view: Dictionary = _loads(engine.inspect_subject(scope, corrected_subject["id"]))
+    if view.get("items", []).size() != 1:
+        _fail("subject view must expose the corrected fact")
+        return
+    var erased: Dictionary = _loads(engine.erase_subject(scope, corrected_subject["id"], "godot_erase_alex"))
+    if erased.get("deleted_core_facts") != 1:
+        _fail("subject erasure must remove the selected fact")
+        return
+    view = _loads(engine.inspect_subject(scope, corrected_subject["id"]))
+    if not view.get("items", []).is_empty():
+        _fail("erased Core fact must disappear from the subject view")
 
 func _run_sleep() -> Dictionary:
     var run: Dictionary = _loads(engine.begin_sleep_run(SESSION_ID))

@@ -24,7 +24,8 @@ use serde::Serialize;
 
 use ::memory_engine::archive::FidelityReview;
 use ::memory_engine::core_store::{
-    CandidateReviewInput, CoreContextPackage, CoreContextRequest, CoreFactInput, CoreFactPatchInput,
+    CandidateReviewInput, CoreContextPackage, CoreContextRequest, CoreFactAttributionInput,
+    CoreFactInput, CoreFactPatchInput,
 };
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::forgetting::ForgetReviewResult;
@@ -310,6 +311,19 @@ impl PyMemoryEngine {
         dump_json(&start, "memory fidelity pass")
     }
 
+    fn begin_memory_fidelity_pass_in_scope(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        memory_unit_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || {
+            self.inner
+                .begin_memory_fidelity_pass_in_scope(scope_id, memory_unit_id)
+        })?;
+        dump_json(&result, "scoped memory fidelity pass")
+    }
+
     fn submit_memory_fidelity_response(
         &self,
         py: Python<'_>,
@@ -361,6 +375,68 @@ impl PyMemoryEngine {
     fn remember_back(&self, py: Python<'_>, memory_unit_id: &str) -> PyResult<String> {
         let unit = run_without_gil(py, || self.inner.remember_back(memory_unit_id))?;
         dump_json(&unit, "memory unit")
+    }
+
+    fn inspect_scope(&self, py: Python<'_>, scope_id: &str) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.inspect_scope(scope_id))?;
+        dump_json(&result, "scoped memory summary")
+    }
+
+    fn inspect_archive(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        archive_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.inspect_archive(scope_id, archive_id))?;
+        dump_json(&result, "scoped archive detail")
+    }
+
+    fn inspect_memory_unit(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        memory_unit_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || {
+            self.inner.inspect_memory_unit(scope_id, memory_unit_id)
+        })?;
+        dump_json(&result, "scoped memory unit detail")
+    }
+
+    fn remember_back_in_scope(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        memory_unit_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || {
+            self.inner.remember_back_in_scope(scope_id, memory_unit_id)
+        })?;
+        dump_json(&result, "restored memory unit")
+    }
+
+    fn inspect_subject(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        subject_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.inspect_subject(scope_id, subject_id))?;
+        dump_json(&result, "subject memory view")
+    }
+
+    fn erase_subject(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        subject_id: &str,
+        operation_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || {
+            self.inner.erase_subject(scope_id, subject_id, operation_id)
+        })?;
+        dump_json(&result, "subject erasure report")
     }
 
     #[pyo3(signature = (session_id, core_scope=None))]
@@ -519,6 +595,16 @@ impl PyMemoryEngine {
         dump_json(&session, "session")
     }
 
+    fn list_local_sessions(&self, py: Python<'_>) -> PyResult<String> {
+        let session_ids = run_without_gil(py, || self.inner.list_local_sessions())?;
+        dump_json(&session_ids, "local session IDs")
+    }
+
+    fn read_unarchived_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let session = run_without_gil(py, || self.inner.read_unarchived_session(session_id))?;
+        dump_json(&session, "unarchived session")
+    }
+
     fn resume_sleep_compression(
         &self,
         py: Python<'_>,
@@ -610,6 +696,17 @@ impl PyMemoryEngine {
         dump_json(&result, "core fact patch result")
     }
 
+    fn correct_core_fact_attribution(
+        &self,
+        py: Python<'_>,
+        request_json: &str,
+    ) -> PyResult<String> {
+        let request: CoreFactAttributionInput =
+            parse_json(request_json, "core fact attribution input")?;
+        let result = run_without_gil(py, || self.inner.correct_core_fact_attribution(request))?;
+        dump_json(&result, "core fact attribution result")
+    }
+
     fn pending_tasks(&self, py: Python<'_>) -> PyResult<String> {
         let tasks = run_without_gil(py, || self.inner.pending_tasks())?;
         dump_json(&tasks, "pending tasks")
@@ -618,6 +715,12 @@ impl PyMemoryEngine {
     fn seed_core_from_archives(&self, py: Python<'_>) -> PyResult<String> {
         let summary = run_without_gil(py, || self.inner.seed_core_from_archives())?;
         dump_json(&summary, "core archive seed summary")
+    }
+
+    fn seed_core_from_archives_in_scope(&self, py: Python<'_>, scope_id: &str) -> PyResult<String> {
+        let summary =
+            run_without_gil(py, || self.inner.seed_core_from_archives_in_scope(scope_id))?;
+        dump_json(&summary, "scoped core archive seed summary")
     }
 
     fn vector_state(&self, py: Python<'_>, scope: &str) -> PyResult<String> {

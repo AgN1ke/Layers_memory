@@ -869,11 +869,23 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub fn seed_core_from_archives(&self) -> Result<CoreArchiveSeedSummary> {
+        self.seed_core_from_archive_selection(None)
+    }
+
+    pub fn seed_core_from_archives_in_scope(&self, scope: &str) -> Result<CoreArchiveSeedSummary> {
+        super::scope_inspection::validate_inspection_scope(scope)?;
+        self.seed_core_from_archive_selection(Some(scope))
+    }
+
+    fn seed_core_from_archive_selection(
+        &self,
+        scope: Option<&str>,
+    ) -> Result<CoreArchiveSeedSummary> {
         self.ensure_manifest()?;
         let mut summary = CoreArchiveSeedSummary::default();
         let archives = self
             .storage
-            .read_archive(&ArchiveFilters::default())?
+            .read_archive_scoped(&ArchiveFilters::default(), scope, None)?
             .into_items();
         for archive in archives
             .into_iter()

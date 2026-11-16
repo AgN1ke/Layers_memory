@@ -335,11 +335,11 @@ def process_local_text(
     if text == "/core":
         return bot.format_core_facts(bot.context_package(engine, session_id, 0, text)), []
     if text == "/core_seed":
-        return bot.format_core_seed(bot.promote_existing_archives(engine)), []
+        return bot.format_core_seed(bot.promote_existing_archives(engine, session_id)), []
     if text == "/archives":
-        return format_scoped_archives(session_id), []
+        return bot.format_archives(engine, session_id), []
     if text == "/archive_last":
-        return bot.format_archive_detail(last_scoped_archive(session_id)), []
+        return bot.format_archive_inspection(last_scoped_archive(engine, session_id)), []
     if text == "/sleep":
         return "", [bot.run_sleep(engine, gemini, llm_config, session_id)]
     if text.startswith("/recall"):
@@ -369,7 +369,9 @@ def process_local_text(
         prompt=prompt,
         operation="local_harness_chat_reply",
         model_role=llm_config.chat_role,
-        telemetry=bot.chat_prompt_telemetry(package, session_id, prompt),
+        telemetry=bot.chat_prompt_telemetry(
+            package, session_id, prompt, bot.unarchived_session_events(engine, session_id)
+        ),
     )
     answer = answer_response.text
     assistant_ingest = bot.ingest_chat_event(
@@ -402,35 +404,9 @@ def try_final_sleep(
         return f"Final sleep failed: {type(err).__name__}: {err}"
 
 
-def scoped_archives(session_id: str) -> list[dict[str, Any]]:
-    return [
-        archive
-        for archive in bot.complete_archives()
-        if archive.get("source_session_id") == session_id
-    ]
-
-
-def last_scoped_archive(session_id: str) -> dict[str, Any] | None:
-    archives = scoped_archives(session_id)
-    return archives[-1] if archives else None
-
-
-def format_scoped_archives(session_id: str) -> str:
-    archives = scoped_archives(session_id)
-    if not archives:
-        return f"No completed archives found for {session_id}."
-    lines = [f"Completed archives for {session_id}: {len(archives)}"]
-    for archive in archives[-5:]:
-        lines.append(
-            f"- {archive.get('archive_id', '')} "
-            f"events={len(archive.get('source_event_ids', []))} "
-            f"emotional={len(archive.get('emotional_markers', []))} "
-            f"personal={len(archive.get('personal_signals', []))}"
-        )
-        gist = bot.clean_string(archive.get("gist"))
-        if gist:
-            lines.append(f"  {bot.truncate_chars(gist, 260)}")
-    return "\n".join(lines)
+def last_scoped_archive(engine: memory_engine.MemoryEngine, session_id: str) -> dict[str, Any] | None:
+    archives = bot.complete_archives(engine, session_id)
+    return bot.inspect_archive(engine, session_id, archives[0]["archive_id"]) if archives else None
 
 
 def write_report(
@@ -444,8 +420,8 @@ def write_report(
     path = REPORT_DIR / f"{session_id}.md"
     greeting_hits = mid_dialog_greeting_hits(transcript)
     core_text = bot.format_core_facts(bot.context_package(engine, session_id, 0, "/core"))
-    archive_text = format_scoped_archives(session_id)
-    archive_last = bot.format_archive_detail(last_scoped_archive(session_id))
+    archive_text = bot.format_archives(engine, session_id)
+    archive_last = bot.format_archive_inspection(last_scoped_archive(engine, session_id))
 
     lines = [
         f"# Local Harness Report: {scenario_name}",

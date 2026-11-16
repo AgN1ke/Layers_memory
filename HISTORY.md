@@ -46,6 +46,20 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — Telegram uses scope-bound memory APIs
+
+The Python and Godot adapters expose scoped inspection and restoration,
+subject inspection and erasure, and Core attribution correction.
+Telegram reads Archive, source evidence, and task metadata inside the
+current chat's scope. Its scheduler and telemetry use engine snapshots.
+
+Personal commands use the Telegram sender's identity. A group sees only
+the status of personal inspection, with details delivered privately when
+Telegram permits. Erasure applies to engine memory. Telegram messages and
+historical host logs remain outside its scope. New updates are logged
+without message text. The host stores supported quotes as references to
+source events.
+
 ## 2026-11-16 — FileStorage supports explicit Core attribution correction
 
 The Rust API assigns or clears a fact's subject within the requested scope.

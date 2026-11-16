@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -19,6 +20,7 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,7 +46,6 @@ ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = ROOT / "prompts"
 RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 MEMORY_DIR = RUNTIME_DIR / "memory"
-ARCHIVE_DIR = MEMORY_DIR / "archive"
 LOG_DIR = RUNTIME_DIR / "logs"
 LOG_PATH = LOG_DIR / "bot.log"
 TOKEN_USAGE_PATH = LOG_DIR / "token_usage.jsonl"
@@ -335,9 +336,12 @@ class TelegramClient:
             data["offset"] = offset
         return self.call("getUpdates", data)["result"]
 
-    def send_message(self, chat_id: int, text: str) -> None:
+    def send_message(self, chat_id: int, text: str) -> list[int]:
+        message_ids = []
         for chunk in chunk_text(text, 3900):
-            self.call("sendMessage", {"chat_id": chat_id, "text": chunk})
+            result = self.call("sendMessage", {"chat_id": chat_id, "text": chunk})["result"]
+            message_ids.append(result["message_id"])
+        return message_ids
 
 
 class GeminiClient:
@@ -469,7 +473,7 @@ def main() -> None:
         "/core, /core_seed, /remember text, /core_update id text, "
         "/core_forget id, /evidence unit_id, /fidelity unit_id, /reflect, "
         "/candidates, /confirm id, /reject id, /forget_review, "
-        "/forgotten, /remember_back unit_id, /tasks, /models"
+        "/forgotten, /remember_back unit_id, /tasks, /memory_stats, /my_memory, /forget_me, /models"
     )
     offset = read_saved_offset()
     log_line(
@@ -529,7 +533,8 @@ def handle_update(
         return
 
     session_id = f"telegram_{chat_id}"
-    log_line(f"handling chat={chat_id} message_id={message.get('message_id')} text={truncate_chars(text, 160)}")
+    speaker = telegram_speaker(message)
+    log_line(f"handling chat={chat_id} message_id={message.get('message_id')}")
 
     if text in {"/start", "/help"}:
         telegram.send_message(chat_id, help_text())
@@ -540,8 +545,37 @@ def handle_update(
         return
 
     if text == "/tasks":
-        tasks = json.loads(engine.pending_tasks())
-        telegram.send_message(chat_id, format_tasks(tasks))
+        summary = json.loads(engine.inspect_scope(session_id))
+        telegram.send_message(chat_id, format_tasks(summary["operations"]))
+        return
+
+    if text == "/memory_stats":
+        summary = json.loads(engine.inspect_scope(session_id))
+        telegram.send_message(chat_id, format_memory_stats(summary))
+        return
+
+    if text in {"/my_memory", "/forget_me"}:
+        if speaker is None:
+            telegram.send_message(chat_id, "Use this command from your own Telegram account.")
+            return
+        if text == "/my_memory":
+            view = json.loads(engine.inspect_subject(session_id, speaker["id"]))
+            if chat.get("type") == "private":
+                telegram.send_message(chat_id, format_subject_memory(view))
+            else:
+                try:
+                    telegram.send_message(user["id"], format_subject_memory(view))
+                except RuntimeError:
+                    telegram.send_message(chat_id, "Start a private chat with the bot, then retry here.")
+                else:
+                    telegram.send_message(chat_id, "I sent your memory summary privately.")
+            return
+        delivery_id = update.get("update_id")
+        if type(delivery_id) is not int:
+            telegram.send_message(chat_id, "This request has no Telegram delivery ID. Send /forget_me again.")
+            return
+        report = json.loads(engine.erase_subject(session_id, speaker["id"], f"telegram_erase_{delivery_id}"))
+        telegram.send_message(chat_id, format_subject_erasure(report))
         return
 
     if text == "/vectors":
@@ -575,17 +609,18 @@ def handle_update(
         return
 
     if text == "/core_seed":
-        summary = promote_existing_archives(engine)
+        summary = promote_existing_archives(engine, session_id)
         telegram.send_message(chat_id, format_core_seed(summary))
         return
 
     if text == "/archives":
-        telegram.send_message(chat_id, format_archives())
+        telegram.send_message(chat_id, format_archives(engine, session_id))
         return
 
     if text == "/archive_last":
-        archive = last_complete_archive()
-        telegram.send_message(chat_id, format_archive_detail(archive))
+        archives = complete_archives(engine, session_id)
+        detail = inspect_archive(engine, session_id, archives[0]["archive_id"]) if archives else None
+        telegram.send_message(chat_id, format_archive_inspection(detail))
         return
 
     if text == "/archive":
@@ -594,10 +629,10 @@ def handle_update(
 
     if text.startswith("/archive "):
         archive_id = text.removeprefix("/archive").strip()
-        telegram.send_message(chat_id, format_archive_detail(find_archive(archive_id)))
+        telegram.send_message(chat_id, format_archive_inspection(inspect_archive(engine, session_id, archive_id)))
         return
 
-    if text.startswith("/remember"):
+    if text == "/remember" or text.startswith("/remember "):
         fact_text = text.removeprefix("/remember").strip()
         if not fact_text:
             telegram.send_message(chat_id, "Usage: /remember stable fact text")
@@ -609,6 +644,7 @@ def handle_update(
             text=fact_text,
             confidence=0.9,
             tags=["manual", "telegram"],
+            subject=speaker,
         )
         telegram.send_message(chat_id, f"Core fact saved: {result['fact']['text']}")
         return
@@ -672,8 +708,8 @@ def handle_update(
         if not unit_id:
             telegram.send_message(chat_id, "Usage: /evidence memory_unit_id")
             return
-        pack = json.loads(engine.build_evidence_pack(unit_id))
-        telegram.send_message(chat_id, format_evidence_pack(pack))
+        detail = json.loads(engine.inspect_memory_unit(session_id, unit_id))
+        telegram.send_message(chat_id, format_unit_inspection(detail))
         return
 
     if text.startswith("/fidelity"):
@@ -681,8 +717,8 @@ def handle_update(
         if not unit_id:
             telegram.send_message(chat_id, "Usage: /fidelity memory_unit_id")
             return
-        result = run_memory_fidelity(engine, gemini, llm_config, unit_id)
-        telegram.send_message(chat_id, format_fidelity_result(result))
+        result = run_memory_fidelity(engine, gemini, llm_config, session_id, unit_id)
+        telegram.send_message(chat_id, format_fidelity_result(result) if result else "Memory unit not found.")
         return
 
     if text == "/reflect":
@@ -707,7 +743,8 @@ def handle_update(
         return
 
     if text == "/forgotten":
-        result = json.loads(engine.list_forgotten_memory_units(session_id))
+        summary = json.loads(engine.inspect_scope(session_id))
+        result = forgotten_units(engine, session_id, summary)
         telegram.send_message(chat_id, format_forgotten_units(result))
         return
 
@@ -716,8 +753,10 @@ def handle_update(
         if not unit_id:
             telegram.send_message(chat_id, "Usage: /remember_back memory_unit_id")
             return
-        unit = json.loads(engine.remember_back(unit_id))
-        telegram.send_message(chat_id, f"Memory unit restored: {unit.get('thesis', '')}")
+        unit = json.loads(engine.remember_back_in_scope(session_id, unit_id))
+        telegram.send_message(
+            chat_id, f"Memory unit restored: {unit.get('thesis', '')}" if unit else "Memory unit not found."
+        )
         return
 
     if text.startswith("/confirm"):
@@ -754,19 +793,26 @@ def handle_update(
         telegram.send_message(chat_id, "Unknown command. Use /help for available commands.")
         return
 
+    reply_id = telegram_reply_event_id(chat_id, message)
+    quote_ids = [reply_id] if reply_id and isinstance(message.get("quote"), dict) else []
     user_ingest = ingest_chat_event(
         engine=engine,
         session_id=session_id,
         event_type="user_message",
-        source=f"telegram_user_{user.get('id', 'unknown')}",
+        source=speaker["id"] if speaker else "telegram_user_unknown",
         text=text,
         tags=event_tags(text),
         importance=importance_hint(text),
+        speaker=speaker,
+        quoted_event_ids=quote_ids,
+        reply_to_event_id=reply_id,
         payload_extra={
             "telegram_chat_id": chat_id,
             "telegram_message_id": message.get("message_id"),
         },
     )
+    stored = user_ingest["stored_event"]
+    remember_telegram_message(chat_id, message.get("message_id"), stored["event_id"])
 
     package = context_package(engine, session_id, chat_id, text)
     model = llm_config.chat_model().model
@@ -774,7 +820,8 @@ def handle_update(
     distant_recall = maybe_add_distant_memory(engine, session_id, text, package, prompt)
     if distant_recall and distant_recall.get("used"):
         prompt = chat_prompt(engine, package, text)
-    prompt_telemetry = chat_prompt_telemetry(package, session_id, prompt)
+    events_before_reply = unarchived_session_events(engine, session_id)
+    prompt_telemetry = chat_prompt_telemetry(package, session_id, prompt, events_before_reply)
     answer_response = gemini.generate_text(
         model=model,
         system_instruction=chat_system_instruction(),
@@ -784,7 +831,7 @@ def handle_update(
         telemetry=prompt_telemetry,
     )
     answer = answer_response.text
-    telegram.send_message(chat_id, answer)
+    sent_message_ids = telegram.send_message(chat_id, answer)
     assistant_ingest = ingest_chat_event(
         engine=engine,
         session_id=session_id,
@@ -793,12 +840,16 @@ def handle_update(
         text=answer,
         tags=["telegram_reply"],
         importance="normal",
+        speaker={"id": "telegram_assistant", "name": "Assistant"},
+        reply_to_event_id=stored["event_id"],
         payload_extra={
             "telegram_chat_id": chat_id,
             "model": model,
         },
     )
-    stored = user_ingest["stored_event"]
+    assistant_event = assistant_ingest["stored_event"]
+    for message_id in sent_message_ids or []:
+        remember_telegram_message(chat_id, message_id, assistant_event["event_id"])
     log_line(f"answered chat={chat_id} event={stored['event_id']} model={model}")
     print(f"chat={chat_id} event={stored['event_id']} model={model}")
 
@@ -810,6 +861,7 @@ def handle_update(
         session_id=session_id,
         package=package,
         prompt_telemetry=prompt_telemetry,
+        events=[*events_before_reply, assistant_event],
     )
 
 
@@ -874,11 +926,12 @@ def maybe_queue_token_pressure_sleep(
     session_id: str,
     package: dict[str, Any],
     prompt_telemetry: dict[str, Any],
+    events: list[dict[str, Any]],
 ) -> None:
     if has_pending_sleep_task(engine, session_id):
         return
 
-    stats = session_unarchived_token_stats(session_id)
+    stats = session_unarchived_token_stats(events)
     if stats["event_count"] <= 0:
         return
 
@@ -947,10 +1000,12 @@ def maybe_queue_scheduled_idle_sleep(
         return
 
     queued_any = False
-    for session_id in session_ids():
+    for session_id in json.loads(engine.list_local_sessions()):
+        if chat_id_from_session_id(session_id) is None:
+            continue
         if has_pending_sleep_task(engine, session_id):
             continue
-        stats = session_unarchived_token_stats(session_id)
+        stats = session_unarchived_token_stats(unarchived_session_events(engine, session_id))
         if stats["event_count"] <= 0:
             continue
         last_event_at = stats.get("last_event_at")
@@ -981,8 +1036,7 @@ def maybe_queue_scheduled_idle_sleep(
         write_sleep_scheduler_state({"last_idle_sleep_date": today, "updated_at": now_rfc3339()})
 
 
-def session_unarchived_token_stats(session_id: str) -> dict[str, Any]:
-    events = unarchived_session_events(session_id)
+def session_unarchived_token_stats(events: list[dict[str, Any]]) -> dict[str, Any]:
     transcript = sleep_events_transcript(events)
     last_event_at = None
     for event in reversed(events):
@@ -996,52 +1050,11 @@ def session_unarchived_token_stats(session_id: str) -> dict[str, Any]:
     }
 
 
-def unarchived_session_events(session_id: str) -> list[dict[str, Any]]:
-    archived_ids = archived_event_ids_for_session(session_id)
-    return [
-        event
-        for event in read_session_events(session_id)
-        if clean_string(event.get("event_id")) not in archived_ids
-    ]
-
-
-def archived_event_ids_for_session(session_id: str) -> set[str]:
-    event_ids: set[str] = set()
-    for archive in complete_archives():
-        if clean_string(archive.get("source_session_id")) != session_id:
-            continue
-        for event_id in normalize_string_list(archive.get("source_event_ids")):
-            event_ids.add(event_id)
-    return event_ids
-
-
-def read_session_events(session_id: str) -> list[dict[str, Any]]:
-    if not session_id or "/" in session_id or "\\" in session_id:
-        return []
-    events_path = MEMORY_DIR / "sessions" / session_id / "events.jsonl"
-    if not events_path.exists():
-        return []
-
-    events: list[dict[str, Any]] = []
-    try:
-        with events_path.open("r", encoding="utf-8") as file:
-            for line in file:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event, dict):
-                    events.append(event)
-    except OSError as err:
-        log_exception(f"failed to read session events {events_path}", err)
-    return events
-
-
-def session_ids() -> list[str]:
-    sessions_dir = MEMORY_DIR / "sessions"
-    if not sessions_dir.exists():
-        return []
-    return sorted(path.name for path in sessions_dir.iterdir() if path.is_dir())
+def unarchived_session_events(
+    engine: memory_engine.MemoryEngine, session_id: str
+) -> list[dict[str, Any]]:
+    session = json.loads(engine.read_unarchived_session(session_id))
+    return session.get("events", [])
 
 
 def event_datetime(event: dict[str, Any]) -> datetime | None:
@@ -1404,9 +1417,12 @@ def run_memory_fidelity(
     engine: memory_engine.MemoryEngine,
     gemini: GeminiClient,
     llm_config: HostLlmConfig,
+    scope_id: str,
     memory_unit_id: str,
-) -> dict[str, Any]:
-    start = json.loads(engine.begin_memory_fidelity_pass(memory_unit_id))
+) -> dict[str, Any] | None:
+    start = json.loads(engine.begin_memory_fidelity_pass_in_scope(scope_id, memory_unit_id))
+    if start is None:
+        return None
     response = execute_llm_request(start["request"], gemini, llm_config)
     task_id = start["pending_task"]["task_id"]
     updated = json.loads(
@@ -2000,8 +2016,8 @@ def format_memory_unit_repair_summary_for_user(summary: dict[str, Any]) -> str:
     return base
 
 
-def promote_existing_archives(engine: memory_engine.MemoryEngine) -> dict[str, int]:
-    return json.loads(engine.seed_core_from_archives())
+def promote_existing_archives(engine: memory_engine.MemoryEngine, scope_id: str) -> dict[str, int]:
+    return json.loads(engine.seed_core_from_archives_in_scope(scope_id))
 
 
 def format_core_signal_counts(summary: dict[str, Any]) -> str:
@@ -2084,6 +2100,7 @@ def upsert_core_fact(
     tags: list[str],
     source_archive_ids: list[str] | None = None,
     source_candidate_id: str | None = None,
+    subject: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": "core_fact_input.v1",
@@ -2097,6 +2114,8 @@ def upsert_core_fact(
         payload["source_archive_ids"] = source_archive_ids
     if source_candidate_id:
         payload["source_candidate_id"] = source_candidate_id
+    if subject:
+        payload["subject"] = subject
 
     return json.loads(
         engine.upsert_core_fact(
@@ -2297,6 +2316,60 @@ def friendly_error_message(err: Exception) -> str:
     return "Щось пішло не так під час обробки повідомлення. Я записала деталі в лог."
 
 
+def telegram_speaker(message: dict[str, Any]) -> dict[str, str] | None:
+    user = message.get("from")
+    if message.get("sender_chat") or not isinstance(user, dict) or user.get("is_bot"):
+        return None
+    user_id = user.get("id")
+    if type(user_id) is not int or user_id <= 0:
+        return None
+    name = " ".join(
+        part for field in ("first_name", "last_name") if (part := clean_string(user.get(field)))
+    ) or f"Telegram user {user_id}"
+    return {"id": f"telegram_user_{user_id}", "name": name}
+
+
+def telegram_reply_event_id(chat_id: int, message: dict[str, Any]) -> str | None:
+    reply = message.get("reply_to_message")
+    referenced_chat = reply.get("chat") if isinstance(reply, dict) else None
+    if not isinstance(referenced_chat, dict) or referenced_chat.get("id") != chat_id:
+        return None
+    message_id = reply.get("message_id")
+    path = STATE_DIR / "telegram_message_events.sqlite3"
+    if type(message_id) is not int or not path.is_file():
+        return None
+    try:
+        with closing(sqlite3.connect(path)) as connection:
+            row = connection.execute(
+                "SELECT event_id FROM message_events WHERE chat_id = ? AND message_id = ?",
+                (chat_id, message_id),
+            ).fetchone()
+    except sqlite3.Error as err:
+        log_exception("could not resolve Telegram reply provenance", err)
+        return None
+    return row[0] if row else None
+
+
+def remember_telegram_message(chat_id: int, message_id: Any, event_id: str) -> None:
+    if type(message_id) is not int:
+        return
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(STATE_DIR / "telegram_message_events.sqlite3")) as connection:
+            with connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS message_events (
+                           chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+                           event_id TEXT NOT NULL, PRIMARY KEY (chat_id, message_id))"""
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO message_events VALUES (?, ?, ?)",
+                    (chat_id, message_id, event_id),
+                )
+    except (OSError, sqlite3.Error) as err:
+        log_exception("could not save Telegram reply provenance", err)
+
+
 def ingest_chat_event(
     engine: memory_engine.MemoryEngine,
     session_id: str,
@@ -2306,31 +2379,43 @@ def ingest_chat_event(
     tags: list[str],
     importance: str,
     payload_extra: dict[str, Any] | None = None,
+    speaker: dict[str, str] | None = None,
+    quoted_event_ids: list[str] | None = None,
+    reply_to_event_id: str | None = None,
 ) -> dict[str, Any]:
     payload = {"text": text}
     if payload_extra:
         payload.update(payload_extra)
 
-    return json.loads(
-        engine.ingest(
-            json.dumps(
-                {
-                    "schema_version": "event.v1",
-                    "type": event_type,
-                    "source": source,
-                    "timestamp": now_rfc3339(),
-                    "session_id": session_id,
-                    "personality_scope_id": session_id,
-                    "memory_text": text,
-                    "payload": payload,
-                    "tags": tags,
-                    "theme": "telegram_conversation",
-                    "importance_hint": importance,
-                },
-                ensure_ascii=False,
-            )
-        )
-    )
+    event = {
+        "schema_version": "event.v1",
+        "type": event_type,
+        "source": source,
+        "timestamp": now_rfc3339(),
+        "session_id": session_id,
+        "personality_scope_id": session_id,
+        "memory_text": text,
+        "payload": payload,
+        "tags": tags,
+        "theme": "telegram_conversation",
+        "importance_hint": importance,
+    }
+    if speaker is not None:
+        event["speaker"] = speaker
+    if quoted_event_ids is not None:
+        event["quoted_event_ids"] = quoted_event_ids
+    if reply_to_event_id:
+        event["links"] = [{"kind": "reply_to", "target": reply_to_event_id}]
+    try:
+        return json.loads(engine.ingest(json.dumps(event, ensure_ascii=False)))
+    except ValueError as err:
+        if not quoted_event_ids or "quoted event is unavailable" not in str(err):
+            raise
+        # The host index can still point to an erased event. Keep the new
+        # author's message and drop the stale reference before saving it.
+        event["quoted_event_ids"] = []
+        event.pop("links", None)
+        return json.loads(engine.ingest(json.dumps(event, ensure_ascii=False)))
 
 
 def read_secret(label: str, env_name: str) -> str:
@@ -2875,8 +2960,10 @@ def chat_prompt(engine: memory_engine.MemoryEngine, package: dict[str, Any], use
     return engine.render_memory_view(json.dumps(package, ensure_ascii=False), user_text)
 
 
-def chat_prompt_telemetry(package: dict[str, Any], session_id: str, prompt: str) -> dict[str, Any]:
-    baseline_text = raw_chat_history_baseline_text(session_id)
+def chat_prompt_telemetry(
+    package: dict[str, Any], session_id: str, prompt: str, events: list[dict[str, Any]]
+) -> dict[str, Any]:
+    baseline_text = sleep_events_transcript(events)
     system_tokens = estimate_tokens(chat_system_instruction())
     baseline_without_compression = system_tokens + estimate_tokens(baseline_text)
     prompt_estimate = system_tokens + estimate_tokens(prompt)
@@ -2903,30 +2990,6 @@ def chat_prompt_telemetry(package: dict[str, Any], session_id: str, prompt: str)
         ),
         "context_budget_dropped_core_facts": budget.get("dropped_core_facts"),
     }
-
-
-def raw_chat_history_baseline_text(session_id: str) -> str:
-    events_path = MEMORY_DIR / "sessions" / session_id / "events.jsonl"
-    if not events_path.exists():
-        return ""
-    lines = ["Raw chronological chat history baseline without Memory Engine compression:"]
-    try:
-        with events_path.open("r", encoding="utf-8") as file:
-            for line in file:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-                text = clean_string(payload.get("text"))
-                if not text:
-                    continue
-                event_type = clean_string(event.get("type"))
-                role = "assistant" if event_type == "assistant_message" else "user"
-                lines.append(f"{role}: {text}")
-    except OSError as err:
-        log_exception(f"failed to build raw chat history baseline {events_path}", err)
-    return "\n".join(lines)
 
 
 def sleep_events_transcript(events: list[Any]) -> str:
@@ -3008,88 +3071,115 @@ def format_vector_state(state: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def archive_paths() -> list[Path]:
-    if not ARCHIVE_DIR.exists():
-        return []
-    return sorted(
-        ARCHIVE_DIR.rglob("*.json"),
-        key=lambda path: path.stat().st_mtime,
+def complete_archives(engine: memory_engine.MemoryEngine, scope_id: str) -> list[dict[str, Any]]:
+    summary = json.loads(engine.inspect_scope(scope_id))
+    return [archive for archive in summary["archives"] if archive["status"] == "complete"]
+
+
+def inspect_archive(
+    engine: memory_engine.MemoryEngine, scope_id: str, archive_id: str
+) -> dict[str, Any] | None:
+    return json.loads(engine.inspect_archive(scope_id, archive_id))
+
+
+def format_archives(engine: memory_engine.MemoryEngine, scope_id: str) -> str:
+    summary = json.loads(engine.inspect_scope(scope_id))
+    archives = [archive for archive in summary["archives"] if archive["status"] == "complete"]
+    if not archives:
+        return "No completed archives found yet. Use /sleep after a meaningful chat." + format_inspection_warnings(summary)
+
+    lines = [f"Recent archives ({min(len(archives), ARCHIVE_LIST_LIMIT)} of {len(archives)}):"]
+    for archive in archives[:ARCHIVE_LIST_LIMIT]:
+        end = archive["time_range"]["end"]
+        lines.append(f"- {archive['archive_id']}  {end}  units={len(archive['memory_units'])}")
+    lines.append("Use /archive_last or /archive archive_id to inspect details.")
+    return "\n".join(lines) + format_inspection_warnings(summary)
+
+
+def format_inspection_warnings(detail: dict[str, Any]) -> str:
+    warnings = detail.get("warnings", [])
+    if not warnings:
+        return ""
+    return "\nSome memory records could not be read or verified."
+
+
+def format_archive_inspection(detail: dict[str, Any] | None) -> str:
+    if not detail:
+        return format_archive_detail(None)
+    if not detail.get("archive"):
+        return f"Archive {detail['archive_id']} is currently unavailable." + format_inspection_warnings(detail)
+    return format_archive_detail(detail["archive"]) + format_inspection_warnings(detail)
+
+
+def format_unit_inspection(detail: dict[str, Any] | None) -> str:
+    if not detail:
+        return "Memory unit not found."
+    unit = detail["unit"]
+    lines = [
+        f"Memory unit: {unit['memory_unit_id']}",
+        f"Archive: {unit['archive_id']}",
+        f"Status: {unit['status']} / {unit['fidelity_status']}",
+    ]
+    if unit.get("thesis"):
+        lines.append(unit["thesis"])
+    for source in detail.get("sources", [])[:ARCHIVE_DETAIL_LIMIT]:
+        text = truncate_chars(clean_string(source.get("memory_text")), 220)
+        lines.append(f"- {source['timestamp']} {source['type']} {source['event_id']}: {text}")
+    return "\n".join(lines) + format_inspection_warnings(detail)
+
+
+def forgotten_units(
+    engine: memory_engine.MemoryEngine, scope_id: str, summary: dict[str, Any]
+) -> dict[str, Any]:
+    forgotten = [
+        unit
+        for archive in summary["archives"]
+        for unit in archive["memory_units"]
+        if unit["status"] == "forgotten"
+    ]
+    forgotten.sort(key=lambda unit: unit["updated_at"], reverse=True)
+    units = []
+    for summary_unit in forgotten[:ARCHIVE_DETAIL_LIMIT]:
+        detail = json.loads(engine.inspect_memory_unit(scope_id, summary_unit["memory_unit_id"]))
+        if detail and detail["unit"]["status"] == "forgotten":
+            units.append(detail["unit"])
+    return {"units": units}
+
+
+def format_memory_stats(summary: dict[str, Any]) -> str:
+    counts = summary["counts"]
+    return (
+        f"Sessions: {counts['sessions']}\n"
+        f"Completed archives: {counts['complete_archives']}\n"
+        f"Active memory units: {counts['active_memory_units']}\n"
+        f"Core facts: {counts['core_facts']}\n"
+        f"Pending operations: {sum(counts['pending_by_type'].values())}"
+        + format_inspection_warnings(summary)
     )
 
 
-def read_archive(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as err:
-        log_exception(f"failed to read archive {path}", err)
-        return None
-    return payload if isinstance(payload, dict) else None
+def format_subject_memory(view: dict[str, Any]) -> str:
+    items = view["items"]
+    lines = [f"Verified records about you: {len(items)}"]
+    for item in items[:ARCHIVE_DETAIL_LIMIT]:
+        text = truncate_chars(clean_string(item.get("text")), 350)
+        lines.append(f"- {item['timestamp']} [{item['kind']}] {text}")
+    if len(items) > ARCHIVE_DETAIL_LIMIT:
+        lines.append(f"Showing the most recent {ARCHIVE_DETAIL_LIMIT} records.")
+    if view["incomplete"]:
+        lines.append("Some older or mixed records could not be attributed reliably.")
+    return "\n".join(lines)
 
 
-def complete_archives() -> list[dict[str, Any]]:
-    archives = []
-    for path in archive_paths():
-        archive = read_archive(path)
-        if archive and archive.get("status") == "complete":
-            archives.append(archive)
-    return archives
-
-
-def user_event_ids_for_session(session_id: str) -> set[str]:
-    if not session_id or "/" in session_id or "\\" in session_id:
-        return set()
-    events_path = MEMORY_DIR / "sessions" / session_id / "events.jsonl"
-    if not events_path.exists():
-        return set()
-
-    event_ids = set()
-    try:
-        with events_path.open("r", encoding="utf-8") as file:
-            for line in file:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("type") == "user_message":
-                    event_id = clean_string(event.get("event_id"))
-                    if event_id:
-                        event_ids.add(event_id)
-    except OSError as err:
-        log_exception(f"failed to read session events {events_path}", err)
-    return event_ids
-
-
-def last_complete_archive() -> dict[str, Any] | None:
-    archives = complete_archives()
-    return archives[-1] if archives else None
-
-
-def find_archive(archive_id: str) -> dict[str, Any] | None:
-    if not archive_id:
-        return None
-    for archive in complete_archives():
-        if archive.get("archive_id") == archive_id:
-            return archive
-    return None
-
-
-def format_archives() -> str:
-    archives = complete_archives()
-    if not archives:
-        return "No completed archives found yet. Use /sleep after a meaningful chat."
-
-    lines = [f"Recent archives ({min(len(archives), ARCHIVE_LIST_LIMIT)} of {len(archives)}):"]
-    for archive in reversed(archives[-ARCHIVE_LIST_LIMIT:]):
-        archive_id = archive.get("archive_id", "")
-        lines.append(
-            f"- {archive_id} events={len(archive.get('source_event_ids', []))} "
-            f"emotional={len(archive.get('emotional_markers', []))} "
-            f"personal={len(archive.get('personal_signals', []))}"
-        )
-        gist = clean_string(archive.get("gist"))
-        if gist:
-            lines.append(f"  {truncate_chars(gist, 260)}")
-    lines.append("Use /archive_last or /archive archive_id to inspect details.")
+def format_subject_erasure(report: dict[str, Any]) -> str:
+    lines = [
+        "Memory erasure finished for your account in this chat.",
+        f"Deleted events: {report['deleted_events']}",
+        f"Deleted memory units: {report['deleted_memory_units']}",
+        f"Deleted Core facts: {report['deleted_core_facts']}",
+    ]
+    if report["incomplete"]:
+        lines.append("Some older or mixed records could not be attributed reliably. Erasure is incomplete.")
     return "\n".join(lines)
 
 
@@ -3165,32 +3255,6 @@ def format_archive_detail(archive: dict[str, Any] | None) -> str:
             if tone_summary:
                 lines.append(f"- {tone_summary}")
 
-    return "\n".join(lines)
-
-
-def format_evidence_pack(pack: dict[str, Any]) -> str:
-    lines = [
-        f"Evidence pack: {pack.get('evidence_pack_id', '')}",
-        f"Memory unit: {pack.get('memory_unit_id', '')}",
-        f"Archive: {pack.get('archive_id', '')}",
-        f"Estimated tokens: {pack.get('estimated_tokens', 0)}/{pack.get('max_estimated_tokens', 0)}",
-        f"Truncated: {bool(pack.get('truncated'))}",
-    ]
-    thesis = clean_string(pack.get("target_thesis"))
-    if thesis:
-        lines.append(f"Thesis: {thesis}")
-    evidence = clean_string(pack.get("unit_evidence"))
-    if evidence:
-        lines.append(f"Unit evidence: {truncate_chars(evidence, 260)}")
-    events = [item for item in pack.get("events", []) if isinstance(item, dict)]
-    if events:
-        lines.append("Events:")
-        for event in events[:ARCHIVE_DETAIL_LIMIT]:
-            role = clean_string(event.get("role"))
-            event_type = clean_string(event.get("type"))
-            event_id = clean_string(event.get("event_id"))
-            text = truncate_chars(clean_string(event.get("text")), 220)
-            lines.append(f"- {role} {event_type} {event_id}: {text}")
     return "\n".join(lines)
 
 
@@ -3362,10 +3426,8 @@ def format_tasks(tasks: list[dict[str, Any]]) -> str:
         return "No pending tasks."
     lines = ["Pending tasks:"]
     for task in tasks:
-        lines.append(
-            f"- {task['task_id']} {task['task_type']} {task['state']} "
-            f"role={task['role_hint']} prompt={task['prompt_id']}"
-        )
+        note = " (new review needed)" if task.get("needs_new_review") else ""
+        lines.append(f"- {task['task_id']} {task['task_type']} {task['state']}{note}")
     return "\n".join(lines)
 
 
@@ -3386,6 +3448,9 @@ def help_text() -> str:
         "/archives - list recent completed archive memories\n"
         "/archive_last - inspect the newest archive memory\n"
         "/archive id - inspect one archive memory by id\n"
+        "/memory_stats - count records in this chat's memory\n"
+        "/my_memory - inspect verified records about your account\n"
+        "/forget_me - erase memory about your account in this chat\n"
         "/recall text - search archive memory\n"
         "/vectors - show vector index status for this chat\n"
         "/vectors_on - enable local vector indexing for this chat and run backfill\n"
@@ -3397,7 +3462,7 @@ def help_text() -> str:
         "/remember text - save a stable Core fact manually\n"
         "/core_update id text - update a Core fact in this chat\n"
         "/core_forget id - deprecate a Core fact in this chat\n"
-        "/evidence memory_unit_id - inspect the source evidence pack for one memory unit\n"
+        "/evidence memory_unit_id - inspect verified sources for one memory unit\n"
         "/fidelity memory_unit_id - run the reasoning fidelity validator for one memory unit\n"
         "/reflect - analyze validated memory units and create Core candidates\n"
         "/candidates - list candidate beliefs for this chat\n"
