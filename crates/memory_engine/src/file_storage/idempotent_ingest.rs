@@ -6,6 +6,7 @@ use time::{Duration, OffsetDateTime};
 
 use super::*;
 use crate::engine::storage_digest;
+use crate::erasure::WriteGeneration;
 use crate::journal::{JournalOperationType, RecoveryPolicy};
 use crate::storage_v2::{WorkUnitCommit, WorkUnitIntent};
 use crate::types::JOURNAL_OPERATION_SCHEMA_VERSION;
@@ -20,6 +21,8 @@ pub(crate) struct JournaledIngest {
     pub(crate) host_id: String,
     pub(crate) event: StoredEvent,
     pub(crate) commit: WorkUnitCommit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) generation: Option<WriteGeneration>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -127,6 +130,7 @@ impl FileStorage {
         key: &str,
         work: WorkUnitIntent,
         event: &StoredEvent,
+        generation: WriteGeneration,
     ) -> Result<()> {
         self.require_complete_ingest(&event.session_id)?;
         // A failure may have occurred after the intent was written but before
@@ -134,7 +138,7 @@ impl FileStorage {
         if self.load_journaled_operation(key)?.is_some() {
             return Err(MemoryEngineError::OperationIncomplete);
         }
-        let operation = self.prepare_journaled_ingest(key, work, event)?;
+        let operation = self.prepare_journaled_ingest(key, work, event, Some(generation))?;
         self.begin_journaled_operation(&operation)?;
         self.finish_journaled_ingest(&operation)
     }
@@ -144,6 +148,7 @@ impl FileStorage {
         key: &str,
         work: WorkUnitIntent,
         event: &StoredEvent,
+        generation: Option<WriteGeneration>,
     ) -> Result<JournalOperation> {
         let session = &event.session_id;
         let prepared = PreparedIngest {
@@ -155,6 +160,7 @@ impl FileStorage {
                 request_digest: work.request_digest,
                 host_id: self.host_id.clone(),
                 event: event.clone(),
+                generation,
                 commit: WorkUnitCommit {
                     committed_at: event.received_at.clone(),
                     result_reference: event.event_id.clone(),
@@ -197,6 +203,7 @@ impl FileStorage {
             host_id,
             event,
             commit,
+            ..
         } = prepared.input;
         let session = &event.session_id;
         self.validate_idempotent_session_id(session)?;
@@ -260,6 +267,18 @@ impl FileStorage {
         }
         if current_marker.as_deref().is_none_or(|owner| owner == key) {
             remove_file_if_exists(&marker_path)?;
+        }
+        self.delete_journaled_operation(key)
+    }
+
+    pub(super) fn discard_ingest_intent(&self, key: &str, session: &str) -> Result<()> {
+        self.validate_idempotent_session_id(session)?;
+        let marker = self.pending_ingest_path(session);
+        match read_json::<String>(&marker) {
+            Ok(owner) if owner == key => remove_file_if_exists(&marker)?,
+            Ok(_) => {}
+            Err(MemoryEngineError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
         self.delete_journaled_operation(key)
     }
@@ -343,7 +362,9 @@ mod tests {
             request_digest: storage_digest(&event).unwrap(),
             started_at: accepted_at,
         };
-        let operation = storage.prepare_journaled_ingest(key, work, &event).unwrap();
+        let operation = storage
+            .prepare_journaled_ingest(key, work, &event, None)
+            .unwrap();
         let prepared: PreparedIngest = serde_json::from_value(operation.intent.clone()).unwrap();
         let session = &event.session_id;
         storage.begin_journaled_operation(&operation).unwrap();
@@ -383,6 +404,23 @@ mod tests {
             2
         );
         assert!(storage.ingest_receipt(key).unwrap().is_some());
+
+        let stale_key = "ingest_old_generation_fixture";
+        let generation = restarted.write_generation(session, None).unwrap();
+        let mut obsolete = operation;
+        obsolete.op_id = stale_key.into();
+        obsolete.intent["generation"] = serde_json::to_value(generation).unwrap();
+        restarted.delete_session(session).unwrap();
+        // An obsolete intent in the recovery scan must never append again.
+        storage.begin_journaled_operation(&obsolete).unwrap();
+        drop(restarted);
+        let restarted = MemoryEngine::new(storage.clone());
+        assert_eq!(restarted.recover_pending_memory_operations().unwrap(), 0);
+        assert!(storage
+            .load_journaled_operation(stale_key)
+            .unwrap()
+            .is_none());
+        assert!(storage.read_session(session).unwrap().events.is_empty());
         fs::remove_dir_all(&root).unwrap();
     }
 

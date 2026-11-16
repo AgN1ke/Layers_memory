@@ -152,6 +152,26 @@ pub trait Storage {
         ))
     }
 
+    fn discard_journaled_ingest(&self, operation_id: &str, _session_id: &str) -> Result<()> {
+        self.delete_journaled_operation(operation_id)
+    }
+
+    fn has_erasure_intent(&self, key: &str) -> Result<bool> {
+        Ok(self.load_journaled_operation(key)?.is_some())
+    }
+
+    fn read_erasure_generation(&self, _key: &str) -> Result<u64> {
+        Ok(0)
+    }
+
+    fn write_erasure_generation(&self, _key: &str, _generation: u64) -> Result<()> {
+        Ok(())
+    }
+
+    fn was_erased_task(&self, _task_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Apply an engine-prepared deletion plan idempotently. The plan is
     /// journaled before this method is called and may be replayed after a
     /// process crash.

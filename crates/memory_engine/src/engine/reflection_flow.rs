@@ -213,6 +213,8 @@ impl<S: Storage> MemoryEngine<S> {
                 result
             }
             LlmResponse::Err { kind, detail, .. } => {
+                self.ensure_manifest()?;
+                self.load_task_for_response(task_id)?;
                 self.mark_reflection_task_failed_best_effort(
                     task_id,
                     format!("{request_id} {kind:?}: {detail}"),
@@ -319,7 +321,7 @@ impl<S: Storage> MemoryEngine<S> {
         )?;
         let operation_id = format!("reflection_apply_{task_id}");
 
-        let task = self.storage.load_task(task_id)?;
+        let task = self.load_task_for_response(task_id)?;
         if task.task_type != TaskType::ReflectionAnalyze {
             return Err(MemoryEngineError::Validation(format!(
                 "task is not reflection_analyze: {task_id}"
@@ -355,7 +357,7 @@ impl<S: Storage> MemoryEngine<S> {
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_else(|| reflection_scope_id(&source_session_id, task_scope.as_deref()));
-        self.with_resource_lock(reflection_lock_key(&reflection_scope), || {
+        self.with_reflection_task_write(&task, &reflection_scope, |task| {
             if let Some(operation) = self.storage.load_journaled_operation(&operation_id)? {
                 if operation.op_type != JournalOperationType::ReflectionApply {
                     return Err(MemoryEngineError::Validation(format!(
@@ -681,6 +683,49 @@ impl<S: Storage> MemoryEngine<S> {
             };
             self.storage.begin_journaled_operation(&operation)?;
             self.execute_reflection_apply_operation_unlocked(operation)
+        })
+    }
+
+    fn with_reflection_task_write<T>(
+        &self,
+        snapshot: &PendingTask,
+        reflection_scope: &str,
+        f: impl FnOnce(PendingTask) -> Result<T>,
+    ) -> Result<T> {
+        let task_id = &snapshot.task_id;
+        let mut sessions = BTreeSet::new();
+        if let Some(session) = snapshot.inputs["source_session_id"].as_str() {
+            sessions.insert(session);
+        }
+        if let Some(inputs) = snapshot.inputs["source_session_ids"].as_array() {
+            sessions.extend(inputs.iter().filter_map(Value::as_str));
+        }
+        let mut scopes = vec![reflection_scope.to_owned()];
+        for session in &sessions {
+            scopes.push(self.with_resource_lock(session_lock_key(session), || {
+                Ok(self
+                    .storage
+                    .read_session_metadata(session)?
+                    .effective_personality_scope_id()
+                    .to_owned())
+            })?);
+        }
+        if let Some(archives) = snapshot.inputs["archives"].as_array() {
+            for archive_id in archives
+                .iter()
+                .filter_map(|archive| archive["archive_id"].as_str())
+            {
+                let archive = self
+                    .storage
+                    .read_archive_entry_by_id(archive_id)
+                    .map_err(|error| self.task_after_erasure_error(task_id, error))?;
+                scopes.push(archive.effective_personality_scope_id().to_owned());
+            }
+        }
+        self.with_memory_write_targets(&scopes, &sessions.into_iter().collect::<Vec<_>>(), || {
+            self.with_resource_lock(reflection_lock_key(reflection_scope), || {
+                f(self.load_task_for_response(task_id)?)
+            })
         })
     }
 
@@ -1039,13 +1084,27 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn recover_pending_memory_operations_unlocked(&self) -> Result<usize> {
-        let operations = self.storage.load_journaled_operations()?;
+        let mut operations = self.storage.load_journaled_operations()?;
         if let Some(warning) = operations.warnings.first() {
             return Err(MemoryEngineError::Storage(warning.note()));
         }
+        // Finish deletion plans before replaying any of the work they retire.
+        operations.items.sort_by_key(|operation| {
+            !matches!(
+                operation.op_type,
+                JournalOperationType::DeleteSession | JournalOperationType::PurgeScope
+            )
+        });
         let mut recovered = 0usize;
         for operation in operations.items {
             if operation.state == JournalState::NeedsManualReview {
+                if self
+                    .storage
+                    .load_journaled_operation(&operation.op_id)?
+                    .is_none()
+                {
+                    continue;
+                }
                 return Err(MemoryEngineError::Validation(format!(
                     "journal operation requires manual review: {} ({})",
                     operation.op_id,
@@ -1059,54 +1118,64 @@ impl<S: Storage> MemoryEngine<S> {
                 JournalOperationType::ReflectionApply => {
                     let intent: ReflectionApplyOperationIntent =
                         serde_json::from_value(operation.intent.clone())?;
-                    self.with_resource_lock(reflection_lock_key(&intent.reflection_scope), || {
-                        let current = self
-                            .storage
-                            .load_journaled_operation(&operation.op_id)?
-                            .ok_or_else(|| {
-                                MemoryEngineError::Storage(format!(
-                                    "journal operation disappeared during recovery: {}",
-                                    operation.op_id
-                                ))
-                            })?;
-                        self.execute_reflection_apply_operation_unlocked(current)
-                            .map(|_| ())
-                    })?;
-                    recovered += 1;
+                    if self
+                        .storage
+                        .load_journaled_operation(&operation.op_id)?
+                        .is_none()
+                    {
+                        continue;
+                    }
+                    let snapshot = match self.load_task_for_response(&intent.task_id) {
+                        Ok(task) => task,
+                        Err(MemoryEngineError::OperationStale) => {
+                            self.storage.delete_journaled_operation(&operation.op_id)?;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    match self.with_reflection_task_write(
+                        &snapshot,
+                        &intent.reflection_scope,
+                        |_| {
+                            let Some(current) =
+                                self.storage.load_journaled_operation(&operation.op_id)?
+                            else {
+                                return Ok(0);
+                            };
+                            self.execute_reflection_apply_operation_unlocked(current)?;
+                            Ok(1)
+                        },
+                    ) {
+                        Ok(count) => recovered += count,
+                        Err(MemoryEngineError::OperationStale) => {}
+                        Err(error) => return Err(error),
+                    }
                 }
                 JournalOperationType::CandidateReview => {
                     let intent: CandidateReviewOperationIntent =
                         serde_json::from_value(operation.intent.clone())?;
-                    self.with_resource_lock(candidate_lock_key(&intent.candidate_id), || {
-                        let current = self
-                            .storage
-                            .load_journaled_operation(&operation.op_id)?
-                            .ok_or_else(|| {
-                                MemoryEngineError::Storage(format!(
-                                    "journal operation disappeared during recovery: {}",
-                                    operation.op_id
-                                ))
-                            })?;
-                        self.execute_candidate_review_operation_unlocked(current)
-                            .map(|_| ())
-                    })?;
-                    recovered += 1;
+                    recovered +=
+                        self.with_resource_lock(candidate_lock_key(&intent.candidate_id), || {
+                            let Some(current) =
+                                self.storage.load_journaled_operation(&operation.op_id)?
+                            else {
+                                return Ok(0);
+                            };
+                            self.execute_candidate_review_operation_unlocked(current)?;
+                            Ok(1)
+                        })?;
                 }
                 JournalOperationType::Migration => {
-                    self.with_resource_lock("hypothesis_graph:migration".to_string(), || {
-                        let current = self
-                            .storage
-                            .load_journaled_operation(&operation.op_id)?
-                            .ok_or_else(|| {
-                                MemoryEngineError::Storage(format!(
-                                    "journal operation disappeared during recovery: {}",
-                                    operation.op_id
-                                ))
-                            })?;
-                        self.recover_hypothesis_graph_migration_unlocked(current)
-                            .map(|_| ())
-                    })?;
-                    recovered += 1;
+                    recovered +=
+                        self.with_resource_lock("hypothesis_graph:migration".to_string(), || {
+                            let Some(current) =
+                                self.storage.load_journaled_operation(&operation.op_id)?
+                            else {
+                                return Ok(0);
+                            };
+                            self.recover_hypothesis_graph_migration_unlocked(current)?;
+                            Ok(1)
+                        })?;
                 }
                 JournalOperationType::DeleteSession | JournalOperationType::PurgeScope => {
                     let intent: MemoryErasureOperationIntent =
@@ -1119,20 +1188,15 @@ impl<S: Storage> MemoryEngine<S> {
                             super::erasure_flow::scope_erasure_lock_key(&intent.plan.target_id)
                         }
                     };
-                    self.with_resource_lock(lock_key, || {
-                        let current = self
-                            .storage
-                            .load_journaled_operation(&operation.op_id)?
-                            .ok_or_else(|| {
-                                MemoryEngineError::Storage(format!(
-                                    "journal operation disappeared during recovery: {}",
-                                    operation.op_id
-                                ))
-                            })?;
-                        self.execute_memory_erasure_operation_unlocked(current)
-                            .map(|_| ())
+                    recovered += self.with_resource_lock(lock_key, || {
+                        let Some(current) =
+                            self.storage.load_journaled_operation(&operation.op_id)?
+                        else {
+                            return Ok(0);
+                        };
+                        self.execute_memory_erasure_operation_unlocked(current)?;
+                        Ok(1)
                     })?;
-                    recovered += 1;
                 }
                 JournalOperationType::IngestEvent => {
                     recovered += usize::from(self.recover_ingest_operation(operation)?);
@@ -2466,15 +2530,24 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn mark_reflection_task_failed_best_effort(&self, task_id: &str, detail: String) {
-        if let Ok(mut task) = self.storage.load_task(task_id) {
-            if task.task_type == TaskType::ReflectionAnalyze
-                && matches!(task.state, TaskState::Pending | TaskState::Submitted)
-            {
+        if let Ok(snapshot) = self.load_task_for_response(task_id) {
+            let scope = reflection_scope_id(
+                snapshot.inputs["source_session_id"]
+                    .as_str()
+                    .unwrap_or_default(),
+                snapshot.inputs["core_scope"].as_str(),
+            );
+            let _ = self.with_reflection_task_write(&snapshot, &scope, |mut task| {
+                if task.task_type != TaskType::ReflectionAnalyze
+                    || !matches!(task.state, TaskState::Pending | TaskState::Submitted)
+                {
+                    return Ok(());
+                }
                 task.state = TaskState::Failed;
                 task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
                 task.last_error = Some(detail);
-                let _ = self.storage.save_task(&task);
-            }
+                self.storage.save_task(&task)
+            });
         }
     }
 }

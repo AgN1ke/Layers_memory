@@ -19,6 +19,9 @@ pub enum MemoryEngineError {
     #[error("a journaled operation is incomplete")]
     OperationIncomplete,
 
+    #[error("the operation belongs to an erased memory generation")]
+    OperationStale,
+
     #[error("incompatible schema version: expected {expected}, got {actual}")]
     IncompatibleSchema { expected: String, actual: String },
 

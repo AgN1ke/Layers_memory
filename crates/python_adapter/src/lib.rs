@@ -38,7 +38,9 @@ use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use ::memory_engine::vector::{
     DeepRecallQuery, EmbedBatchResult, DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY,
 };
-use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
+use ::memory_engine::{
+    EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError, WriteGeneration,
+};
 
 pyo3::create_exception!(memory_engine, OperationConflictError, PyRuntimeError);
 pyo3::create_exception!(
@@ -47,6 +49,7 @@ pyo3::create_exception!(
     PyRuntimeError
 );
 pyo3::create_exception!(memory_engine, OperationIncompleteError, PyRuntimeError);
+pyo3::create_exception!(memory_engine, OperationStaleError, PyRuntimeError);
 
 #[pyclass(name = "MemoryEngine")]
 pub struct PyMemoryEngine {
@@ -181,6 +184,36 @@ impl PyMemoryEngine {
     ) -> PyResult<String> {
         let event: IngestEvent = parse_json(event_json, "event")?;
         let result = run_without_gil(py, || self.inner.ingest_idempotent(operation_id, event))?;
+        dump_json(&result, "idempotent ingest result")
+    }
+
+    #[pyo3(signature = (session_id, personality_scope_id=None))]
+    fn write_generation(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        personality_scope_id: Option<&str>,
+    ) -> PyResult<String> {
+        let generation = run_without_gil(py, || {
+            self.inner
+                .write_generation(session_id, personality_scope_id)
+        })?;
+        dump_json(&generation, "write generation")
+    }
+
+    fn ingest_idempotent_at_generation(
+        &self,
+        py: Python<'_>,
+        operation_id: &str,
+        event_json: &str,
+        generation_json: &str,
+    ) -> PyResult<String> {
+        let event: IngestEvent = parse_json(event_json, "event")?;
+        let generation: WriteGeneration = parse_json(generation_json, "write generation")?;
+        let result = run_without_gil(py, || {
+            self.inner
+                .ingest_idempotent_at_generation(operation_id, event, generation)
+        })?;
         dump_json(&result, "idempotent ingest result")
     }
 
@@ -673,6 +706,9 @@ fn map_err(err: MemoryEngineError) -> PyErr {
         error @ MemoryEngineError::OperationIncomplete => {
             OperationIncompleteError::new_err(error.to_string())
         }
+        error @ MemoryEngineError::OperationStale => {
+            OperationStaleError::new_err(error.to_string())
+        }
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
@@ -701,6 +737,10 @@ fn memory_engine_py(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     module.add(
         "OperationIncompleteError",
         py.get_type_bound::<OperationIncompleteError>(),
+    )?;
+    module.add(
+        "OperationStaleError",
+        py.get_type_bound::<OperationStaleError>(),
     )?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add_function(wrap_pyfunction!(build_info, module)?)?;

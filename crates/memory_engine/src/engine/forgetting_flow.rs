@@ -9,9 +9,15 @@ impl<S: Storage> MemoryEngine<S> {
         }
         self.ensure_manifest()?;
 
-        self.with_resource_lock(session_lock_key(session_id), || {
+        let scopes = self
+            .storage
+            .read_sleep_archives(session_id)?
+            .into_iter()
+            .map(|archive| archive.effective_personality_scope_id().to_owned())
+            .collect::<Vec<_>>();
+        self.with_memory_write_scopes(&scopes, session_id, || {
             let now = now_rfc3339()?;
-            let inputs = self.build_forget_review_inputs_unlocked(session_id, &now)?;
+            let inputs = self.build_forget_review_inputs_unlocked(session_id, &scopes, &now)?;
             let task = PendingTask {
                 schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
                 task_id: new_id("task")?,
@@ -71,10 +77,12 @@ impl<S: Storage> MemoryEngine<S> {
                 result
             }
             LlmResponse::Err { kind, detail, .. } => {
-                self.mark_forget_review_task_failed_best_effort(
-                    task_id,
-                    format!("{request_id} {kind:?}: {detail}"),
-                );
+                self.with_forget_task(task_id, |mut task, _| {
+                    task.state = TaskState::Failed;
+                    task.updated_at = now_rfc3339()?;
+                    task.last_error = Some(format!("{request_id} {kind:?}: {detail}"));
+                    self.storage.save_task(&task)
+                })?;
                 Err(MemoryEngineError::Validation(format!(
                     "forget_review_pass failed: {kind:?}: {detail}"
                 )))
@@ -99,23 +107,13 @@ impl<S: Storage> MemoryEngine<S> {
                 "forget review result source_session_id must not be empty".to_string(),
             ));
         }
-        self.ensure_manifest()?;
-
-        let task = self.storage.load_task(task_id)?;
-        if task.task_type != TaskType::ForgetReview {
-            return Err(MemoryEngineError::Validation(format!(
-                "task is not forget_review: {task_id}"
-            )));
-        }
-        let inputs: ForgetReviewInputs = serde_json::from_value(task.inputs.clone())?;
-        if inputs.source_session_id != result.source_session_id {
-            return Err(MemoryEngineError::Validation(format!(
-                "forget review source_session_id mismatch: task={} result={}",
-                inputs.source_session_id, result.source_session_id
-            )));
-        }
-
-        self.with_resource_lock(session_lock_key(&inputs.source_session_id), || {
+        self.with_forget_task(task_id, |mut task, inputs| {
+            if inputs.source_session_id != result.source_session_id {
+                return Err(MemoryEngineError::Validation(format!(
+                    "forget review source_session_id mismatch: task={} result={}",
+                    inputs.source_session_id, result.source_session_id
+                )));
+            }
             let now = now_rfc3339()?;
             let candidate_ids = inputs
                 .candidates
@@ -159,7 +157,6 @@ impl<S: Storage> MemoryEngine<S> {
                 }
             }
 
-            let mut task = self.storage.load_task(task_id)?;
             task.state = TaskState::Completed;
             task.updated_at = now;
             task.last_error = None;
@@ -175,6 +172,38 @@ impl<S: Storage> MemoryEngine<S> {
                 ignored,
                 changed_units,
             })
+        })
+    }
+
+    fn with_forget_task<T>(
+        &self,
+        task_id: &str,
+        f: impl FnOnce(PendingTask, ForgetReviewInputs) -> Result<T>,
+    ) -> Result<T> {
+        self.ensure_manifest()?;
+        let snapshot = self.load_task_for_response(task_id)?;
+        if snapshot.task_type != TaskType::ForgetReview {
+            return Err(MemoryEngineError::Validation(format!(
+                "task is not forget_review: {task_id}"
+            )));
+        }
+        let inputs: ForgetReviewInputs = serde_json::from_value(snapshot.inputs)?;
+        let mut scopes = Vec::new();
+        for archive_id in inputs
+            .candidates
+            .iter()
+            .map(|candidate| &candidate.archive_id)
+            .collect::<BTreeSet<_>>()
+        {
+            let archive = self
+                .storage
+                .read_archive_entry_by_id(archive_id)
+                .map_err(|error| self.task_after_erasure_error(task_id, error))?;
+            scopes.push(archive.effective_personality_scope_id().to_owned());
+        }
+        let session = inputs.source_session_id.clone();
+        self.with_memory_write_scopes(&scopes, &session, || {
+            f(self.load_task_for_response(task_id)?, inputs)
         })
     }
 
@@ -217,28 +246,32 @@ impl<S: Storage> MemoryEngine<S> {
         }
         self.ensure_manifest()?;
         let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
-        let session_id = unit.source_session_id.clone();
-        self.with_resource_lock(session_lock_key(&session_id), || {
-            let now = now_rfc3339()?;
-            let mut unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
-            if unit.status != MemoryUnitStatus::Forgotten {
-                return Err(MemoryEngineError::Validation(format!(
-                    "memory unit is not forgotten: {memory_unit_id}"
-                )));
-            }
-            unit.status = MemoryUnitStatus::ActiveArchive;
-            unit.updated_at = now.clone();
-            unit.tags.retain(|tag| tag != "forgotten");
-            merge_unique(&mut unit.tags, &["remembered_back".to_string()]);
-            self.storage.write_memory_unit(&unit)?;
-            self.rebuild_archive_units_and_compact_unlocked(&unit.archive_id, &unit, &now)?;
-            Ok(unit)
-        })
+        self.with_memory_write(
+            unit.effective_personality_scope_id(),
+            &unit.source_session_id,
+            || {
+                let now = now_rfc3339()?;
+                let mut unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
+                if unit.status != MemoryUnitStatus::Forgotten {
+                    return Err(MemoryEngineError::Validation(format!(
+                        "memory unit is not forgotten: {memory_unit_id}"
+                    )));
+                }
+                unit.status = MemoryUnitStatus::ActiveArchive;
+                unit.updated_at = now.clone();
+                unit.tags.retain(|tag| tag != "forgotten");
+                merge_unique(&mut unit.tags, &["remembered_back".to_string()]);
+                self.storage.write_memory_unit(&unit)?;
+                self.rebuild_archive_units_and_compact_unlocked(&unit.archive_id, &unit, &now)?;
+                Ok(unit)
+            },
+        )
     }
 
     pub(super) fn build_forget_review_inputs_unlocked(
         &self,
         session_id: &str,
+        scopes: &[String],
         reference_at: &str,
     ) -> Result<ForgetReviewInputs> {
         let mut candidates = Vec::new();
@@ -253,6 +286,12 @@ impl<S: Storage> MemoryEngine<S> {
             .collect::<Vec<_>>();
 
         for archive in archives {
+            if !scopes
+                .iter()
+                .any(|scope| scope == archive.effective_personality_scope_id())
+            {
+                return Err(MemoryEngineError::OperationStale);
+            }
             let age_days = archive_age_days(&archive, reference_at).unwrap_or(0.0);
             if age_days < self.options.forgetting.min_age_days.max(0.0) {
                 continue;
@@ -525,13 +564,11 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn mark_forget_review_task_failed_best_effort(&self, task_id: &str, detail: String) {
-        if let Ok(mut task) = self.storage.load_task(task_id) {
-            if task.task_type == TaskType::ForgetReview {
-                task.state = TaskState::Failed;
-                task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
-                task.last_error = Some(detail);
-                let _ = self.storage.save_task(&task);
-            }
-        }
+        let _ = self.with_forget_task(task_id, |mut task, _| {
+            task.state = TaskState::Failed;
+            task.updated_at = now_rfc3339()?;
+            task.last_error = Some(detail);
+            self.storage.save_task(&task)
+        });
     }
 }

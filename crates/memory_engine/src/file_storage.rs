@@ -1424,9 +1424,48 @@ impl Storage for FileStorage {
         self.finish_journaled_ingest(operation)
     }
 
+    fn discard_journaled_ingest(&self, operation_id: &str, session_id: &str) -> Result<()> {
+        self.discard_ingest_intent(operation_id, session_id)
+    }
+
+    fn has_erasure_intent(&self, key: &str) -> Result<bool> {
+        validate_erasure_path_component("erasure journal key", key)?;
+        Ok(self.journal_path(key).try_exists()?)
+    }
+
+    fn read_erasure_generation(&self, key: &str) -> Result<u64> {
+        validate_erasure_path_component("erasure generation key", key)?;
+        let path = self.root.join("generations").join(format!("{key}.json"));
+        match read_json(&path) {
+            Err(MemoryEngineError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(0)
+            }
+            result => result,
+        }
+    }
+
+    fn write_erasure_generation(&self, key: &str, generation: u64) -> Result<()> {
+        validate_erasure_path_component("erasure generation key", key)?;
+        atomic_write_json(
+            &self.root.join("generations").join(format!("{key}.json")),
+            &generation,
+        )
+    }
+
+    fn was_erased_task(&self, task_id: &str) -> Result<bool> {
+        Ok(erased_task_path(&self.root, task_id).try_exists()?)
+    }
+
     fn apply_memory_erasure_plan(&self, plan: &MemoryErasurePlan) -> Result<()> {
         self.ensure_layout()?;
         validate_memory_erasure_plan(plan)?;
+
+        for id in plan.task_ids.iter().chain(&plan.sleep_task_ids) {
+            let marker = erased_task_path(&self.root, id);
+            if !marker.try_exists()? {
+                atomic_write_json(&marker, &true)?;
+            }
+        }
 
         let mut core_ids_by_category = BTreeMap::<&str, HashSet<&str>>::new();
         for reference in &plan.core_facts {
@@ -1496,6 +1535,13 @@ impl Storage for FileStorage {
 
         Ok(())
     }
+}
+
+fn erased_task_path(root: &Path, task_id: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+
+    let key = format!("{:x}", Sha256::digest(task_id.as_bytes()));
+    root.join("generations").join("retired-tasks").join(key)
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {

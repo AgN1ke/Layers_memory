@@ -21,7 +21,9 @@ use memory_engine::reflection::{
     ReflectionActionsResult, ReflectionAnalyzeResult, ReflectionOpportunity,
 };
 use memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
-use memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine};
+use memory_engine::{
+    EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError, WriteGeneration,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
@@ -84,6 +86,39 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn write_generation(&self, session_id: GString, personality_scope_id: GString) -> GString {
+        self.with_engine(|engine| {
+            let scope = optional_gstring(personality_scope_id);
+            let generation = engine
+                .write_generation(&session_id.to_string(), scope.as_deref())
+                .map_err(|err| err.to_string())?;
+            dump_json(&generation, "write generation")
+        })
+    }
+
+    #[func]
+    fn ingest_idempotent_at_generation(
+        &self,
+        operation_id: GString,
+        event_json: GString,
+        generation_json: GString,
+    ) -> GString {
+        self.with_engine(|engine| {
+            let event: IngestEvent = parse_json(&event_json.to_string(), "event")?;
+            let generation: WriteGeneration =
+                parse_json(&generation_json.to_string(), "write generation")?;
+            dump_operation_result(
+                engine.ingest_idempotent_at_generation(
+                    &operation_id.to_string(),
+                    event,
+                    generation,
+                ),
+                "idempotent ingest result",
+            )
+        })
+    }
+
+    #[func]
     fn begin_sleep_run(&self, session_id: GString) -> GString {
         self.with_engine(|engine| {
             let run = engine
@@ -109,10 +144,7 @@ impl MemoryEngineGodot {
     fn next_sleep_batch(&self, run_json: GString) -> GString {
         self.with_engine(|engine| {
             let run: SleepRun = parse_json(&run_json.to_string(), "sleep run")?;
-            let step = engine
-                .next_sleep_batch(run)
-                .map_err(|err| err.to_string())?;
-            dump_json(&step, "sleep run step")
+            dump_operation_result(engine.next_sleep_batch(run), "sleep run step")
         })
     }
 
@@ -122,10 +154,7 @@ impl MemoryEngineGodot {
             let run: SleepRun = parse_json(&run_json.to_string(), "sleep run")?;
             let responses: Vec<LlmResponse> =
                 parse_json(&responses_json.to_string(), "LLM responses")?;
-            let step = engine
-                .submit_sleep_batch(run, responses)
-                .map_err(|err| err.to_string())?;
-            dump_json(&step, "sleep run step")
+            dump_operation_result(engine.submit_sleep_batch(run, responses), "sleep run step")
         })
     }
 
@@ -133,10 +162,7 @@ impl MemoryEngineGodot {
     fn finish_sleep_run(&self, run_json: GString) -> GString {
         self.with_engine(|engine| {
             let run: SleepRun = parse_json(&run_json.to_string(), "sleep run")?;
-            let outcome = engine
-                .finish_sleep_run(run)
-                .map_err(|err| err.to_string())?;
-            dump_json(&outcome, "sleep outcome")
+            dump_operation_result(engine.finish_sleep_run(run), "sleep outcome")
         })
     }
 
@@ -144,10 +170,7 @@ impl MemoryEngineGodot {
     fn finish_sleep_run_with_available(&self, run_json: GString) -> GString {
         self.with_engine(|engine| {
             let run: SleepRun = parse_json(&run_json.to_string(), "sleep run")?;
-            let outcome = engine
-                .finish_sleep_run_with_available(run)
-                .map_err(|err| err.to_string())?;
-            dump_json(&outcome, "sleep outcome")
+            dump_operation_result(engine.finish_sleep_run_with_available(run), "sleep outcome")
         })
     }
 
@@ -242,10 +265,10 @@ impl MemoryEngineGodot {
     fn submit_memory_fidelity_response(&self, task_id: GString, response_json: GString) -> GString {
         self.with_engine(|engine| {
             let response: LlmResponse = parse_json(&response_json.to_string(), "LLM response")?;
-            let unit = engine
-                .submit_memory_fidelity_response(&task_id.to_string(), response)
-                .map_err(|err| err.to_string())?;
-            dump_json(&unit, "memory unit")
+            dump_operation_result(
+                engine.submit_memory_fidelity_response(&task_id.to_string(), response),
+                "memory unit",
+            )
         })
     }
 
@@ -254,10 +277,10 @@ impl MemoryEngineGodot {
         self.with_engine(|engine| {
             let result: FidelityReview =
                 parse_json(&result_json.to_string(), "memory fidelity result")?;
-            let unit = engine
-                .resume_memory_fidelity_pass(&task_id.to_string(), result)
-                .map_err(|err| err.to_string())?;
-            dump_json(&unit, "memory unit")
+            dump_operation_result(
+                engine.resume_memory_fidelity_pass(&task_id.to_string(), result),
+                "memory unit",
+            )
         })
     }
 
@@ -326,10 +349,10 @@ impl MemoryEngineGodot {
     fn submit_reflection_response(&self, task_id: GString, response_json: GString) -> GString {
         self.with_engine(|engine| {
             let response: LlmResponse = parse_json(&response_json.to_string(), "LLM response")?;
-            let candidates = engine
-                .submit_reflection_response(&task_id.to_string(), response)
-                .map_err(|err| err.to_string())?;
-            dump_json(&candidates, "reflection candidates")
+            dump_operation_result(
+                engine.submit_reflection_response(&task_id.to_string(), response),
+                "reflection candidates",
+            )
         })
     }
 
@@ -338,10 +361,10 @@ impl MemoryEngineGodot {
         self.with_engine(|engine| {
             let result: ReflectionAnalyzeResult =
                 parse_json(&result_json.to_string(), "reflection result")?;
-            let candidates = engine
-                .resume_reflection_analysis(&task_id.to_string(), result)
-                .map_err(|err| err.to_string())?;
-            dump_json(&candidates, "reflection candidates")
+            dump_operation_result(
+                engine.resume_reflection_analysis(&task_id.to_string(), result),
+                "reflection candidates",
+            )
         })
     }
 
@@ -350,10 +373,10 @@ impl MemoryEngineGodot {
         self.with_engine(|engine| {
             let result: ReflectionActionsResult =
                 parse_json(&result_json.to_string(), "reflection actions result")?;
-            let candidates = engine
-                .resume_reflection_actions(&task_id.to_string(), result)
-                .map_err(|err| err.to_string())?;
-            dump_json(&candidates, "reflection action results")
+            dump_operation_result(
+                engine.resume_reflection_actions(&task_id.to_string(), result),
+                "reflection action results",
+            )
         })
     }
 
@@ -443,10 +466,10 @@ impl MemoryEngineGodot {
     fn submit_forget_review_response(&self, task_id: GString, response_json: GString) -> GString {
         self.with_engine(|engine| {
             let response: LlmResponse = parse_json(&response_json.to_string(), "LLM response")?;
-            let result = engine
-                .submit_forget_review_response(&task_id.to_string(), response)
-                .map_err(|err| err.to_string())?;
-            dump_json(&result, "forget review result")
+            dump_operation_result(
+                engine.submit_forget_review_response(&task_id.to_string(), response),
+                "forget review result",
+            )
         })
     }
 
@@ -455,10 +478,10 @@ impl MemoryEngineGodot {
         self.with_engine(|engine| {
             let result: ForgetReviewResult =
                 parse_json(&result_json.to_string(), "forget review result")?;
-            let applied = engine
-                .resume_forget_review(&task_id.to_string(), result)
-                .map_err(|err| err.to_string())?;
-            dump_json(&applied, "forget review result")
+            dump_operation_result(
+                engine.resume_forget_review(&task_id.to_string(), result),
+                "forget review result",
+            )
         })
     }
 
@@ -487,10 +510,10 @@ impl MemoryEngineGodot {
         self.with_engine(|engine| {
             let result: SleepCompressionResult =
                 parse_json(&result_json.to_string(), "sleep compression result")?;
-            let archive = engine
-                .resume_sleep_compression(&task_id.to_string(), result)
-                .map_err(|err| err.to_string())?;
-            dump_json(&archive, "archive entry")
+            dump_operation_result(
+                engine.resume_sleep_compression(&task_id.to_string(), result),
+                "archive entry",
+            )
         })
     }
 
@@ -499,10 +522,10 @@ impl MemoryEngineGodot {
         self.with_engine(|engine| {
             let result: MemoryUnitPassResult =
                 parse_json(&result_json.to_string(), "memory unit pass result")?;
-            let archive = engine
-                .resume_memory_unit_pass(&task_id.to_string(), result)
-                .map_err(|err| err.to_string())?;
-            dump_json(&archive, "archive entry")
+            dump_operation_result(
+                engine.resume_memory_unit_pass(&task_id.to_string(), result),
+                "archive entry",
+            )
         })
     }
 
@@ -567,6 +590,21 @@ fn normalized_json(raw: &str, label: &str) -> Result<Value, String> {
 
 fn dump_json<T: Serialize>(value: &T, label: &str) -> Result<String, String> {
     serde_json::to_string(value).map_err(|err| format!("failed to serialize {label}: {err}"))
+}
+
+fn dump_operation_result<T: Serialize>(
+    result: memory_engine::Result<T>,
+    label: &str,
+) -> Result<String, String> {
+    match result {
+        Ok(value) => dump_json(&value, label),
+        Err(error @ MemoryEngineError::OperationStale) => Ok(serde_json::json!({
+            "code": "operation_stale",
+            "error": error.to_string(),
+        })
+        .to_string()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn normalize_godot_numbers(value: &mut Value) {

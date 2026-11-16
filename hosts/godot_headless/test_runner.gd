@@ -43,6 +43,10 @@ func _init() -> void:
     if failed:
         return
 
+    _assert_guarded_ingest(runtime_dir.path_join("memory"))
+    if failed:
+        return
+
     _send_user_message("Мене звати Микита.")
     if failed:
         return
@@ -112,6 +116,37 @@ func _assert_idempotent_ingest(memory_dir: String) -> void:
     var replay: Variant = _loads(engine.ingest_idempotent("retry-1", event))
     if not (replay is Dictionary) or replay.get("already_applied") != true or replay.get("event") != first["event"]:
         _fail("idempotent ingest must return the original event after reopening")
+
+func _assert_guarded_ingest(memory_dir: String) -> void:
+    var session := "godot_guarded_ingest"
+    var generation := engine.write_generation(session, "")
+    var prior: Variant = _loads(generation)
+    if not (prior is Dictionary) or prior.get("schema_version") != "write_generation.v1":
+        _fail("write_generation must return a generation snapshot")
+        return
+    var erased: Variant = _loads(engine.delete_session(session))
+    if not (erased is Dictionary) or erased.has("error"):
+        _fail("delete_session must erase the captured generation")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    var event := _dumps({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "godot_user",
+        "timestamp": "2026-11-16T12:00:00Z",
+        "session_id": session,
+        "payload": {"text": "Затримана подія."},
+    })
+    var stale: Variant = _loads(engine.ingest_idempotent_at_generation("guarded-old", event, generation))
+    if not (stale is Dictionary) or stale.get("code") != "operation_stale":
+        _fail("guarded ingest must refuse an event from before erasure")
+        return
+    var current := engine.write_generation(session, "")
+    var accepted: Variant = _loads(engine.ingest_idempotent_at_generation("guarded-fresh", event, current))
+    if not (accepted is Dictionary) or accepted.get("already_applied") != false:
+        _fail("guarded ingest must accept a fresh event after erasure")
 
 func _send_user_message(text: String) -> String:
     turn_index += 1

@@ -15,7 +15,12 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         let session_id = event.session_id.clone();
-        self.with_resource_lock(session_lock_key(&session_id), || {
+        let scope = event
+            .personality_scope_id
+            .as_deref()
+            .unwrap_or(&session_id)
+            .to_owned();
+        self.with_memory_write(&scope, &session_id, || {
             let stored = self.prepare_ingest_event(event)?;
 
             self.storage.append_event(&stored.session_id, &stored)?;

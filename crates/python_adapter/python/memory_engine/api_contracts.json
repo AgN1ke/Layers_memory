@@ -17,6 +17,7 @@
   "MemoryEngine.flush_recall_stats": {"request": {}, "result": "int"},
   "MemoryEngine.ingest": {"request": {"event_json": "IngestEvent"}, "result": "IngestResult"},
   "MemoryEngine.ingest_idempotent": {"request": {"event_json": "IngestEvent"}, "result": "IdempotentIngestResult"},
+  "MemoryEngine.ingest_idempotent_at_generation": {"request": {"event_json": "IngestEvent", "generation_json": "WriteGeneration"}, "result": "IdempotentIngestResult"},
   "MemoryEngine.list_candidates": {"request": {}, "result": "list[CandidateBelief]"},
   "MemoryEngine.list_forgotten_memory_units": {"request": {}, "result": "ForgottenMemoryUnits"},
   "MemoryEngine.migrate_hypothesis_graph": {"request": {}, "result": "HypothesisGraphMigrationResult"},
@@ -55,5 +56,6 @@
   "MemoryEngine.submit_sleep_batch": {"request": {"run_json": "SleepRun", "responses_json": "list[LlmResponse]"}, "result": "SleepRunStep"},
   "MemoryEngine.upsert_core_fact": {"request": {"fact_json": "CoreFactInput"}, "result": "CoreFactUpsertResult"},
   "MemoryEngine.vector_state": {"request": {}, "result": "VectorScopeState"},
+  "MemoryEngine.write_generation": {"request": {}, "result": "WriteGeneration"},
   "build_info": {"request": {}, "result": "BuildInfo"}
 }

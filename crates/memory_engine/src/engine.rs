@@ -107,6 +107,7 @@ mod core_policy;
 mod erasure_flow;
 mod fidelity_flow;
 mod forgetting_flow;
+mod generation;
 mod hypothesis_flow;
 mod idempotent_ingest;
 mod options;

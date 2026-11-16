@@ -78,6 +78,14 @@ returns host work. The explicit recovery method is available for startup
 diagnostics and returns only the number of `started` journal operations it
 completed; it does not call a provider.
 
+For a queued write, capture `write_generation(session_id, personality_scope_id)`
+when accepting the event. Keep the returned JSON together with the event JSON
+and its stable operation ID. Pass all three to
+`ingest_idempotent_at_generation(operation_id, event_json, generation_json)`
+on delivery and retry. `OperationStaleError` means the session or scope was
+erased since capture. Treat that result as terminal for the queued event.
+Omit `personality_scope_id` when an event uses its session ID as its scope.
+
 Stage 2 recall tuning is optional and remains Rust-core policy:
 
 ```python

@@ -46,6 +46,14 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage fences delayed writes across erasure
+
+Local hosts can capture a scope and session generation before queuing an
+event. The protected ingest API rejects stale generations even after an
+empty erasure and restart. Erasure recovery repeats the same generation
+transition, and responses for erased task IDs return a stale operation
+error. The existing ingest calls keep their delivery-time semantics.
+
 ## 2026-11-16 — FileStorage checks archive coverage before resuming Sleep
 
 Sleep recovery checks completed Archives before returning older runs to the

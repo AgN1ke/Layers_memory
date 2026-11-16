@@ -9,6 +9,35 @@ pub enum MemoryErasureKind {
     PurgeScope,
 }
 
+/// Local admission stamp. Capture it before queuing work and reuse it on retry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteGeneration {
+    pub schema_version: String,
+    pub scope_key: String,
+    pub session_key: String,
+    pub scope_generation: u64,
+    pub session_generation: u64,
+}
+
+pub(crate) const WRITE_GENERATION_SCHEMA: &str = "write_generation.v1";
+
+pub(crate) fn session_generation_id(session_id: &str) -> std::borrow::Cow<'_, str> {
+    #[cfg(windows)]
+    return std::borrow::Cow::Owned(session_id.to_lowercase());
+    #[cfg(not(windows))]
+    std::borrow::Cow::Borrowed(session_id)
+}
+
+pub(crate) fn erasure_key(kind: MemoryErasureKind, target: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let (prefix, target) = match kind {
+        MemoryErasureKind::DeleteSession => ("session", session_generation_id(target)),
+        MemoryErasureKind::PurgeScope => ("scope", target.into()),
+    };
+    format!("{prefix}_{:x}", Sha256::digest(target.as_bytes()))
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryErasureCounts {
     pub sessions: usize,

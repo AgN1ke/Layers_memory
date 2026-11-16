@@ -3459,6 +3459,9 @@
               "payload": {
                 "type": "object"
               },
+              "personality_scope_id": {
+                "type": "string"
+              },
               "processing_mode": {
                 "type": "string"
               },
@@ -3531,6 +3534,9 @@
               "type": "integer"
             },
             "host_id": {
+              "type": "string"
+            },
+            "personality_scope_id": {
               "type": "string"
             },
             "schema_version": {
@@ -4971,6 +4977,37 @@
         "schema_version",
         "scope",
         "status"
+      ],
+      "additionalProperties": false
+    },
+    "WriteGeneration": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "write_generation.v1"
+          ]
+        },
+        "scope_generation": {
+          "type": "integer"
+        },
+        "scope_key": {
+          "type": "string"
+        },
+        "session_generation": {
+          "type": "integer"
+        },
+        "session_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "scope_generation",
+        "scope_key",
+        "session_generation",
+        "session_key"
       ],
       "additionalProperties": false
     },

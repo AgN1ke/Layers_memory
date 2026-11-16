@@ -27,10 +27,11 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
-        let session_id = unit.source_session_id.clone();
-        self.with_resource_lock(session_lock_key(&session_id), || {
-            self.begin_memory_fidelity_pass_unlocked(memory_unit_id)
-        })
+        self.with_memory_write(
+            unit.effective_personality_scope_id(),
+            &unit.source_session_id,
+            || self.begin_memory_fidelity_pass_unlocked(memory_unit_id),
+        )
     }
 
     pub(super) fn begin_memory_fidelity_pass_unlocked(
@@ -93,10 +94,12 @@ impl<S: Storage> MemoryEngine<S> {
                 result
             }
             LlmResponse::Err { kind, detail, .. } => {
-                self.mark_memory_fidelity_task_failed_best_effort(
-                    task_id,
-                    format!("{request_id} {kind:?}: {detail}"),
-                );
+                self.with_fidelity_task(task_id, |mut task| {
+                    task.state = TaskState::Failed;
+                    task.updated_at = now_rfc3339()?;
+                    task.last_error = Some(format!("{request_id} {kind:?}: {detail}"));
+                    self.storage.save_task(&task)
+                })?;
                 Err(MemoryEngineError::Validation(format!(
                     "memory_fidelity_pass failed: {kind:?}: {detail}"
                 )))
@@ -119,43 +122,14 @@ impl<S: Storage> MemoryEngine<S> {
         review.revised_thesis = normalize_optional_string(review.revised_thesis.as_deref());
         review.missing_detail = normalize_optional_string(review.missing_detail.as_deref());
         review.validate_basic()?;
-        self.ensure_manifest()?;
-
-        let task = self.storage.load_task(task_id)?;
-        if task.task_type != TaskType::MemoryFidelityPass {
-            return Err(MemoryEngineError::Validation(format!(
-                "task is not memory_fidelity_pass: {task_id}"
-            )));
-        }
-
-        let task_memory_unit_id = task
-            .inputs
-            .get("memory_unit_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                MemoryEngineError::Validation(format!(
-                    "memory_fidelity_pass task has no memory_unit_id: {task_id}"
-                ))
-            })?;
-        if task_memory_unit_id != review.memory_unit_id {
-            return Err(MemoryEngineError::Validation(format!(
-                "memory_fidelity_pass memory_unit_id mismatch: task={task_memory_unit_id} result={}",
-                review.memory_unit_id
-            )));
-        }
-
-        let session_id = task
-            .inputs
-            .get("source_session_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                MemoryEngineError::Validation(format!(
-                    "memory_fidelity_pass task has no source_session_id: {task_id}"
-                ))
-            })?
-            .to_string();
-
-        self.with_resource_lock(session_lock_key(&session_id), || {
+        self.with_fidelity_task(task_id, |mut task| {
+            let task_memory_unit_id = fidelity_task_unit_id(&task)?;
+            if task_memory_unit_id != review.memory_unit_id {
+                return Err(MemoryEngineError::Validation(format!(
+                    "memory_fidelity_pass memory_unit_id mismatch: task={task_memory_unit_id} result={}",
+                    review.memory_unit_id
+                )));
+            }
             let now = now_rfc3339()?;
             let mut unit = self
                 .storage
@@ -188,7 +162,6 @@ impl<S: Storage> MemoryEngine<S> {
             self.storage
                 .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
 
-            let mut task = self.storage.load_task(task_id)?;
             task.state = TaskState::Completed;
             task.updated_at = now;
             task.last_error = None;
@@ -196,6 +169,24 @@ impl<S: Storage> MemoryEngine<S> {
 
             Ok(unit)
         })
+    }
+
+    fn with_fidelity_task<T>(
+        &self,
+        task_id: &str,
+        f: impl FnOnce(PendingTask) -> Result<T>,
+    ) -> Result<T> {
+        self.ensure_manifest()?;
+        let task = self.load_task_for_response(task_id)?;
+        let unit = self
+            .storage
+            .read_memory_unit_by_id(fidelity_task_unit_id(&task)?)
+            .map_err(|error| self.task_after_erasure_error(task_id, error))?;
+        self.with_memory_write(
+            unit.effective_personality_scope_id(),
+            &unit.source_session_id,
+            || f(self.load_task_for_response(task_id)?),
+        )
     }
 
     pub(super) fn build_evidence_pack_unlocked(
@@ -280,13 +271,26 @@ impl<S: Storage> MemoryEngine<S> {
         task_id: &str,
         detail: String,
     ) {
-        if let Ok(mut task) = self.storage.load_task(task_id) {
-            if task.task_type == TaskType::MemoryFidelityPass {
-                task.state = TaskState::Failed;
-                task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
-                task.last_error = Some(detail);
-                let _ = self.storage.save_task(&task);
-            }
-        }
+        let _ = self.with_fidelity_task(task_id, |mut task| {
+            task.state = TaskState::Failed;
+            task.updated_at = now_rfc3339()?;
+            task.last_error = Some(detail);
+            self.storage.save_task(&task)
+        });
     }
+}
+
+fn fidelity_task_unit_id(task: &PendingTask) -> Result<&str> {
+    if task.task_type != TaskType::MemoryFidelityPass {
+        return Err(MemoryEngineError::Validation(format!(
+            "task is not memory_fidelity_pass: {}",
+            task.task_id
+        )));
+    }
+    task.inputs["memory_unit_id"].as_str().ok_or_else(|| {
+        MemoryEngineError::Validation(format!(
+            "memory_fidelity_pass task has no memory_unit_id: {}",
+            task.task_id
+        ))
+    })
 }

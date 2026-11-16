@@ -28,7 +28,7 @@ impl<S: Storage> MemoryEngine<S> {
     ) -> Result<VectorScopeState> {
         self.ensure_manifest()?;
         validate_vector_scope(scope)?;
-        self.with_resource_lock(vectors_lock_key(scope), || {
+        self.with_vector_write(scope, || {
             if !enabled {
                 // Vectors are derived data. In v1, disabling a scope removes
                 // the catalog so disabled truly means no vector reads.
@@ -58,7 +58,7 @@ impl<S: Storage> MemoryEngine<S> {
     pub fn rebuild_vectors(&self, scope: &str) -> Result<VectorScopeState> {
         self.ensure_manifest()?;
         validate_vector_scope(scope)?;
-        self.with_resource_lock(vectors_lock_key(scope), || {
+        self.with_vector_write(scope, || {
             self.storage.purge_vector_scope(scope)?;
             let now = now_rfc3339()?;
             let mut root_manifest = self.storage.read_manifest()?;
@@ -79,9 +79,7 @@ impl<S: Storage> MemoryEngine<S> {
     pub fn pending_embedding_backfill(&self, scope: &str) -> Result<Vec<LlmRequest>> {
         self.ensure_manifest()?;
         validate_vector_scope(scope)?;
-        self.with_resource_lock(vectors_lock_key(scope), || {
-            self.pending_embedding_backfill_unlocked(scope)
-        })
+        self.with_vector_write(scope, || self.pending_embedding_backfill_unlocked(scope))
     }
 
     pub fn resume_compute_embedding(
@@ -97,7 +95,7 @@ impl<S: Storage> MemoryEngine<S> {
         }
         self.ensure_manifest()?;
 
-        let task = self.storage.load_task(task_id)?;
+        let task = self.load_task_for_response(task_id)?;
         if task.task_type != TaskType::ComputeEmbedding {
             return Err(MemoryEngineError::Validation(format!(
                 "task is not compute_embedding: {task_id}"
@@ -117,7 +115,8 @@ impl<S: Storage> MemoryEngine<S> {
             )));
         }
 
-        self.with_resource_lock(vectors_lock_key(&inputs.scope), || {
+        self.with_vector_write(&inputs.scope, || {
+            let mut task = self.load_task_for_response(task_id)?;
             let now = now_rfc3339()?;
             let Some(mut index) = self.storage.read_vector_index(&inputs.scope)? else {
                 return Err(MemoryEngineError::Validation(format!(
@@ -194,7 +193,6 @@ impl<S: Storage> MemoryEngine<S> {
             self.storage
                 .append_vector_records(&inputs.scope, &index.manifest, &records)?;
 
-            let mut task = self.storage.load_task(task_id)?;
             task.state = TaskState::Completed;
             task.updated_at = now.clone();
             task.last_error = None;
@@ -217,6 +215,12 @@ impl<S: Storage> MemoryEngine<S> {
             }
 
             Ok(records.len())
+        })
+    }
+
+    fn with_vector_write<T>(&self, scope: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.with_scope_memory_write(scope, || {
+            self.with_resource_lock(vectors_lock_key(scope), f)
         })
     }
 

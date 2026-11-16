@@ -279,6 +279,33 @@ def test_idempotent_ingest_errors_are_distinct_runtime_errors(tmp_path):
     assert issubclass(memory_engine.OperationIncompleteError, RuntimeError)
 
 
+@pytest.mark.parametrize("erase", ["session", "scope"])
+def test_guarded_ingest_rejects_prior_generation_after_reopen(tmp_path, engine_factory, erase):
+    session_id = "queued_session"
+    scope_id = "queued_scope"
+    event_json = _ingest_event_json(session_id, "Queued before erasure.", personality_scope_id=scope_id)
+    engine = engine_factory(tmp_path, host_id="pytest")
+    generation = engine.write_generation(session_id, scope_id)
+    if erase == "session":
+        engine.delete_session(session_id)
+    else:
+        engine.purge_scope(scope_id)
+    del engine
+
+    reopened = engine_factory(tmp_path, host_id="pytest")
+    with pytest.raises(memory_engine.OperationStaleError) as stale:
+        reopened.ingest_idempotent_at_generation("delayed-1", event_json, generation)
+    assert isinstance(stale.value, RuntimeError)
+
+    current = reopened.write_generation(session_id, scope_id)
+    assert current != generation
+    accepted = json.loads(reopened.ingest_idempotent_at_generation("fresh-1", event_json, current))
+    replay = json.loads(reopened.ingest_idempotent_at_generation("fresh-1", event_json, current))
+    assert accepted["already_applied"] is False
+    assert replay == {**accepted, "already_applied": True}
+    assert json.loads(reopened.read_session(session_id))["metadata"]["event_count"] == 1
+
+
 def test_read_session_returns_stored_events(engine: memory_engine.MemoryEngine):
     _ingest(engine, "session_recent", "Розкажи про МіГ-15.")
     _ingest(

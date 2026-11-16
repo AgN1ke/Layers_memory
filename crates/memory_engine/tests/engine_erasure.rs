@@ -1,4 +1,4 @@
-use memory_engine::archive::ArchiveStatus;
+use memory_engine::archive::{ArchiveStatus, FidelityReview, FidelityStatus};
 use memory_engine::core_store::{
     CandidateBelief, CandidateStatus, CoreContextRequest, PromotionChecks,
 };
@@ -10,7 +10,7 @@ use memory_engine::event::IngestEvent;
 use memory_engine::journal::{
     JournalOperation, JournalOperationType, JournalState, RecoveryPolicy,
 };
-use memory_engine::llm::{LlmResponse, SleepOutcome};
+use memory_engine::llm::{LlmErrorKind, LlmResponse, SleepOutcome};
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::storage::Storage;
 use memory_engine::types::{
@@ -19,7 +19,7 @@ use memory_engine::types::{
     MEMORY_ERASURE_PLAN_SCHEMA_VERSION, MEMORY_UNITS_RESULT_SCHEMA_VERSION,
     RECALL_QUERY_SCHEMA_VERSION,
 };
-use memory_engine::{FileStorage, MemoryEngine};
+use memory_engine::{FileStorage, MemoryEngine, MemoryEngineError};
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -68,6 +68,79 @@ fn delete_session_removes_conversation_records_but_preserves_scope_memory() {
         .delete_session("chat_old")
         .expect("repeat delete session");
     assert!(repeated.deleted.is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn erased_session_rejects_late_workflow_results_after_reopen() {
+    let root = unique_temp_dir("late_task_after_erasure");
+    let storage = FileStorage::with_host_id(&root, "erasure_test");
+    let engine = MemoryEngine::new(storage.clone());
+    let seed = seed_scope_memory(
+        &engine,
+        "chat_erased",
+        "owner_scope",
+        "Alice lives in Kyiv.",
+    );
+    let fidelity = engine
+        .begin_memory_fidelity_pass(&seed.memory_unit_id)
+        .unwrap();
+    let reflection = engine
+        .begin_reflection_analysis("chat_erased", Some("owner_scope".into()))
+        .unwrap();
+    let unit = storage
+        .read_memory_unit_by_id(&seed.memory_unit_id)
+        .unwrap();
+    ingest_text(
+        &engine,
+        "chat_erased",
+        "owner_scope",
+        "A second event awaits Sleep.",
+    );
+    let run = engine.begin_sleep_run("chat_erased").unwrap();
+    let step = engine.next_sleep_batch(run).unwrap();
+    engine.delete_session("chat_erased").unwrap();
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    assert!(matches!(
+        reopened.submit_sleep_batch(step.run, Vec::new()),
+        Err(MemoryEngineError::OperationStale)
+    ));
+    assert!(matches!(
+        reopened.resume_memory_fidelity_pass(
+            &fidelity.pending_task.task_id,
+            FidelityReview {
+                schema_version: "fidelity_review.v1".into(),
+                memory_unit_id: unit.memory_unit_id.clone(),
+                archive_id: unit.archive_id.clone(),
+                status: FidelityStatus::Valid,
+                confidence: 0.95,
+                explanation: "The original evidence supports the thesis.".into(),
+                revised_thesis: None,
+                missing_detail: None,
+            }
+        ),
+        Err(MemoryEngineError::OperationStale)
+    ));
+    assert_eq!(
+        storage
+            .read_memory_unit_by_id(&seed.memory_unit_id)
+            .unwrap(),
+        unit
+    );
+    assert!(matches!(
+        reopened.submit_reflection_response(
+            &reflection.pending_task.task_id,
+            LlmResponse::Err {
+                request_id: reflection.request.request_id,
+                kind: LlmErrorKind::Transport,
+                detail: "late reflection result".into(),
+            }
+        ),
+        Err(MemoryEngineError::OperationStale)
+    ));
+    assert_empty_session(&storage, "chat_erased");
     fs::remove_dir_all(root).ok();
 }
 
@@ -195,6 +268,9 @@ fn recovery_replays_a_partially_applied_scope_purge() {
         "recover_scope",
         "Alice lives in Kyiv.",
     );
+    let original_generation = engine
+        .write_generation("recover_chat", Some("recover_scope"))
+        .unwrap();
     let core_fact = storage
         .read_core_store_categories()
         .expect("core before recovery")
@@ -318,6 +394,13 @@ fn recovery_replays_a_partially_applied_scope_purge() {
             .recover_pending_memory_operations()
             .expect("recover pending purge"),
         1
+    );
+    let recovered_generation = restarted
+        .write_generation("recover_chat", Some("recover_scope"))
+        .unwrap();
+    assert_eq!(
+        recovered_generation.scope_generation,
+        original_generation.scope_generation + 1
     );
     assert!(storage.read_archive_entry_by_id(&seed.archive_id).is_err());
     assert!(storage

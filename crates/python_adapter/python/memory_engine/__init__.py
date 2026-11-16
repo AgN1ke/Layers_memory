@@ -3,6 +3,7 @@ from .memory_engine import (
     OperationConflictError,
     OperationIncompleteError,
     OperationResultUnavailableError,
+    OperationStaleError,
     __version__,
     build_info,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "OperationConflictError",
     "OperationIncompleteError",
     "OperationResultUnavailableError",
+    "OperationStaleError",
     "__version__",
     "build_info",
 ]

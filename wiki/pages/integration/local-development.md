@@ -545,6 +545,11 @@ Workflow [Python wheels](../../../.github/workflows/python-wheels.yml)
   [Контракт FileStorage](../foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage).
   У Python конфлікт, недоступний результат і незавершена операція мають
   окремі типи помилок зі спільним базовим типом `RuntimeError`.
+- Для події, яку хост ставить у чергу, викличте `write_generation` перед
+  постановкою й збережіть відповідь разом із подією. Передайте її у
+  `ingest_idempotent_at_generation` і використовуйте ту саму на кожному
+  повторі. Якщо область або сесію вже стерто, зупиніть доставку цієї події
+  після `OperationStaleError` (`operation_stale` у Godot).
 - Якщо `core_context_package` повертає в `notes` `ignored unknown request
   field: "/subject_id"`, запит оброблено без фільтра за людиною. Для перегляду
   чи стирання саме однієї людини потрібен API етапу H3.

@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | FileStorage generations for erasure
+
+Recorded the [generation contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and the [host delivery rules](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю).
+Updated the integration plan and roadmap.
+
 ## [2026-11-16] update | FileStorage recovery and concurrent reads
 
 Updated the [integrator guide](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю)
