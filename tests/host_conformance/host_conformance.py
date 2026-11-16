@@ -657,11 +657,11 @@ class DirectHostDriver:
         return sleep_events_from_request(request, run)
 
     def _submit_valid_fidelity(self, request: dict[str, Any]) -> None:
-        unit = request.get("prompt_inputs", {}).get("memory_unit", {})
-        memory_unit_id = unit.get("memory_unit_id")
-        archive_id = unit.get("archive_id")
+        evidence = request["prompt_inputs"]["evidence_pack"]
+        memory_unit_id = evidence.get("memory_unit_id")
+        archive_id = evidence.get("archive_id")
         if not isinstance(memory_unit_id, str) or not isinstance(archive_id, str):
-            return
+            raise ConformanceError("Fidelity request did not identify its memory unit and archive")
         response = {
             "status": "ok",
             "request_id": request["request_id"],
@@ -679,6 +679,94 @@ class DirectHostDriver:
             ),
         }
         self.engine.submit_memory_fidelity_response(request["task_id"], dumps(response))
+
+
+class ReflectionHostDriver(DirectHostDriver):
+    def _response_for_request(self, run: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+        prompt_id = request["prompt_id"]
+        events = [
+            event for event in self._sleep_events(run, request)
+            if event_kind(event) == "user_message"
+        ]
+        if len(events) != 1:
+            raise ConformanceError("Expected one new source event per reflection cycle")
+        source = events[0]
+        text = event_text(source)
+        if prompt_id == "sleep_consolidator":
+            response_text = f"GIST: {text}\n\n{text}"
+        elif prompt_id == "memory_unit_pass":
+            response_text = dumps({
+                "schema_version": "memory_units_result.v1",
+                "archive_id": run["archive_id"],
+                "memory_units": [{
+                    "thesis": text,
+                    "source_event_ids": [event_id(source)],
+                    "evidence": text,
+                    "tags": ["reflection_conformance"],
+                    "weight": 0.95,
+                }],
+            })
+        else:
+            payload = {
+                "sleep_emotional_pass": {"emotional_markers": []},
+                "sleep_topic_thread_pass": {"topic_thread": []},
+                "sleep_personal_signal_pass": {"personal_signals": []},
+                "sleep_relational_pass": {"relational_tone": None},
+            }.get(prompt_id)
+            if payload is None:
+                raise ConformanceError(f"Unexpected Sleep request {prompt_id!r}")
+            response_text = dumps(payload)
+        return {"status": "ok", "request_id": request["request_id"], "text": response_text}
+
+    def start_cycle(self, text: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        self.turn_index += 1
+        stored = self._ingest("user_message", "conformance_user", text, ["reflection_conformance"])
+        outcome = self.run_sleep()
+        archive = outcome["archive_entry"]
+        if len(outcome.get("fidelity_requests", [])) != 1:
+            raise ConformanceError("Expected one fidelity review per cycle")
+        started = loads(self.engine.begin_reflection_if_due(SESSION_ID, CORE_SCOPE, "after_sleep"))
+        start = started.get("reflection")
+        if start is None or started["status"]["reason"] != "critical_memory":
+            raise ConformanceError(
+                f"Validated critical evidence did not trigger reflection: {started['status']}"
+            )
+        inputs = start["request"]["prompt_inputs"]["reflection_task"]
+        trigger_ids = inputs["new_memory_unit_ids"]
+        if len(trigger_ids) != 1 or trigger_ids[0] not in {
+            unit["memory_unit_id"] for unit in archive["memory_units"]
+        }:
+            raise ConformanceError("Reflection did not receive exactly the new archive's evidence")
+        if archive["source_event_ids"] != [stored["stored_event"]["event_id"]]:
+            raise ConformanceError("Reflection cycle did not archive the independent source")
+        return archive, start, inputs
+
+    def reopen_engine(self) -> None:
+        self.engine = memory_engine.MemoryEngine(
+            str(self.runtime_dir), host_id="host_conformance_direct"
+        )
+
+    def apply_reflection(
+        self,
+        start: dict[str, Any],
+        *,
+        actions: list[dict[str, Any]],
+        no_insight: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        response = {
+            "status": "ok",
+            "request_id": start["request"]["request_id"],
+            "text": dumps({
+                "schema_version": "reflection_actions_result.v1",
+                "source_session_id": SESSION_ID,
+                "core_scope": CORE_SCOPE,
+                "actions": actions,
+                "no_insight": no_insight,
+            }),
+        }
+        return loads(self.engine.submit_reflection_response(
+            start["pending_task"]["task_id"], dumps(response)
+        ))
 
 
 class EnglishDirectHostDriver(DirectHostDriver):
@@ -961,6 +1049,140 @@ class TelegramLocalHostDriver:
     def render_memory_view(self, current_text: str) -> str:
         package = self.context_package(current_text)
         return self.telegram_bot.chat_prompt(self.engine, package, current_text)
+
+def run_direct_reflection(keep_runtime: bool) -> DriverResult:
+    runtime = Path(tempfile.mkdtemp(prefix="memory_engine_direct_reflection_"))
+    driver = ReflectionHostDriver(runtime)
+    try:
+        core = loads(driver.engine.upsert_core_fact(dumps({
+            "schema_version": "core_fact_input.v1",
+            "scope": CORE_SCOPE,
+            "category": "location",
+            "text": "The user lives in Berlin.",
+            "confidence": 0.95,
+        })))["fact"]
+
+        first_archive, first_start, first = driver.start_cycle(
+            "I've logged the Moon and planets through my telescope every clear week for two years."
+        )
+        created = driver.apply_reflection(first_start, actions=[{
+            "action": "new_candidate",
+            "candidate": {
+                "text": "The user has a sustained interest in observational astronomy.",
+                "category": "interests",
+                "confidence": 0.72,
+                "evidence_summary": "The user describes a recurring astronomy practice over two years.",
+                "source_memory_unit_ids": first["new_memory_unit_ids"],
+                "supporting_archive_ids": [first_archive["archive_id"]],
+                "tags": ["astronomy"],
+            },
+        }])
+        candidate, = created["candidates"]
+
+        later_archive, later_start, later = driver.start_cycle(
+            "I started leading a monthly public observing session at the local astronomy club."
+        )
+        if [item["candidate_id"] for item in later["existing_candidates"]] != [candidate["candidate_id"]]:
+            raise ConformanceError("Later reflection did not receive the earlier candidate")
+        later_task = later_start["pending_task"]["task_id"]
+        driver.reopen_engine()
+        pending = loads(driver.engine.begin_reflection_if_due(SESSION_ID, CORE_SCOPE, "after_sleep"))
+        if (
+            pending["status"]["reason"] != "already_pending"
+            or pending["status"]["pending_task_id"] != later_task
+            or pending.get("reflection") is not None
+        ):
+            raise ConformanceError("Restart lost or duplicated the pending reflection")
+        actions = [{
+            "action": "reinforce_candidate",
+            "candidate_id": candidate["candidate_id"],
+            "confidence": 0.88,
+            "evidence_summary": "The user now leads observing sessions in addition to private observations.",
+            "source_memory_unit_ids": later["new_memory_unit_ids"],
+            "supporting_archive_ids": [later_archive["archive_id"]],
+            "tags": ["astronomy"],
+        }]
+        reinforced = driver.apply_reflection(later_start, actions=actions)
+        driver.reopen_engine()
+        repeated = driver.apply_reflection(later_start, actions=actions)
+        if repeated != reinforced or reinforced["candidates"]:
+            raise ConformanceError("Resubmitted reflection did not return its original durable outcome")
+        stored, = loads(driver.engine.list_candidates())
+        if (
+            stored["candidate_id"] != candidate["candidate_id"]
+            or set(stored["source_memory_unit_ids"]) != set(
+                first["new_memory_unit_ids"] + later["new_memory_unit_ids"]
+            )
+            or len(stored["reinforcements"]) != 1
+            or stored["reinforcements"][0]["source_memory_unit_ids"] != later["new_memory_unit_ids"]
+            or stored["confidence"] < candidate["confidence"]
+        ):
+            raise ConformanceError("Independent evidence did not reinforce the same candidate exactly once")
+
+        temporary_text = "I feel unusually tired just this evening after a delayed train."
+        temporary_archive, temporary_start, temporary = driver.start_cycle(temporary_text)
+        no_insight = driver.apply_reflection(temporary_start, actions=[], no_insight={
+            "reason": "temporary_state",
+            "explanation": "A single evening after travel does not establish a sustained pattern.",
+        })
+        if (
+            no_insight["no_insight"]["reason"] != "temporary_state"
+            or loads(driver.engine.list_candidates()) != [stored]
+        ):
+            raise ConformanceError("The temporary state created or reinforced a candidate")
+        unit = loads(driver.engine.inspect_memory_unit(CORE_SCOPE, temporary["new_memory_unit_ids"][0]))
+        if unit["unit"]["reflection_count"] != 1:
+            raise ConformanceError("No-insight reflection failed to checkpoint its episode")
+        package = driver.context_package("What did I say about the delayed train?")
+        if not any(
+            memory["id"] == temporary_archive["archive_id"] and temporary_text in dumps(memory)
+            for memory in package["archive_relevant"]
+        ):
+            raise ConformanceError("The temporary episode was no longer available in Archive")
+
+        challenge_archive, challenge_start, challenge = driver.start_cycle(
+            "I moved home to Kyiv permanently. Berlin is no longer my home."
+        )
+        challenged = driver.apply_reflection(challenge_start, actions=[{
+            "action": "challenge_core_fact",
+            "candidate": {
+                "text": "The user now lives in Kyiv.",
+                "category": "location",
+                "confidence": 0.95,
+                "evidence_summary": "The user explicitly updated their home after moving.",
+                "source_memory_unit_ids": challenge["new_memory_unit_ids"],
+                "supporting_archive_ids": [challenge_archive["archive_id"]],
+                "contradicting_archive_ids": [challenge_archive["archive_id"]],
+                "contradicted_core_fact_ids": [core["core_fact_id"]],
+            },
+        }])
+        proposal, = challenged["candidates"]
+        if "core_challenge" not in proposal["tags"] or proposal["status"] not in {"draft", "ready_for_review"}:
+            raise ConformanceError("Core challenge did not remain reviewable")
+        driver.reopen_engine()
+        match, = driver.context_package("Where do I live?")["core_facts"]
+        if (
+            match["core_fact_id"] != core["core_fact_id"]
+            or match["text"] != core["text"]
+            or match["status"] != "active"
+        ):
+            raise ConformanceError("Unreviewed challenge changed Core")
+        ids = {item["candidate_id"] for item in loads(driver.engine.list_candidates())}
+        if ids != {candidate["candidate_id"], proposal["candidate_id"]}:
+            raise ConformanceError("Reflection replay left a missing or duplicate candidate")
+        final_status = loads(driver.engine.reflection_status(SESSION_ID, CORE_SCOPE, "after_sleep"))
+        if final_status["reason"] != "no_eligible_memory":
+            raise ConformanceError("A completed cycle left reflection work eligible")
+        return DriverResult(
+            runtime_dir=runtime,
+            archive_id=challenge_archive["archive_id"],
+            memory_unit_count=final_status["valid_memory_unit_count"],
+            core_fact_count=1,
+        )
+    finally:
+        if not keep_runtime:
+            shutil.rmtree(runtime, ignore_errors=True)
+
 
 def run_direct(keep_runtime: bool) -> DriverResult:
     runtime = Path(tempfile.mkdtemp(prefix="memory_engine_host_conformance_"))
@@ -2003,6 +2225,7 @@ def main() -> int:
             "direct-vectors",
             "direct-forced-recall",
             "direct-multispeaker",
+            "direct-reflection",
             "telegram-local",
             "telegram-distant-gate",
             "godot-headless",
@@ -2026,6 +2249,8 @@ def main() -> int:
             result = run_direct_forced_recall(args.keep_runtime)
         elif args.host == "direct-multispeaker":
             result = run_direct_multispeaker(args.keep_runtime)
+        elif args.host == "direct-reflection":
+            result = run_direct_reflection(args.keep_runtime)
         elif args.host == "telegram-local":
             result = run_telegram_local(args.keep_runtime)
         elif args.host == "telegram-distant-gate":

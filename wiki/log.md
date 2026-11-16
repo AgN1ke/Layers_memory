@@ -8,6 +8,11 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | H5 replay scenarios
+
+Recorded the [local reflection and memory-quality scenarios](pages/planning/integration-hardening-plan-2026-11-15.md#h5--живе-приймання-і-повернення-до-когнітивної-дороги)
+and their evidence boundaries in the roadmap.
+
 ## [2026-11-16] update | Quote handling in subject erasure
 
 Clarified the [subject erasure contract](pages/foundation/contracts.md#145-перегляд-і-стирання-памяті-за-людиною)

@@ -8,11 +8,14 @@ unit tests.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib
 import json
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -116,18 +119,57 @@ SCENARIOS: dict[str, list[str]] = {
     ],
 }
 
+QUALITY_SCENARIO = "memory_quality"
+QUALITY_SESSIONS = (
+    (
+        ("olena_a", "Після нічного збою проєктора на показі «Маяк» я тоді дуже розгубилась. Зараз усе гаразд."),
+        ("olena_a", "Я зазвичай обираю міцну каву для ранкової роботи."),
+        ("olena_b", "Кави не п’ю. На показі «Маяк» мене не було."),
+    ),
+    (
+        ("olena_a", "Я все ще люблю міцну каву, але тепер п’ю її лише у вихідні. У будні зранку обираю чай."),
+        ("olena_a", "Тепер мене це вже не лякає."),
+        ("olena_b", "Які матеріали краще підходять для велошолома?"),
+    ),
+)
+QUALITY_QUESTION = "Що сталося зі мною на показі «Маяк», і що я тепер п’ю вранці в будні?"
+
 
 def main() -> None:
     args = parse_args()
     if args.list_scenarios:
-        for name in sorted(SCENARIOS):
+        for name in sorted([*SCENARIOS, QUALITY_SCENARIO]):
             print(name)
         return
 
+    if args.dry_run:
+        if args.scenario == QUALITY_SCENARIO:
+            for session in QUALITY_SESSIONS:
+                for speaker, text in session:
+                    print(f"{speaker} (Олена) | {text}")
+                print("/sleep")
+            print(f"/reopen\nolena_a (Олена) | {QUALITY_QUESTION}")
+        else:
+            for scenario_name in scenario_names(args.scenario):
+                print_scenario(scenario_name, args.turn_limit)
+        return
+
+    quality_run = args.scenario == QUALITY_SCENARIO
+    session_ids = [] if quality_run else session_ids_for_run(args)
     cache = load_cache()
     gemini_key = gemini_key_from_cache_or_env(cache)
     llm_config = llm_config_from_cache_or_env(cache)
-    session_ids = session_ids_for_run(args)
+    gemini = bot.GeminiClient(gemini_key)
+    if args.validate_key:
+        gemini.validate_key()
+
+    if quality_run:
+        directory = bot.RUNTIME_DIR / "local_harness"
+        directory.mkdir(parents=True, exist_ok=True)
+        run_dir = Path(tempfile.mkdtemp(prefix="memory_quality_", dir=directory))
+        print(f"Run directory: {run_dir}", flush=True)
+        run_memory_quality(run_dir, gemini, llm_config)
+        return
 
     bot.LOG_DIR.mkdir(parents=True, exist_ok=True)
     bot.log_line(
@@ -135,15 +177,6 @@ def main() -> None:
         f"scenario={args.scenario} sessions={','.join(session_ids)} "
         f"turn_limit={args.turn_limit or 'all'} dry_run={args.dry_run}"
     )
-
-    if args.dry_run:
-        for scenario_name in scenario_names(args.scenario):
-            print_scenario(scenario_name, args.turn_limit)
-        return
-
-    gemini = bot.GeminiClient(gemini_key)
-    if args.validate_key:
-        gemini.validate_key()
 
     for scenario_name, session_id in zip(scenario_names(args.scenario), session_ids, strict=True):
         run_scenario(
@@ -256,6 +289,94 @@ def selected_messages(scenario_name: str, turn_limit: int) -> list[str]:
     if turn_limit and turn_limit > 0:
         return messages[:turn_limit]
     return messages
+
+
+def run_memory_quality(root: Path, gemini: bot.GeminiClient, llm_config: bot.HostLlmConfig) -> None:
+    # This command runs in its own process. Reuse the host's provider and logs in the new run directory.
+    bot.LOG_DIR = root / "logs"
+    bot.LOG_PATH = bot.LOG_DIR / "bot.log"
+    bot.RECALL_TRACE_PATH = bot.LOG_DIR / "recall_trace.jsonl"
+    bot.TOKEN_USAGE_PATH = bot.LOG_DIR / "token_usage.jsonl"
+    os.environ[bot.AUTO_REFLECTION_ENV] = "0"
+    scope = "quality_recent"
+    sessions = ("quality_older", scope)
+    engine = memory_engine.MemoryEngine(str(root / "memory"), host_id=QUALITY_SCENARIO)
+    now = datetime.now(UTC)
+    sources = []
+    sleep_summaries = []
+
+    def ingest(session_id: str, when: datetime, speaker: str, text: str) -> None:
+        result = json.loads(engine.ingest(json.dumps({
+            "schema_version": "event.v1",
+            "session_id": session_id,
+            "personality_scope_id": scope,
+            "type": "user_message",
+            "source": speaker,
+            "speaker": {"id": speaker, "name": "Олена"},
+            "timestamp": when.isoformat(),
+            "memory_text": text,
+            "payload": {},
+            "quoted_event_ids": [],
+            "importance_hint": "high",
+        }, ensure_ascii=False)))
+        sources.append(result["stored_event"])
+
+    for session_id, messages, days_ago in zip(sessions, QUALITY_SESSIONS, (35, 1), strict=True):
+        session_start = now - timedelta(days=days_ago)
+        for index, (speaker, text) in enumerate(messages):
+            ingest(session_id, session_start + timedelta(minutes=index), speaker, text)
+        run = json.loads(engine.begin_sleep_run_with_options(session_id, '{"max_pass_attempts":1}'))
+        sleep_summaries.append(bot.complete_sleep_result(engine, gemini, llm_config, run))
+
+    engine = memory_engine.MemoryEngine(str(root / "memory"), host_id=QUALITY_SCENARIO)
+    ingest(scope, now, "olena_a", QUALITY_QUESTION)
+    package = bot.context_package(engine, scope, 0, QUALITY_QUESTION)
+    prompt = bot.chat_prompt(engine, package, QUALITY_QUESTION)
+    selection = llm_config.chat_model()
+    response = gemini.generate_text(
+        model=selection.model,
+        system_instruction=bot.chat_system_instruction(),
+        prompt=prompt,
+        operation="local_harness_memory_quality",
+        model_role=llm_config.chat_role,
+    )
+    archive_ids = {item["id"] for item in package["archive_relevant"]}
+    archives = [json.loads(engine.inspect_archive(scope, archive_id)) for archive_id in sorted(archive_ids)]
+    usage_lines = bot.TOKEN_USAGE_PATH.read_text(encoding="utf-8").splitlines() if bot.TOKEN_USAGE_PATH.exists() else []
+    usage = [json.loads(line) for line in usage_lines]
+    module = importlib.import_module("memory_engine.memory_engine")
+    checks = {
+        "stage1": package["recall_debug"]["stage_used"] == "stage1",
+        "embeddings_off": json.loads(engine.vector_state(scope))["status"] == "disabled",
+        "no_associations": not package.get("associative_memory"),
+        "no_embedding_calls": not any(row["kind"] == "embedding_usage" for row in usage),
+        "earlier_archive_returned": any(item.get("source_session_id") == sessions[0]
+                                        for item in package["archive_relevant"]),
+        "later_archive_returned": any(item.get("source_session_id") == scope
+                                      for item in package["archive_relevant"]),
+    }
+    report = {
+        "build": memory_engine.build_info(),
+        "module_sha256": hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest(),
+        "storage": "FileStorage",
+        "scope": scope,
+        "session_ids": sessions,
+        "reopened_storage": True,
+        "checks": checks,
+        "semantic_review": "pending",
+        "source_events": sources,
+        "sleep_summaries": sleep_summaries,
+        "archive_details": archives,
+        "context": package,
+        "answer_model": response.model,
+        "answer": response.text,
+        "usage": usage,
+    }
+    path = root / "report.json"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"Report: {path}")
+    if not all(checks.values()):
+        raise SystemExit("Memory quality replay failed a structural check; see report.json.")
 
 
 def run_scenario(
