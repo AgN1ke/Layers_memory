@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | H3 conformance evidence
+
+Mapped the FileStorage matrix and Smartest2 host criteria to the
+[local H3.6 acceptance checks](pages/planning/integration-hardening-plan-2026-11-15.md#h3--канонічне-читання-і-перегляд-у-межах-scope-та-людини).
+Recorded completion of all seven H3 steps in the roadmap.
+
 ## [2026-11-16] update | Scoped memory adapters and Telegram integration
 
 Recorded [scope-bound host calls and Telegram subject commands](pages/integration/local-development.md#перегляд-і-стирання-в-telegram)

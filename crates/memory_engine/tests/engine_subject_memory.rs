@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use memory_engine::archive::ArchiveEntry;
+use memory_engine::archive::{ArchiveEntry, MemoryUnit};
+use memory_engine::core_store::CandidateBelief;
 use memory_engine::event::{IngestEvent, StoredEvent};
 use memory_engine::storage::Storage;
 use memory_engine::vector::{
-    default_vector_manifest, thesis_hash, VectorIndexData, VectorRow, VectorScopeStatus,
+    DeepRecallQuery, EmbedBatchInputs, EmbedBatchResult, EmbedBatchVector, VectorScopeStatus,
+    EMBED_BATCH_RESULT_SCHEMA_VERSION,
 };
-use memory_engine::{FileStorage, MemoryEngine, MemoryEngineError};
+use memory_engine::{EngineOptions, FileStorage, MemoryEngine, MemoryEngineError};
 use serde_json::{json, Value};
 
 const SCOPE: &str = "group_scope";
@@ -21,6 +23,9 @@ const TARGET_TEXT: &str = "My private codeword is marigold.";
 const SECOND_TEXT: &str = "I collect copper buttons.";
 const THIRD_TEXT: &str = "My project will start tomorrow.";
 const FOREIGN_TEXT: &str = "I keep a watercolor journal.";
+const VECTOR_MODEL: &str = "subject_test_model";
+const TARGET_CANDIDATE: &str = "target_candidate";
+const SIBLING_CANDIDATE: &str = "sibling_candidate";
 
 #[test]
 fn subject_erasure_preserves_lookalikes_and_typed_reply_author_after_restart() {
@@ -116,32 +121,64 @@ fn subject_erasure_preserves_lookalikes_and_typed_reply_author_after_restart() {
         .iter()
         .find(|unit| unit.thesis == "Alex collects copper buttons.")
         .unwrap();
-    let mut manifest = default_vector_manifest("subject_test_model", 2, &episode.created_at);
-    manifest.rows = 2;
-    manifest.state = VectorScopeStatus::Ready;
-    let rows = [erased_unit, surviving_unit]
-        .into_iter()
-        .enumerate()
-        .map(|(row, unit)| VectorRow {
-            row,
-            memory_unit_id: unit.memory_unit_id.clone(),
-            archive_id: episode.archive_id.clone(),
-            created_at: unit.created_at.clone(),
-            thesis_hash: thesis_hash(&unit.thesis),
-        })
-        .collect();
-    engine
+    add_candidate(&engine, TARGET_CANDIDATE, erased_unit);
+    add_candidate(&engine, SIBLING_CANDIDATE, surviving_unit);
+    let links = engine
         .storage()
-        .write_vector_index(
-            SCOPE,
-            &VectorIndexData {
-                manifest,
-                rows,
-                vectors: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
-                tombstones: vec![],
-            },
-        )
-        .unwrap();
+        .read_hypothesis_evidence_links()
+        .unwrap()
+        .items;
+    assert_eq!(links.len(), 2);
+    assert!(links
+        .iter()
+        .any(|link| link.hypothesis_id == TARGET_CANDIDATE
+            && link.memory_unit_id == erased_unit.memory_unit_id));
+    assert!(links
+        .iter()
+        .any(|link| link.hypothesis_id == SIBLING_CANDIDATE
+            && link.memory_unit_id == surviving_unit.memory_unit_id));
+
+    engine.set_vector_scope(SCOPE, true, false).unwrap();
+    let requests = engine.pending_embedding_backfill(SCOPE).unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        let batch: EmbedBatchInputs =
+            serde_json::from_value(request.prompt_inputs["embed_batch"].clone()).unwrap();
+        let vector = if batch.items[0].memory_unit_id == surviving_unit.memory_unit_id {
+            vec![0.0, 1.0]
+        } else {
+            vec![1.0, 0.0]
+        };
+        assert_eq!(
+            engine
+                .resume_compute_embedding(&request.task_id, embedding_result(batch, vector))
+                .unwrap(),
+            1
+        );
+    }
+    assert!(deep_recall_text(&engine, vec![1.0, 0.0]).contains("marigold"));
+    // An outdated on-disk hash schedules a genuine Pending backfill for the
+    // target while its earlier row still exists to be physically cleaned.
+    let mut index = engine.storage().read_vector_index(SCOPE).unwrap().unwrap();
+    index
+        .rows
+        .iter_mut()
+        .find(|row| row.memory_unit_id == erased_unit.memory_unit_id)
+        .unwrap()
+        .thesis_hash = memory_engine::vector::thesis_hash("A superseded vector.");
+    engine.storage().write_vector_index(SCOPE, &index).unwrap();
+    let mut pending = engine.pending_embedding_backfill(SCOPE).unwrap();
+    assert_eq!(pending.len(), 1);
+    let request = pending.remove(0);
+    let batch: EmbedBatchInputs =
+        serde_json::from_value(request.prompt_inputs["embed_batch"].clone()).unwrap();
+    assert_eq!(batch.items[0].memory_unit_id, erased_unit.memory_unit_id);
+    let embedding_task = request.task_id;
+    let delayed_embedding = embedding_result(batch, vec![1.0, 0.0]);
+    assert_eq!(
+        engine.storage().load_task(&embedding_task).unwrap().state,
+        memory_engine::tasks::TaskState::Pending
+    );
     add_core_fact(&engine, SCOPE, FIRST, "Alex uses the codeword marigold.");
     add_core_fact(&engine, SCOPE, SECOND, "Alex collects copper buttons.");
     add_core_fact(
@@ -178,6 +215,7 @@ fn subject_erasure_preserves_lookalikes_and_typed_reply_author_after_restart() {
     assert!(view_has(&first_before, "event", TARGET_TEXT));
     assert!(view_has(&first_before, "memory_unit", "marigold"));
     assert!(view_has(&first_before, "core_fact", "marigold"));
+    assert!(view_has(&first_before, "hypothesis", "marigold"));
     let text = first_before.to_string();
     assert!(!text.contains("copper buttons"));
     assert!(!text.contains(THIRD_TEXT));
@@ -194,6 +232,8 @@ fn subject_erasure_preserves_lookalikes_and_typed_reply_author_after_restart() {
     assert_eq!(report["deleted_events"], 2);
     assert_eq!(report["detached_quotes"], 1);
     assert_eq!(report["deleted_core_facts"], 1);
+    assert_eq!(report["deleted_candidates"], 1);
+    assert_eq!(report["deleted_hypotheses"], 1);
     drop(engine);
 
     let engine = fixture.open();
@@ -231,6 +271,7 @@ fn subject_erasure_preserves_lookalikes_and_typed_reply_author_after_restart() {
     assert!(view_has(&lookalike_after, "event", SECOND_TEXT));
     assert!(view_has(&lookalike_after, "memory_unit", "copper buttons"));
     assert!(view_has(&lookalike_after, "core_fact", "copper buttons"));
+    assert!(view_has(&lookalike_after, "hypothesis", "copper buttons"));
     assert!(!lookalike_after.to_string().contains("marigold"));
     let third_after = subject_view(&engine, SCOPE, THIRD);
     assert!(view_has(&third_after, "event", THIRD_TEXT));
@@ -246,6 +287,45 @@ fn subject_erasure_preserves_lookalikes_and_typed_reply_author_after_restart() {
         surviving_unit.memory_unit_id
     );
     assert_eq!(vector_index.vectors, [vec![0.0, 1.0]]);
+    assert!(matches!(
+        engine.resume_compute_embedding(&embedding_task, delayed_embedding),
+        Err(MemoryEngineError::OperationStale)
+    ));
+    // Re-evaluate readiness through the public maintenance API after the
+    // selected scope lost its only pending work. No new embedding is needed.
+    assert!(engine.pending_embedding_backfill(SCOPE).unwrap().is_empty());
+    assert_eq!(
+        engine.vector_state(SCOPE).unwrap().status,
+        VectorScopeStatus::Ready
+    );
+    assert!(!deep_recall_text(&engine, vec![1.0, 0.0]).contains("marigold"));
+    assert!(deep_recall_text(&engine, vec![0.0, 1.0]).contains("copper buttons"));
+
+    assert!(engine
+        .storage()
+        .read_candidate_belief_optional(TARGET_CANDIDATE)
+        .unwrap()
+        .is_none());
+    assert!(engine
+        .storage()
+        .read_hypothesis_node(TARGET_CANDIDATE)
+        .is_err());
+    assert!(engine
+        .storage()
+        .read_candidate_belief_optional(SIBLING_CANDIDATE)
+        .unwrap()
+        .is_some());
+    let nodes = engine.storage().read_hypothesis_nodes().unwrap().items;
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].hypothesis_id, SIBLING_CANDIDATE);
+    let links = engine
+        .storage()
+        .read_hypothesis_evidence_links()
+        .unwrap()
+        .items;
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].hypothesis_id, SIBLING_CANDIDATE);
+    assert_eq!(links[0].memory_unit_id, surviving_unit.memory_unit_id);
 
     let original_delivery =
         engine.ingest_idempotent_at_generation("target_delivery", target_input, generation);
@@ -514,6 +594,65 @@ fn add_core_fact(engine: &MemoryEngine<FileStorage>, scope: &str, subject: &str,
         .unwrap();
 }
 
+fn add_candidate(engine: &MemoryEngine<FileStorage>, id: &str, source: &MemoryUnit) {
+    let candidate: CandidateBelief = serde_json::from_value(json!({
+        "schema_version": "candidate_belief.v1",
+        "candidate_id": id,
+        "source_session_id": source.source_session_id,
+        "source_session_ids": [source.source_session_id],
+        "core_scope": source.personality_scope_id,
+        "subject": source.subject,
+        "created_at": source.created_at,
+        "updated_at": source.updated_at,
+        "text": source.thesis,
+        "category": "personal_notes",
+        "status": "ready_for_review",
+        "confidence": 0.95,
+        "evidence_summary": source.thesis,
+        "source_memory_unit_ids": [source.memory_unit_id],
+        "promotion_checks": {
+            "min_sources_met": true,
+            "weight_threshold_met": true,
+            "no_recent_contradiction": true,
+            "manual_review_required": true
+        }
+    }))
+    .unwrap();
+    engine.storage().write_candidate_belief(&candidate).unwrap();
+}
+
+fn deep_recall_text(engine: &MemoryEngine<FileStorage>, query_vec: Vec<f32>) -> String {
+    let recall = engine
+        .recall_deep(DeepRecallQuery {
+            scope: SCOPE.into(),
+            query_vec,
+            model_id: VECTOR_MODEL.into(),
+            top_k: 5,
+            min_sim: 0.5,
+            now: None,
+        })
+        .unwrap();
+    recall
+        .hits
+        .into_iter()
+        .map(|hit| hit.thesis)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn embedding_result(batch: EmbedBatchInputs, vector: Vec<f32>) -> EmbedBatchResult {
+    assert_eq!(batch.items.len(), 1);
+    EmbedBatchResult {
+        schema_version: EMBED_BATCH_RESULT_SCHEMA_VERSION.into(),
+        model_id: batch.model_id,
+        dim: batch.dim,
+        results: vec![EmbedBatchVector {
+            memory_unit_id: batch.items[0].memory_unit_id.clone(),
+            vector,
+        }],
+    }
+}
+
 fn subject_view(engine: &MemoryEngine<FileStorage>, scope: &str, subject: &str) -> Value {
     serde_json::to_value(engine.inspect_subject(scope, subject).unwrap()).unwrap()
 }
@@ -568,7 +707,11 @@ impl Fixture {
     }
 
     fn open(&self) -> MemoryEngine<FileStorage> {
-        MemoryEngine::new(FileStorage::with_host_id(&self.0, "subject_test"))
+        let mut options = EngineOptions::default();
+        options.vectors.model_id = VECTOR_MODEL.into();
+        options.vectors.dim = 2;
+        options.vectors.embed_batch_size = 1;
+        MemoryEngine::with_options(FileStorage::with_host_id(&self.0, "subject_test"), options)
     }
 }
 

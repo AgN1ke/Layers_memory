@@ -880,6 +880,7 @@ class TelegramLocalHostDriver:
         )
         self.sleep_runner = self.telegram_bot.SleepRunner(self.engine, self.gemini, self.llm_config)
         self.turn_index = 0
+        self.last_update: dict[str, Any] | None = None
         self._patch_runtime_paths()
 
     def _patch_runtime_paths(self) -> None:
@@ -917,6 +918,13 @@ class TelegramLocalHostDriver:
                 **(message_fields or {}),
             },
         }
+        self.deliver_update(update)
+        if len(self.telegram.messages) <= before:
+            raise ConformanceError("telegram-local host did not send a reply")
+        return self.telegram.messages[-1][1]
+
+    def deliver_update(self, update: dict[str, Any]) -> None:
+        self.last_update = update
         self.telegram_bot.handle_update(
             update,
             telegram=self.telegram,
@@ -925,9 +933,12 @@ class TelegramLocalHostDriver:
             llm_config=self.llm_config,
             sleep_runner=self.sleep_runner,
         )
-        if len(self.telegram.messages) <= before:
-            raise ConformanceError("telegram-local host did not send a reply")
-        return self.telegram.messages[-1][1]
+
+    def reopen_engine(self) -> None:
+        self.engine = memory_engine.MemoryEngine(
+            str(self.runtime_dir / "memory"), host_id="telegram_local_conformance"
+        )
+        self.sleep_runner = self.telegram_bot.SleepRunner(self.engine, self.gemini, self.llm_config)
 
     def run_sleep(self, session_id: str | None = None) -> dict[str, Any]:
         session_id = self.session_id if session_id is None else session_id
@@ -1341,6 +1352,11 @@ def assert_telegram_scoped_memory(driver: TelegramLocalHostDriver, archive: dict
         raise ConformanceError("Telegram did not persist quote provenance without duplicate text")
     if untrusted_quote in driver.gemini.last_chat_prompt:
         raise ConformanceError("Telegram inserted the copied quote text into the prompt")
+    reply_to_second = {
+        "message_id": driver.turn_index,
+        "chat": {"id": group_chat, "type": "group"},
+        "text": second_text,
+    }
 
     def group_command(command: str, **kwargs: Any) -> str:
         return driver.send_user_message(
@@ -1348,8 +1364,12 @@ def assert_telegram_scoped_memory(driver: TelegramLocalHostDriver, archive: dict
         )
 
     provider_calls = driver.gemini.calls
+    if not group_command(f"/my_memory telegram_user_{second_sender}").startswith("Unknown command"):
+        raise ConformanceError("Telegram let a manually entered ID choose the inspected subject")
+    if not group_command(f"/forget_me telegram_user_{second_sender}").startswith("Unknown command"):
+        raise ConformanceError("Telegram let a manually entered ID choose the erased subject")
     offset = len(driver.telegram.messages)
-    group_notice = group_command("/my_memory")
+    group_notice = group_command("/my_memory", message_fields={"reply_to_message": reply_to_second})
     delivered = dict(driver.telegram.messages[offset:])
     if (
         first_text not in delivered.get(first_sender, "")
@@ -1364,14 +1384,38 @@ def assert_telegram_scoped_memory(driver: TelegramLocalHostDriver, archive: dict
         "/forget_me", message_fields={"sender_chat": {"id": group_chat}}
     ):
         raise ConformanceError("An anonymous group sender could erase individual memory")
-    if "Deleted events: 1" not in group_command("/forget_me"):
+    erase_notice = group_command("/forget_me", message_fields={"reply_to_message": reply_to_second})
+    erase_update = driver.last_update
+    if "Deleted events: 1" not in erase_notice or erase_update is None:
         raise ConformanceError("Telegram did not report authenticated subject erasure")
+    driver.reopen_engine()
+    driver.deliver_update(erase_update)
+    if driver.telegram.messages[-1] != (group_chat, erase_notice):
+        raise ConformanceError("Telegram did not replay the same erasure receipt after reopening")
     remaining = loads(driver.engine.read_session(group_scope))["events"]
     survivor = next(event for event in remaining if event["event_id"] == second["event_id"])
     if first_text in dumps(remaining) or survivor.get("quoted_event_ids") != []:
         raise ConformanceError("Telegram erasure kept the deleted text or a dangling typed quote")
     if driver.gemini.calls != provider_calls:
         raise ConformanceError("Telegram personal inspection or erasure called the model")
+    replacement_text = "My new note follows a deleted message."
+    driver.send_user_message(
+        replacement_text,
+        chat_id=group_chat,
+        sender_id=second_sender,
+        chat_type="group",
+        message_fields={
+            "reply_to_message": {
+                "message_id": original_message_id,
+                "chat": {"id": group_chat, "type": "group"},
+            },
+            "quote": {"text": untrusted_quote},
+        },
+    )
+    new_events = loads(driver.engine.read_session(group_scope))["events"]
+    replacement = next(event for event in new_events if event.get("memory_text") == replacement_text)
+    if replacement.get("quoted_event_ids") != [] or untrusted_quote in dumps(replacement):
+        raise ConformanceError("Telegram revived quote content through a stale host event reference")
 
 
 def run_telegram_distant_gate(keep_runtime: bool) -> DriverResult:

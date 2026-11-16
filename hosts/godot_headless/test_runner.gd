@@ -89,7 +89,10 @@ func _init() -> void:
     _assert_scoped_memory(archive)
     if failed:
         return
-    _assert_subject_actions()
+    _assert_subject_actions(runtime_dir.path_join("memory"))
+    if failed:
+        return
+    _assert_partial_archive_publication(archive, runtime_dir.path_join("memory"))
     if failed:
         return
 
@@ -203,7 +206,7 @@ func _assert_scoped_memory(archive: Dictionary) -> void:
     if engine.inspect_memory_unit(other_scope, memory_unit_id) != "null" or engine.remember_back_in_scope(other_scope, memory_unit_id) != "null":
         _fail("a foreign unit ID must be invisible to scoped reads and writes")
 
-func _assert_subject_actions() -> void:
+func _assert_subject_actions(memory_dir: String) -> void:
     var scope := "godot_subject_conformance"
     var previous_subject := {"id": "alex_first", "name": "Alex"}
     var corrected_subject := {"id": "alex_second", "name": "Alex"}
@@ -242,13 +245,49 @@ func _assert_subject_actions() -> void:
     if view.get("items", []).size() != 1:
         _fail("subject view must expose the corrected fact")
         return
-    var erased: Dictionary = _loads(engine.erase_subject(scope, corrected_subject["id"], "godot_erase_alex"))
+    var operation := "godot_erase_alex"
+    var erased: Dictionary = _loads(engine.erase_subject(scope, corrected_subject["id"], operation))
     if erased.get("deleted_core_facts") != 1:
         _fail("subject erasure must remove the selected fact")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    if _loads(engine.erase_subject(scope, corrected_subject["id"], operation)) != erased:
+        _fail("subject erasure must replay its original receipt after reopening")
         return
     view = _loads(engine.inspect_subject(scope, corrected_subject["id"]))
     if not view.get("items", []).is_empty():
         _fail("erased Core fact must disappear from the subject view")
+
+func _assert_partial_archive_publication(archive: Dictionary, memory_dir: String) -> void:
+    var archive_id: String = archive["archive_id"]
+    var removed: Dictionary = archive["memory_units"][0]
+    var survivor: Dictionary = archive["memory_units"][1]
+    # Fault injection in the disposable conformance fixture.
+    var unit_path := memory_dir.path_join("archive/units").path_join(removed["memory_unit_id"] + ".json")
+    if DirAccess.remove_absolute(unit_path) != OK:
+        _fail("could not remove the canonical unit for the fault fixture")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    var detail: Dictionary = _loads(engine.inspect_archive(CORE_SCOPE, archive_id))
+    if failed:
+        return
+    var canonical: Array = detail.get("archive", {}).get("memory_units", [])
+    var unit_ids := []
+    for unit in canonical:
+        unit_ids.append(unit["memory_unit_id"])
+    if removed["memory_unit_id"] in unit_ids or survivor["memory_unit_id"] not in unit_ids or detail.get("warnings", []).is_empty():
+        _fail("scoped Archive API must expose partial loss and retain healthy canonical units")
+        return
+    if engine.inspect_memory_unit(CORE_SCOPE, removed["memory_unit_id"]) != "null":
+        _fail("missing canonical unit must stay unavailable despite the embedded copy")
+        return
+    var other_scope := "godot_idempotent_ingest"
+    if engine.inspect_archive(other_scope, archive_id) != "null":
+        _fail("a foreign scope must not discover damaged archive details")
 
 func _run_sleep() -> Dictionary:
     var run: Dictionary = _loads(engine.begin_sleep_run(SESSION_ID))
