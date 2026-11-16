@@ -1,4 +1,27 @@
+use super::transactional_support::{serializable_digest, DecisionReceipt};
 use super::*;
+use std::collections::BTreeMap;
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ForgetAvailabilityBasis {
+    status: MemoryUnitStatus,
+    last_review: Option<(String, Option<String>, ForgetDecision)>,
+}
+
+impl From<&MemoryUnit> for ForgetAvailabilityBasis {
+    fn from(unit: &MemoryUnit) -> Self {
+        Self {
+            status: unit.status,
+            last_review: unit.forget_review.as_ref().map(|review| {
+                (
+                    review.reviewed_at.clone(),
+                    review.task_id.clone(),
+                    review.decision,
+                )
+            }),
+        }
+    }
+}
 
 impl<S: Storage> MemoryEngine<S> {
     pub fn begin_forget_review(&self, session_id: &str) -> Result<ForgetReviewStart> {
@@ -17,7 +40,10 @@ impl<S: Storage> MemoryEngine<S> {
             .collect::<Vec<_>>();
         self.with_memory_write_scopes(&scopes, session_id, || {
             let now = now_rfc3339()?;
-            let inputs = self.build_forget_review_inputs_unlocked(session_id, &scopes, &now)?;
+            let (inputs, availability_basis) =
+                self.build_forget_review_inputs_unlocked(session_id, &scopes, &now)?;
+            let mut stored_inputs = serde_json::to_value(&inputs)?;
+            stored_inputs["availability_basis"] = serde_json::to_value(availability_basis)?;
             let task = PendingTask {
                 schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
                 task_id: new_id("task")?,
@@ -33,7 +59,7 @@ impl<S: Storage> MemoryEngine<S> {
                 prompt_version: self.options.forgetting.prompt_version,
                 role_hint: ModelRole::Balanced,
                 expected_output_schema: FORGET_REVIEW_RESULT_SCHEMA_VERSION.to_string(),
-                inputs: serde_json::to_value(&inputs)?,
+                inputs: stored_inputs,
                 attempts: Vec::new(),
                 last_error: None,
                 outcome: None,
@@ -77,11 +103,11 @@ impl<S: Storage> MemoryEngine<S> {
                 result
             }
             LlmResponse::Err { kind, detail, .. } => {
-                self.with_forget_task(task_id, |mut task, _| {
-                    task.state = TaskState::Failed;
-                    task.updated_at = now_rfc3339()?;
-                    task.last_error = Some(format!("{request_id} {kind:?}: {detail}"));
-                    self.storage.save_task(&task)
+                self.with_forget_task(task_id, |task, _| {
+                    self.mark_forget_review_task_failed(
+                        task,
+                        format!("{request_id} {kind:?}: {detail}"),
+                    )
                 })?;
                 Err(MemoryEngineError::Validation(format!(
                     "forget_review_pass failed: {kind:?}: {detail}"
@@ -107,6 +133,13 @@ impl<S: Storage> MemoryEngine<S> {
                 "forget review result source_session_id must not be empty".to_string(),
             ));
         }
+        for recommendation in &mut result.recommendations {
+            recommendation.reason = normalize_whitespace(&recommendation.reason);
+            if recommendation.reason.is_empty() {
+                recommendation.reason = "No reason provided.".to_string();
+            }
+        }
+        let request_digest = serializable_digest(&result)?;
         self.with_forget_task(task_id, |mut task, inputs| {
             if inputs.source_session_id != result.source_session_id {
                 return Err(MemoryEngineError::Validation(format!(
@@ -114,12 +147,36 @@ impl<S: Storage> MemoryEngine<S> {
                     inputs.source_session_id, result.source_session_id
                 )));
             }
-            let now = now_rfc3339()?;
+            if let Some(receipt) = &task.outcome {
+                let receipt: DecisionReceipt<ForgetReviewApplyResult> =
+                    serde_json::from_value(receipt.clone())?;
+                return receipt.replay(&request_digest);
+            }
+            if task.state == TaskState::Completed && !inputs.candidates.is_empty() {
+                return Err(MemoryEngineError::OperationResultUnavailable);
+            }
+            if task.state == TaskState::Cancelled {
+                return Err(MemoryEngineError::NeedsNewReview);
+            }
+
             let candidate_ids = inputs
                 .candidates
                 .iter()
-                .map(|candidate| candidate.memory_unit_id.clone())
+                .map(|candidate| candidate.memory_unit_id.as_str())
                 .collect::<HashSet<_>>();
+            match self.validate_forget_availability(&task, &candidate_ids, &result.recommendations)
+            {
+                Ok(()) => {}
+                Err(error @ MemoryEngineError::NeedsNewReview) => {
+                    task.state = TaskState::Cancelled;
+                    task.updated_at = now_rfc3339()?;
+                    task.last_error = Some(error.to_string());
+                    self.storage.save_task(&task)?;
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
+            let now = now_rfc3339()?;
             let mut reviewed = 0;
             let mut forgotten = 0;
             let mut kept = 0;
@@ -127,13 +184,9 @@ impl<S: Storage> MemoryEngine<S> {
             let mut ignored = 0;
             let mut changed_units = Vec::new();
 
-            for recommendation in &mut result.recommendations {
-                recommendation.reason = normalize_whitespace(&recommendation.reason);
-                if recommendation.reason.is_empty() {
-                    recommendation.reason = "No reason provided.".to_string();
-                }
+            for recommendation in &result.recommendations {
                 reviewed += 1;
-                if !candidate_ids.contains(&recommendation.memory_unit_id) {
+                if !candidate_ids.contains(recommendation.memory_unit_id.as_str()) {
                     ignored += 1;
                     continue;
                 }
@@ -157,12 +210,7 @@ impl<S: Storage> MemoryEngine<S> {
                 }
             }
 
-            task.state = TaskState::Completed;
-            task.updated_at = now;
-            task.last_error = None;
-            self.storage.save_task(&task)?;
-
-            Ok(ForgetReviewApplyResult {
+            let result = ForgetReviewApplyResult {
                 schema_version: FORGET_REVIEW_RESULT_SCHEMA_VERSION.to_string(),
                 source_session_id: inputs.source_session_id,
                 reviewed,
@@ -171,8 +219,54 @@ impl<S: Storage> MemoryEngine<S> {
                 protected,
                 ignored,
                 changed_units,
-            })
+            };
+            let receipt = DecisionReceipt::new(request_digest, result)?;
+            task.state = TaskState::Completed;
+            task.updated_at = now;
+            task.last_error = None;
+            task.outcome = Some(serde_json::to_value(&receipt)?);
+            self.storage.save_task(&task)?;
+            Ok(receipt.result)
         })
+    }
+
+    fn validate_forget_availability(
+        &self,
+        task: &PendingTask,
+        candidate_ids: &HashSet<&str>,
+        recommendations: &[ForgetRecommendation],
+    ) -> Result<()> {
+        let frozen = task
+            .inputs
+            .get("availability_basis")
+            .map(|basis| {
+                serde_json::from_value::<BTreeMap<String, ForgetAvailabilityBasis>>(basis.clone())
+            })
+            .transpose()?;
+        // Check the whole batch before applying any recommendation. The last
+        // review survives remember_back, so a forget/restore cycle is visible.
+        for id in recommendations.iter().map(|r| r.memory_unit_id.as_str()) {
+            if !candidate_ids.contains(id) {
+                continue;
+            }
+            let unit = self.storage.read_memory_unit_by_id(id)?;
+            let matches = if let Some(basis) = &frozen {
+                basis.get(id) == Some(&ForgetAvailabilityBasis::from(&unit))
+            } else {
+                // Legacy pending reviews have no snapshot. Reject a recorded
+                // decision at or after their creation, including a restoration.
+                unit.status == MemoryUnitStatus::ActiveArchive
+                    && unit.forget_review.as_ref().is_none_or(|review| {
+                        let reviewed = OffsetDateTime::parse(&review.reviewed_at, &Rfc3339);
+                        let created = OffsetDateTime::parse(&task.created_at, &Rfc3339);
+                        matches!((reviewed, created), (Ok(reviewed), Ok(created)) if reviewed < created)
+                    })
+            };
+            if !matches {
+                return Err(MemoryEngineError::NeedsNewReview);
+            }
+        }
+        Ok(())
     }
 
     fn with_forget_task<T>(
@@ -257,7 +351,10 @@ impl<S: Storage> MemoryEngine<S> {
                         "memory unit is not forgotten: {memory_unit_id}"
                     )));
                 }
-                unit.status = MemoryUnitStatus::ActiveArchive;
+                unit.status = match unit.fidelity_status {
+                    FidelityStatus::Unchecked => MemoryUnitStatus::ActiveArchive,
+                    status => memory_unit_status_after_fidelity(status),
+                };
                 unit.updated_at = now.clone();
                 unit.tags.retain(|tag| tag != "forgotten");
                 merge_unique(&mut unit.tags, &["remembered_back".to_string()]);
@@ -268,12 +365,15 @@ impl<S: Storage> MemoryEngine<S> {
         )
     }
 
-    pub(super) fn build_forget_review_inputs_unlocked(
+    fn build_forget_review_inputs_unlocked(
         &self,
         session_id: &str,
         scopes: &[String],
         reference_at: &str,
-    ) -> Result<ForgetReviewInputs> {
+    ) -> Result<(
+        ForgetReviewInputs,
+        BTreeMap<String, ForgetAvailabilityBasis>,
+    )> {
         let mut candidates = Vec::new();
         let archives = self
             .storage
@@ -313,25 +413,28 @@ impl<S: Storage> MemoryEngine<S> {
                     continue;
                 }
 
-                candidates.push(ForgetReviewCandidate {
-                    label: format!("m{}", candidates.len() + 1),
-                    memory_unit_id: unit.memory_unit_id.clone(),
-                    archive_id: archive.archive_id.clone(),
-                    age_days,
-                    weight: unit.weight,
-                    archive_recall_count: archive.recall_count,
-                    archive_last_recalled_days: archive.last_recalled_at.as_deref().and_then(
-                        |last_recalled_at| timestamp_age_days(last_recalled_at, reference_at),
-                    ),
-                    fidelity_status: unit.fidelity_status,
-                    has_core_link: false,
-                    has_emotional: false,
-                    thesis: truncate_chars(&unit.thesis, 240),
-                });
+                candidates.push((
+                    ForgetReviewCandidate {
+                        label: format!("m{}", candidates.len() + 1),
+                        memory_unit_id: unit.memory_unit_id.clone(),
+                        archive_id: archive.archive_id.clone(),
+                        age_days,
+                        weight: unit.weight,
+                        archive_recall_count: archive.recall_count,
+                        archive_last_recalled_days: archive.last_recalled_at.as_deref().and_then(
+                            |last_recalled_at| timestamp_age_days(last_recalled_at, reference_at),
+                        ),
+                        fidelity_status: unit.fidelity_status,
+                        has_core_link: false,
+                        has_emotional: false,
+                        thesis: truncate_chars(&unit.thesis, 240),
+                    },
+                    ForgetAvailabilityBasis::from(unit),
+                ));
             }
         }
 
-        candidates.sort_by(|left, right| {
+        candidates.sort_by(|(left, _), (right, _)| {
             right
                 .age_days
                 .total_cmp(&left.age_days)
@@ -340,16 +443,25 @@ impl<S: Storage> MemoryEngine<S> {
                 .then_with(|| left.memory_unit_id.cmp(&right.memory_unit_id))
         });
         candidates.truncate(self.options.forgetting.max_review_batch);
-        for (index, candidate) in candidates.iter_mut().enumerate() {
-            candidate.label = format!("m{}", index + 1);
-        }
+        let (candidates, availability_basis) = candidates
+            .into_iter()
+            .enumerate()
+            .map(|(index, (mut candidate, basis))| {
+                candidate.label = format!("m{}", index + 1);
+                let id = candidate.memory_unit_id.clone();
+                (candidate, (id, basis))
+            })
+            .unzip();
 
-        Ok(ForgetReviewInputs {
-            schema_version: FORGET_REVIEW_INPUT_SCHEMA_VERSION.to_string(),
-            source_session_id: session_id.to_string(),
-            created_at: reference_at.to_string(),
-            candidates,
-        })
+        Ok((
+            ForgetReviewInputs {
+                schema_version: FORGET_REVIEW_INPUT_SCHEMA_VERSION.to_string(),
+                source_session_id: session_id.to_string(),
+                created_at: reference_at.to_string(),
+                candidates,
+            },
+            availability_basis,
+        ))
     }
 
     pub(super) fn apply_forget_recommendation_unlocked(
@@ -564,11 +676,18 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn mark_forget_review_task_failed_best_effort(&self, task_id: &str, detail: String) {
-        let _ = self.with_forget_task(task_id, |mut task, _| {
-            task.state = TaskState::Failed;
-            task.updated_at = now_rfc3339()?;
-            task.last_error = Some(detail);
-            self.storage.save_task(&task)
+        let _ = self.with_forget_task(task_id, |task, _| {
+            self.mark_forget_review_task_failed(task, detail)
         });
+    }
+
+    fn mark_forget_review_task_failed(&self, mut task: PendingTask, detail: String) -> Result<()> {
+        if matches!(task.state, TaskState::Completed | TaskState::Cancelled) {
+            return Ok(());
+        }
+        task.state = TaskState::Failed;
+        task.updated_at = now_rfc3339()?;
+        task.last_error = Some(detail);
+        self.storage.save_task(&task)
     }
 }

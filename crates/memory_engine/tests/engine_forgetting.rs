@@ -10,7 +10,7 @@ use memory_engine::types::{
     CORE_FACT_INPUT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION, FORGET_REVIEW_RESULT_SCHEMA_VERSION,
     MEMORY_UNITS_RESULT_SCHEMA_VERSION, SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
-use memory_engine::{FileStorage, MemoryEngine};
+use memory_engine::{FileStorage, MemoryEngine, MemoryEngineError};
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -219,6 +219,113 @@ fn forget_review_ignores_unknown_recommendations() {
     assert_eq!(result.forgotten, 0);
 
     fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn completed_forget_review_replay_returns_the_original_receipt_after_restore() {
+    let root = unique_temp_dir("forget_review_completed_replay");
+    let storage = FileStorage::with_host_id(&root, "forget_test");
+    let engine = MemoryEngine::new(storage.clone());
+    let fixture = create_archive_with_units(
+        &engine,
+        "2020-01-01T10:00:00.000Z",
+        vec![("Routine lunch note.", 0.2)],
+    );
+    let id = &fixture.unit_ids[0];
+    let review = engine.begin_forget_review("live_session").unwrap();
+    let result = forget_result(&[id]);
+    let first = engine
+        .resume_forget_review(&review.pending_task.task_id, result.clone())
+        .unwrap();
+    assert_eq!(first.forgotten, 1);
+    let restored = engine.remember_back(id).unwrap();
+    drop(engine);
+
+    let engine = MemoryEngine::new(storage.clone());
+    let replay = engine
+        .resume_forget_review(&review.pending_task.task_id, result.clone())
+        .unwrap();
+    assert_eq!(replay, first);
+    let mut conflicting = result;
+    conflicting.recommendations[0].decision = ForgetDecision::Keep;
+    assert!(matches!(
+        engine.resume_forget_review(&review.pending_task.task_id, conflicting),
+        Err(MemoryEngineError::OperationConflict)
+    ));
+    assert_eq!(storage.read_memory_unit_by_id(id).unwrap(), restored);
+    assert_eq!(
+        storage
+            .load_task(&review.pending_task.task_id)
+            .unwrap()
+            .state,
+        TaskState::Completed
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn pending_forget_review_requires_new_review_after_forget_and_restore() {
+    let root = unique_temp_dir("forget_review_pending_aba");
+    let storage = FileStorage::with_host_id(&root, "forget_test");
+    let engine = MemoryEngine::new(storage.clone());
+    let fixture = create_archive_with_units(
+        &engine,
+        "2020-01-01T10:00:00.000Z",
+        vec![("Routine lunch note.", 0.2), ("Minor weather note.", 0.2)],
+    );
+    let id = &fixture.unit_ids[0];
+    let other_id = &fixture.unit_ids[1];
+    let pending = engine.begin_forget_review("live_session").unwrap();
+    assert!(pending
+        .pending_task
+        .inputs
+        .get("availability_basis")
+        .is_some());
+    assert!(pending.request.prompt_inputs["forget_review"]
+        .get("availability_basis")
+        .is_none());
+    let newer = engine.begin_forget_review("live_session").unwrap();
+    engine
+        .resume_forget_review(&newer.pending_task.task_id, forget_result(&[id]))
+        .unwrap();
+    let restored = engine.remember_back(id).unwrap();
+    let other = storage.read_memory_unit_by_id(other_id).unwrap();
+    drop(engine);
+
+    let engine = MemoryEngine::new(storage.clone());
+    assert!(matches!(
+        engine.resume_forget_review(
+            &pending.pending_task.task_id,
+            forget_result(&[other_id, id])
+        ),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert_eq!(storage.read_memory_unit_by_id(id).unwrap(), restored);
+    assert_eq!(storage.read_memory_unit_by_id(other_id).unwrap(), other);
+    let fresh = engine.begin_forget_review("live_session").unwrap();
+    assert_eq!(
+        engine
+            .resume_forget_review(&fresh.pending_task.task_id, forget_result(&[id]))
+            .unwrap()
+            .forgotten,
+        1
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+fn forget_result(unit_ids: &[&str]) -> ForgetReviewResult {
+    ForgetReviewResult {
+        schema_version: FORGET_REVIEW_RESULT_SCHEMA_VERSION.to_string(),
+        source_session_id: "live_session".into(),
+        recommendations: unit_ids
+            .iter()
+            .map(|id| ForgetRecommendation {
+                memory_unit_id: (*id).into(),
+                decision: ForgetDecision::Forget,
+                reason: "Routine detail with little future value.".into(),
+            })
+            .collect(),
+    }
 }
 
 #[test]

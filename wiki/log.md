@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Fidelity basis and replay-safe forgetting
+
+Updated the [FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and [host guide](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю)
+with review errors and replay behavior. Recorded H2.3–H2.4 in the existing plan.
+
 ## [2026-11-16] update | FileStorage generations for erasure
 
 Recorded the [generation contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)

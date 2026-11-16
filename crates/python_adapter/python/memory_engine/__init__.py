@@ -1,5 +1,6 @@
 from .memory_engine import (
     MemoryEngine,
+    NeedsNewReviewError,
     OperationConflictError,
     OperationIncompleteError,
     OperationResultUnavailableError,
@@ -11,6 +12,7 @@ from .memory_engine import __doc__ as __doc__
 
 __all__ = [
     "MemoryEngine",
+    "NeedsNewReviewError",
     "OperationConflictError",
     "OperationIncompleteError",
     "OperationResultUnavailableError",

@@ -603,6 +603,11 @@ fn dump_operation_result<T: Serialize>(
             "error": error.to_string(),
         })
         .to_string()),
+        Err(error @ MemoryEngineError::NeedsNewReview) => Ok(serde_json::json!({
+            "code": "needs_new_review",
+            "error": error.to_string(),
+        })
+        .to_string()),
         Err(error) => Err(error.to_string()),
     }
 }

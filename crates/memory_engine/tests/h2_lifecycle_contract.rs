@@ -7,14 +7,13 @@ use memory_engine::forgetting::ForgetReviewStart;
 use memory_engine::llm::LlmResponse;
 use memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::storage::Storage;
-use memory_engine::{FileStorage, MemoryEngine};
+use memory_engine::{FileStorage, MemoryEngine, MemoryEngineError};
 use serde_json::json;
 
 const SESSION: &str = "h2_routine_session";
 const THESIS: &str = "The user had soup for lunch.";
 
 #[test]
-#[ignore = "C1 baseline: late fidelity currently restores forgotten memory; enable in H2"]
 fn delayed_fidelity_preserves_forgetting_after_restart() {
     let fixture = Fixture::new("delayed_fidelity");
     let engine = fixture.open();
@@ -49,7 +48,6 @@ fn delayed_fidelity_preserves_forgetting_after_restart() {
 }
 
 #[test]
-#[ignore = "H2.3 must check frozen source evidence even if the thesis has not changed"]
 fn fidelity_verdict_for_replaced_source_content_does_not_apply_after_restart() {
     let fixture = Fixture::new("edited_fidelity_source");
     let engine = fixture.open();
@@ -79,15 +77,117 @@ fn fidelity_verdict_for_replaced_source_content_does_not_apply_after_restart() {
     let engine = fixture.open();
     let submission =
         engine.resume_memory_fidelity_pass(&fidelity.pending_task.task_id, valid_review(&unit));
+    assert!(matches!(submission, Err(MemoryEngineError::NeedsNewReview)));
     assert_eq!(
         stored_unit(&engine, &unit),
         unit,
         "a verdict for a replaced source must not change the unit: {submission:?}"
     );
+
+    let fresh = engine
+        .begin_memory_fidelity_pass(&unit.memory_unit_id)
+        .unwrap();
+    let mut refuted = valid_review(&unit);
+    refuted.status = FidelityStatus::Distorted;
+    refuted.explanation = "The current source describes a different meal.".into();
+    let reviewed = engine
+        .resume_memory_fidelity_pass(&fresh.pending_task.task_id, refuted)
+        .unwrap();
+    assert_eq!(reviewed.fidelity_status, FidelityStatus::Distorted);
 }
 
 #[test]
-#[ignore = "C1 baseline: completed forgetting reapplies after restoration; enable in H2"]
+fn fidelity_uses_frozen_events_and_preserves_a_newer_verdict_on_replay() {
+    let fixture = Fixture::new("frozen_fidelity_basis");
+    let engine = fixture.open();
+    let mut unit = create_routine_unit(&engine);
+    let fidelity = engine
+        .begin_memory_fidelity_pass(&unit.memory_unit_id)
+        .unwrap();
+    let sent = &fidelity.request.prompt_inputs["evidence_pack"];
+    assert!(sent.get("fidelity_basis").is_none());
+    unit.reflection_count += 1;
+    engine.storage().write_memory_unit(&unit).unwrap();
+    engine
+        .ingest(
+            serde_json::from_value::<IngestEvent>(json!({
+                "schema_version": "event.v1", "type": "user_message", "source": "fixture",
+                "timestamp": "2020-01-01T11:00:00Z", "session_id": SESSION,
+                "payload": {"text": "A later unrelated conversation."}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    drop(engine);
+
+    let engine = fixture.open();
+    let result = engine
+        .resume_memory_fidelity_pass(&fidelity.pending_task.task_id, valid_review(&unit))
+        .unwrap();
+    assert_eq!(result.reflection_count, unit.reflection_count);
+    let fresh = engine
+        .begin_memory_fidelity_pass(&unit.memory_unit_id)
+        .unwrap();
+    let mut disputed = valid_review(&unit);
+    disputed.status = FidelityStatus::NeedsRevision;
+    let latest = engine
+        .resume_memory_fidelity_pass(&fresh.pending_task.task_id, disputed)
+        .unwrap();
+    let replay = engine
+        .resume_memory_fidelity_pass(&fidelity.pending_task.task_id, valid_review(&unit))
+        .unwrap();
+    assert_eq!(replay, result);
+    assert_eq!(stored_unit(&engine, &unit), latest);
+}
+
+#[test]
+fn changed_thesis_subject_and_unverifiable_legacy_tasks_require_new_fidelity_review() {
+    let fixture = Fixture::new("fidelity_attribution");
+    let engine = fixture.open();
+    let mut unit = create_routine_unit(&engine);
+    let fidelity = engine
+        .begin_memory_fidelity_pass(&unit.memory_unit_id)
+        .unwrap();
+    unit.subject = Some(memory_engine::types::Speaker {
+        id: "speaker_1".into(),
+        name: "Speaker One".into(),
+    });
+    engine.storage().write_memory_unit(&unit).unwrap();
+    assert!(matches!(
+        engine.resume_memory_fidelity_pass(&fidelity.pending_task.task_id, valid_review(&unit)),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+
+    let fidelity = engine
+        .begin_memory_fidelity_pass(&unit.memory_unit_id)
+        .unwrap();
+    unit.thesis = "The user had soup on Friday.".into();
+    engine.storage().write_memory_unit(&unit).unwrap();
+    assert!(matches!(
+        engine.resume_memory_fidelity_pass(&fidelity.pending_task.task_id, valid_review(&unit)),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+
+    let mut legacy = engine
+        .begin_memory_fidelity_pass(&unit.memory_unit_id)
+        .unwrap()
+        .pending_task;
+    legacy
+        .inputs
+        .as_object_mut()
+        .unwrap()
+        .remove("fidelity_basis");
+    engine.storage().save_task(&legacy).unwrap();
+    drop(engine);
+    let engine = fixture.open();
+    assert!(matches!(
+        engine.resume_memory_fidelity_pass(&legacy.task_id, valid_review(&unit)),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert_eq!(stored_unit(&engine, &unit), unit);
+}
+
+#[test]
 fn completed_forgetting_replay_preserves_later_restore() {
     let fixture = Fixture::new("forget_replay");
     let engine = fixture.open();
@@ -102,12 +202,11 @@ fn completed_forgetting_replay_preserves_later_restore() {
 
     let engine = fixture.open();
     assert_eq!(stored_unit(&engine, &unit), restored);
-    // The replay may return the original receipt or an explicit rejection on
-    // this legacy entry point. Its effect on the newer state is the invariant.
     let replay = engine.submit_forget_review_response(
         &original.pending_task.task_id,
         forgetting_response(&original, &unit),
     );
+    assert!(replay.is_ok());
     assert_eq!(
         stored_unit(&engine, &unit),
         restored,

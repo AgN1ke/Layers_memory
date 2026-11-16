@@ -50,6 +50,7 @@ pyo3::create_exception!(
 );
 pyo3::create_exception!(memory_engine, OperationIncompleteError, PyRuntimeError);
 pyo3::create_exception!(memory_engine, OperationStaleError, PyRuntimeError);
+pyo3::create_exception!(memory_engine, NeedsNewReviewError, PyRuntimeError);
 
 #[pyclass(name = "MemoryEngine")]
 pub struct PyMemoryEngine {
@@ -709,6 +710,9 @@ fn map_err(err: MemoryEngineError) -> PyErr {
         error @ MemoryEngineError::OperationStale => {
             OperationStaleError::new_err(error.to_string())
         }
+        error @ MemoryEngineError::NeedsNewReview => {
+            NeedsNewReviewError::new_err(error.to_string())
+        }
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
@@ -741,6 +745,10 @@ fn memory_engine_py(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     module.add(
         "OperationStaleError",
         py.get_type_bound::<OperationStaleError>(),
+    )?;
+    module.add(
+        "NeedsNewReviewError",
+        py.get_type_bound::<NeedsNewReviewError>(),
     )?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add_function(wrap_pyfunction!(build_info, module)?)?;

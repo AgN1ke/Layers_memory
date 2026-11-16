@@ -22,6 +22,9 @@ pub enum MemoryEngineError {
     #[error("the operation belongs to an erased memory generation")]
     OperationStale,
 
+    #[error("review basis changed or could not be verified; start a new review")]
+    NeedsNewReview,
+
     #[error("incompatible schema version: expected {expected}, got {actual}")]
     IncompatibleSchema { expected: String, actual: String },
 

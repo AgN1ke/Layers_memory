@@ -550,6 +550,10 @@ Workflow [Python wheels](../../../.github/workflows/python-wheels.yml)
   `ingest_idempotent_at_generation` і використовуйте ту саму на кожному
   повторі. Якщо область або сесію вже стерто, зупиніть доставку цієї події
   після `OperationStaleError` (`operation_stale` у Godot).
+- Для fidelity і forgetting `NeedsNewReviewError` (`needs_new_review` у
+  Godot) означає, що попередня відповідь втратила актуальність. За потреби
+  почніть нову задачу з актуальними даними. Точний повтор завершеного review
+  повертає результат тієї операції.
 - Якщо `core_context_package` повертає в `notes` `ignored unknown request
   field: "/subject_id"`, запит оброблено без фільтра за людиною. Для перегляду
   чи стирання саме однієї людини потрібен API етапу H3.

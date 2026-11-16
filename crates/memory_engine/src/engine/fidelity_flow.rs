@@ -1,4 +1,18 @@
+use super::transactional_support::{serializable_digest, DecisionReceipt};
 use super::*;
+
+#[derive(Serialize, Deserialize)]
+struct FrozenFidelityBasis {
+    digest: String,
+    max_event_text_chars: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum FidelityOutcome {
+    Applied(Box<DecisionReceipt<MemoryUnit>>),
+    NeedsNewReview,
+}
 
 impl<S: Storage> MemoryEngine<S> {
     pub fn build_evidence_pack(&self, memory_unit_id: &str) -> Result<EvidencePack> {
@@ -38,7 +52,16 @@ impl<S: Storage> MemoryEngine<S> {
         &self,
         memory_unit_id: &str,
     ) -> Result<MemoryFidelityPassStart> {
-        let evidence_pack = self.build_evidence_pack_unlocked(memory_unit_id)?;
+        let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
+        let source_ids = self.fidelity_source_ids(&unit)?;
+        let events = self.read_session_events_with_archived(&unit.source_session_id)?;
+        let evidence_pack = self.build_evidence_pack_from(&unit, &source_ids, &events)?;
+        let basis = FrozenFidelityBasis {
+            digest: fidelity_basis_digest(&unit, &source_ids, &evidence_pack.events)?,
+            max_event_text_chars: self.options.fidelity.max_event_text_chars,
+        };
+        let mut inputs = serde_json::to_value(&evidence_pack)?;
+        inputs["fidelity_basis"] = serde_json::to_value(basis)?;
         let now = now_rfc3339()?;
         let task = PendingTask {
             schema_version: PENDING_TASK_SCHEMA_VERSION.to_string(),
@@ -51,7 +74,7 @@ impl<S: Storage> MemoryEngine<S> {
             prompt_version: self.options.fidelity.prompt_version,
             role_hint: ModelRole::Reasoning,
             expected_output_schema: FIDELITY_REVIEW_SCHEMA_VERSION.to_string(),
-            inputs: serde_json::to_value(&evidence_pack)?,
+            inputs,
             attempts: Vec::new(),
             last_error: None,
             outcome: None,
@@ -95,6 +118,12 @@ impl<S: Storage> MemoryEngine<S> {
             }
             LlmResponse::Err { kind, detail, .. } => {
                 self.with_fidelity_task(task_id, |mut task| {
+                    if !matches!(
+                        task.state,
+                        TaskState::Pending | TaskState::Submitted | TaskState::Failed
+                    ) {
+                        return Ok(());
+                    }
                     task.state = TaskState::Failed;
                     task.updated_at = now_rfc3339()?;
                     task.last_error = Some(format!("{request_id} {kind:?}: {detail}"));
@@ -130,20 +159,43 @@ impl<S: Storage> MemoryEngine<S> {
                     review.memory_unit_id
                 )));
             }
+            if task.inputs["archive_id"].as_str() != Some(review.archive_id.as_str()) {
+                return Err(MemoryEngineError::Validation(format!(
+                    "memory_fidelity_pass archive_id mismatch: task={} result={}",
+                    task.inputs["archive_id"], review.archive_id
+                )));
+            }
+            let response_digest = serializable_digest(&review)?;
+            if let Some(outcome) = task.outcome.take() {
+                return match serde_json::from_value(outcome)? {
+                    FidelityOutcome::Applied(receipt) => receipt.replay(&response_digest),
+                    FidelityOutcome::NeedsNewReview => Err(MemoryEngineError::NeedsNewReview),
+                };
+            }
+            if task.state == TaskState::Completed {
+                return Err(MemoryEngineError::OperationResultUnavailable);
+            }
+            if task.state == TaskState::Cancelled {
+                return Err(MemoryEngineError::NeedsNewReview);
+            }
             let now = now_rfc3339()?;
             let mut unit = self
                 .storage
                 .read_memory_unit_by_id(&review.memory_unit_id)?;
-            if unit.archive_id != review.archive_id {
-                return Err(MemoryEngineError::Validation(format!(
-                    "fidelity review archive_id mismatch: unit={} review={}",
-                    unit.archive_id, review.archive_id
-                )));
+            if !self.fidelity_basis_matches(&task, &unit)? {
+                task.state = TaskState::Cancelled;
+                task.updated_at = now;
+                task.last_error = Some(MemoryEngineError::NeedsNewReview.to_string());
+                task.outcome = Some(serde_json::to_value(FidelityOutcome::NeedsNewReview)?);
+                self.storage.save_task(&task)?;
+                return Err(MemoryEngineError::NeedsNewReview);
             }
 
             unit.updated_at = now.clone();
             unit.fidelity_status = review.status;
-            unit.status = memory_unit_status_after_fidelity(review.status);
+            if unit.status != MemoryUnitStatus::Forgotten {
+                unit.status = memory_unit_status_after_fidelity(review.status);
+            }
             unit.fidelity_review = Some(review.clone());
             self.storage.write_memory_unit(&unit)?;
             if unit.status != MemoryUnitStatus::ActiveArchive {
@@ -165,6 +217,8 @@ impl<S: Storage> MemoryEngine<S> {
             task.state = TaskState::Completed;
             task.updated_at = now;
             task.last_error = None;
+            let receipt = DecisionReceipt::new(response_digest, unit.clone())?;
+            task.outcome = Some(serde_json::to_value(FidelityOutcome::Applied(Box::new(receipt)))?);
             self.storage.save_task(&task)?;
 
             Ok(unit)
@@ -194,8 +248,28 @@ impl<S: Storage> MemoryEngine<S> {
         memory_unit_id: &str,
     ) -> Result<EvidencePack> {
         let unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
-        let archive = self.storage.read_archive_entry_by_id(&unit.archive_id)?;
+        let source_ids = self.fidelity_source_ids(&unit)?;
         let session_events = self.read_session_events_with_archived(&unit.source_session_id)?;
+        self.build_evidence_pack_from(&unit, &source_ids, &session_events)
+    }
+
+    fn fidelity_source_ids(&self, unit: &MemoryUnit) -> Result<BTreeSet<String>> {
+        let ids = if unit.source_event_ids.is_empty() {
+            self.storage
+                .read_archive_entry_by_id(&unit.archive_id)?
+                .source_event_ids
+        } else {
+            unit.source_event_ids.clone()
+        };
+        Ok(ids.into_iter().collect())
+    }
+
+    fn build_evidence_pack_from(
+        &self,
+        unit: &MemoryUnit,
+        source_ids: &BTreeSet<String>,
+        session_events: &[StoredEvent],
+    ) -> Result<EvidencePack> {
         let now = now_rfc3339()?;
         let mut pack = EvidencePack::empty_for(
             new_id("evidence_pack")?,
@@ -208,11 +282,6 @@ impl<S: Storage> MemoryEngine<S> {
         );
         pack.unit_evidence = unit.evidence.clone();
 
-        let source_ids = if unit.source_event_ids.is_empty() {
-            archive.source_event_ids.iter().collect::<HashSet<_>>()
-        } else {
-            unit.source_event_ids.iter().collect::<HashSet<_>>()
-        };
         let source_indices = session_events
             .iter()
             .enumerate()
@@ -266,18 +335,68 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(pack)
     }
 
+    fn fidelity_basis_matches(&self, task: &PendingTask, unit: &MemoryUnit) -> Result<bool> {
+        let Some(frozen) = task.inputs.get("fidelity_basis") else {
+            return Ok(false);
+        };
+        let frozen: FrozenFidelityBasis = serde_json::from_value(frozen.clone())?;
+        let pack: EvidencePack = serde_json::from_value(task.inputs.clone())?;
+        let source_ids = self.fidelity_source_ids(unit)?;
+        if pack.target_thesis != unit.thesis
+            || pack.unit_evidence != unit.evidence
+            || fidelity_basis_digest(unit, &source_ids, &pack.events)? != frozen.digest
+        {
+            return Ok(false);
+        }
+        let events = self.read_session_events_with_archived(&unit.source_session_id)?;
+        let events_by_id = events
+            .iter()
+            .map(|event| (event.event_id.as_str(), event))
+            .collect::<HashMap<_, _>>();
+        Ok(pack.events.iter().all(|seen| {
+            events_by_id
+                .get(seen.event_id.as_str())
+                .is_some_and(|event| {
+                    evidence_event_from_stored(event, seen.role, frozen.max_event_text_chars)
+                        == *seen
+                })
+        }))
+    }
+
     pub(super) fn mark_memory_fidelity_task_failed_best_effort(
         &self,
         task_id: &str,
         detail: String,
     ) {
         let _ = self.with_fidelity_task(task_id, |mut task| {
+            if matches!(task.state, TaskState::Completed | TaskState::Cancelled) {
+                return Ok(());
+            }
             task.state = TaskState::Failed;
             task.updated_at = now_rfc3339()?;
             task.last_error = Some(detail);
             self.storage.save_task(&task)
         });
     }
+}
+
+fn fidelity_basis_digest(
+    unit: &MemoryUnit,
+    source_ids: &BTreeSet<String>,
+    events: &[EvidenceEvent],
+) -> Result<String> {
+    serializable_digest(&(
+        "fidelity_basis.v1",
+        &unit.memory_unit_id,
+        &unit.archive_id,
+        &unit.source_session_id,
+        unit.effective_personality_scope_id(),
+        &unit.thesis,
+        &unit.subject,
+        &unit.evidence,
+        source_ids,
+        events,
+    ))
 }
 
 fn fidelity_task_unit_id(task: &PendingTask) -> Result<&str> {

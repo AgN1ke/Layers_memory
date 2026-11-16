@@ -46,6 +46,15 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage checks review basis and preserves explicit restoration
+
+Fidelity checks the frozen thesis, subject and evidence before applying a
+verdict. A forgotten unit stays forgotten until explicitly restored. Forgetting
+checks availability and an intervening review before applying changes. Exact
+replays of completed reviews with receipts return their original results.
+Pending fidelity tasks without a stored basis require a fresh review, and old
+completed reviews without receipts report an unavailable result.
+
 ## 2026-11-16 — FileStorage fences delayed writes across erasure
 
 Local hosts can capture a scope and session generation before queuing an

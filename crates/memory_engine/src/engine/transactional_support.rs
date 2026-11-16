@@ -1,5 +1,5 @@
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -9,6 +9,33 @@ use crate::storage_v2::{RecordKey, TransactionalStorage, WorkUnitReceipt};
 pub(crate) fn serializable_digest<T: Serialize>(value: &T) -> Result<String> {
     let bytes = serde_json::to_vec(value)?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct DecisionReceipt<T> {
+    request_digest: String,
+    result_digest: String,
+    pub(super) result: T,
+}
+
+impl<T: Serialize> DecisionReceipt<T> {
+    pub(super) fn new(request_digest: String, result: T) -> Result<Self> {
+        Ok(Self {
+            request_digest,
+            result_digest: serializable_digest(&result)?,
+            result,
+        })
+    }
+
+    pub(super) fn replay(self, request_digest: &str) -> Result<T> {
+        if self.request_digest != request_digest {
+            return Err(MemoryEngineError::OperationConflict);
+        }
+        if self.result_digest != serializable_digest(&self.result)? {
+            return Err(MemoryEngineError::OperationResultUnavailable);
+        }
+        Ok(self.result)
+    }
 }
 
 pub(super) fn read_transaction_result<S: TransactionalStorage, T: DeserializeOwned + Serialize>(
