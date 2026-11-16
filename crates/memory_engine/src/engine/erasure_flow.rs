@@ -181,7 +181,14 @@ impl<S: Storage> MemoryEngine<S> {
         let journal_operation_ids =
             clean_storage_collection(self.storage.load_journaled_operations()?)?
                 .into_iter()
-                .filter(|operation| journal_operation_references_any(operation, &identifiers))
+                .filter(|operation| {
+                    journal_operation_matches_erasure(
+                        operation,
+                        MemoryErasureKind::DeleteSession,
+                        session_id,
+                        &identifiers,
+                    )
+                })
                 .map(|operation| operation.op_id)
                 .collect::<BTreeSet<_>>();
 
@@ -363,7 +370,14 @@ impl<S: Storage> MemoryEngine<S> {
         let journal_operation_ids =
             clean_storage_collection(self.storage.load_journaled_operations()?)?
                 .into_iter()
-                .filter(|operation| journal_operation_references_any(operation, &identifiers))
+                .filter(|operation| {
+                    journal_operation_matches_erasure(
+                        operation,
+                        MemoryErasureKind::PurgeScope,
+                        scope,
+                        &identifiers,
+                    )
+                })
                 .map(|operation| operation.op_id)
                 .collect::<BTreeSet<_>>();
 
@@ -441,10 +455,21 @@ fn pending_task_references_any(task: &PendingTask, identifiers: &BTreeSet<String
             .is_some_and(|outcome| json_references_any(outcome, identifiers))
 }
 
-fn journal_operation_references_any(
+fn journal_operation_matches_erasure(
     operation: &JournalOperation,
+    kind: MemoryErasureKind,
+    target: &str,
     identifiers: &BTreeSet<String>,
 ) -> bool {
+    if operation.op_type == JournalOperationType::IngestEvent {
+        let event = &operation.intent["event"];
+        let session = event["session_id"].as_str();
+        let origin = match kind {
+            MemoryErasureKind::DeleteSession => session,
+            MemoryErasureKind::PurgeScope => event["personality_scope_id"].as_str().or(session),
+        };
+        return origin == Some(target);
+    }
     json_references_any(&operation.intent, identifiers)
         || operation.target_files.iter().any(|target| {
             identifiers

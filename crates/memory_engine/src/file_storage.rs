@@ -405,14 +405,8 @@ impl Storage for FileStorage {
             if !entry.file_type()?.is_dir() {
                 continue;
             }
-            if let Err(error) = self.require_complete_ingest(&entry.file_name().to_string_lossy()) {
-                warnings.push(StorageReadWarning {
-                    collection: "session metadata".to_string(),
-                    path: self.relative_path(&entry.path()),
-                    error: error.to_string(),
-                });
-                continue;
-            }
+            // Scope selection uses atomic metadata, independent of an in-flight
+            // event append. Erasure locks its own target before reading event data.
             let path = entry.path().join("session.json");
             if !path.exists() {
                 continue;
@@ -564,6 +558,23 @@ impl Storage for FileStorage {
         let path = self.archive_entry_path_by_id(archive_id)?;
         let entry = read_json(&path)?;
         self.hydrate_archive_memory_units(entry)
+    }
+
+    fn read_sleep_archives(&self, session_id: &str) -> Result<Vec<ArchiveEntry>> {
+        let mut paths = Vec::new();
+        collect_archive_entry_files(&self.root.join("archive"), &mut paths)?;
+        let mut entries = Vec::new();
+        let mut warnings = Vec::new();
+        for path in paths {
+            if let Some(entry) =
+                read_json_from_collection::<ArchiveEntry>(self, &path, "archive", &mut warnings)?
+            {
+                if entry.source_session_id == session_id {
+                    entries.push(entry);
+                }
+            }
+        }
+        Ok(entries)
     }
 
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>> {
@@ -1382,13 +1393,15 @@ impl Storage for FileStorage {
         let mut operations = Vec::new();
         let mut warnings = Vec::new();
         for path in files {
-            if let Some(operation) = read_json_from_collection::<JournalOperation>(
-                self,
-                &path,
-                "journal operation",
-                &mut warnings,
-            )? {
-                operations.push(operation);
+            match read_json::<JournalOperation>(&path) {
+                Ok(operation) => operations.push(operation),
+                // A writer can finish and remove its intent after enumeration.
+                Err(MemoryEngineError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => warnings.push(StorageReadWarning {
+                    collection: "journal operation".into(),
+                    path: self.relative_path(&path),
+                    error: error.to_string(),
+                }),
             }
         }
         operations.sort_by(|left, right| {

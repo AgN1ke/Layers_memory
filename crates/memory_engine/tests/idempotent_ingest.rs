@@ -4,7 +4,11 @@ use std::sync::Barrier;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use memory_engine::event::IngestEvent;
+use memory_engine::journal::{
+    JournalOperation, JournalOperationType, JournalState, RecoveryPolicy,
+};
 use memory_engine::storage::Storage;
+use memory_engine::types::JOURNAL_OPERATION_SCHEMA_VERSION;
 use memory_engine::{FileStorage, MemoryEngine, MemoryEngineError};
 use serde_json::json;
 
@@ -165,6 +169,95 @@ fn concurrent_repeats_apply_once() {
     assert_eq!(session.events, vec![results[0].event.clone()]);
     assert_eq!(session.metadata.event_count, 1);
     assert_eq!(vault.markdown().matches(MESSAGE).count(), 1);
+}
+
+#[test]
+fn session_reads_see_complete_events_while_ingest_is_running() {
+    let vault = Vault::new("concurrent_read");
+    let engine = vault.open();
+    let start = Barrier::new(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            start.wait();
+            for index in 0..24 {
+                engine
+                    .ingest_idempotent(
+                        &format!("message-{index}"),
+                        event(SESSION_ID, SCOPE_ID, MESSAGE),
+                    )
+                    .expect("publish a complete event");
+            }
+        });
+        start.wait();
+        for _ in 0..48 {
+            let record = engine
+                .read_session(SESSION_ID)
+                .expect("read a session snapshot");
+            assert_eq!(record.metadata.event_count, record.events.len() as u64);
+            std::thread::yield_now();
+        }
+    });
+    assert_eq!(engine.read_session(SESSION_ID).unwrap().events.len(), 24);
+}
+
+#[test]
+fn pending_ingest_does_not_block_erasure_of_another_scope() {
+    let vault = Vault::new("unrelated_purge");
+    let engine = vault.open();
+    engine.ingest(event(SESSION_ID, SCOPE_ID, MESSAGE)).unwrap();
+    engine
+        .ingest(event("other_session", "other_scope", "Erase this."))
+        .unwrap();
+
+    // Reproduce the interval between opening and committing a write to the
+    // first session. The other scope's purge can use its own stable metadata.
+    let marker = vault
+        .0
+        .join("sessions")
+        .join(SESSION_ID)
+        .join("pending-ingest.json");
+    fs::write(&marker, "\"ingest_in_progress\"").unwrap();
+    let pending = JournalOperation {
+        schema_version: JOURNAL_OPERATION_SCHEMA_VERSION.into(),
+        op_id: "ingest_in_progress".into(),
+        op_type: JournalOperationType::IngestEvent,
+        state: JournalState::Started,
+        created_at: "2026-05-17T16:00:00Z".into(),
+        updated_at: "2026-05-17T16:00:00Z".into(),
+        target_files: Vec::new(),
+        intent: json!({"event": event(SESSION_ID, SCOPE_ID, "other_scope")}),
+        recovery_policy: RecoveryPolicy::Retry,
+        completed_at: None,
+        error: None,
+    };
+    engine
+        .storage()
+        .begin_journaled_operation(&pending)
+        .unwrap();
+    assert!(matches!(
+        engine.read_session(SESSION_ID),
+        Err(MemoryEngineError::OperationIncomplete)
+    ));
+
+    let report = engine
+        .purge_scope("other_scope")
+        .expect("erase the independent scope");
+    assert_eq!(report.deleted.sessions, 1);
+    assert!(marker.exists());
+    assert_eq!(
+        engine
+            .storage()
+            .load_journaled_operation(&pending.op_id)
+            .unwrap(),
+        Some(pending)
+    );
+    assert!(engine
+        .read_session("other_session")
+        .unwrap()
+        .events
+        .is_empty());
+    fs::remove_file(marker).unwrap();
+    assert_eq!(engine.read_session(SESSION_ID).unwrap().events.len(), 1);
 }
 
 #[test]

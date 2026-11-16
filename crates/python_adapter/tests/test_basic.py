@@ -262,6 +262,23 @@ def test_idempotent_ingest_supports_optional_event_fields(engine):
     assert attributed["speaker"]["id"] == "person_a"
 
 
+def test_idempotent_ingest_errors_are_distinct_runtime_errors(tmp_path):
+    engine = memory_engine.MemoryEngine(str(tmp_path))
+    original = _ingest_event_json("typed_errors", "Original")
+    changed = _ingest_event_json("typed_errors", "Changed")
+    engine.ingest_idempotent("typed-errors-1", original)
+
+    with pytest.raises(memory_engine.OperationConflictError) as conflict:
+        engine.ingest_idempotent("typed-errors-1", changed)
+    assert isinstance(conflict.value, RuntimeError)
+
+    engine.delete_session("typed_errors")
+    with pytest.raises(memory_engine.OperationResultUnavailableError) as unavailable:
+        engine.ingest_idempotent("typed-errors-1", original)
+    assert isinstance(unavailable.value, RuntimeError)
+    assert issubclass(memory_engine.OperationIncompleteError, RuntimeError)
+
+
 def test_read_session_returns_stored_events(engine: memory_engine.MemoryEngine):
     _ingest(engine, "session_recent", "Розкажи про МіГ-15.")
     _ingest(

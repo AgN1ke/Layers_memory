@@ -35,11 +35,18 @@ use ::memory_engine::reflection::{
     ReflectionActionsResult, ReflectionAnalyzeResult, ReflectionOpportunity,
 };
 use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
-use ::memory_engine::storage::Storage;
 use ::memory_engine::vector::{
     DeepRecallQuery, EmbedBatchResult, DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY,
 };
 use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
+
+pyo3::create_exception!(memory_engine, OperationConflictError, PyRuntimeError);
+pyo3::create_exception!(
+    memory_engine,
+    OperationResultUnavailableError,
+    PyRuntimeError
+);
+pyo3::create_exception!(memory_engine, OperationIncompleteError, PyRuntimeError);
 
 #[pyclass(name = "MemoryEngine")]
 pub struct PyMemoryEngine {
@@ -469,7 +476,7 @@ impl PyMemoryEngine {
     }
 
     fn read_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
-        let session = run_without_gil(py, || self.inner.storage().read_session(session_id))?;
+        let session = run_without_gil(py, || self.inner.read_session(session_id))?;
         dump_json(&session, "session")
     }
 
@@ -657,6 +664,15 @@ fn map_err(err: MemoryEngineError) -> PyErr {
         MemoryEngineError::IncompatibleSchema { expected, actual } => PyValueError::new_err(
             format!("Incompatible schema: expected {expected}, got {actual}"),
         ),
+        error @ MemoryEngineError::OperationConflict => {
+            OperationConflictError::new_err(error.to_string())
+        }
+        error @ MemoryEngineError::OperationResultUnavailable => {
+            OperationResultUnavailableError::new_err(error.to_string())
+        }
+        error @ MemoryEngineError::OperationIncomplete => {
+            OperationIncompleteError::new_err(error.to_string())
+        }
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
@@ -672,8 +688,20 @@ fn build_info(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 }
 
 #[pymodule(name = "memory_engine")]
-fn memory_engine_py(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn memory_engine_py(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyMemoryEngine>()?;
+    module.add(
+        "OperationConflictError",
+        py.get_type_bound::<OperationConflictError>(),
+    )?;
+    module.add(
+        "OperationResultUnavailableError",
+        py.get_type_bound::<OperationResultUnavailableError>(),
+    )?;
+    module.add(
+        "OperationIncompleteError",
+        py.get_type_bound::<OperationIncompleteError>(),
+    )?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add_function(wrap_pyfunction!(build_info, module)?)?;
     Ok(())

@@ -73,8 +73,13 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         let created_at = now_rfc3339()?;
-        let archived_event_ids = self.archived_event_ids_for_session(&request.session_id)?;
-        let session = self.storage.read_session(&request.session_id)?;
+        let (archived_event_ids, session) =
+            self.with_resource_lock(session_lock_key(&request.session_id), || {
+                let archived_event_ids =
+                    self.archived_event_ids_for_session_unlocked(&request.session_id)?;
+                let session = self.storage.read_session(&request.session_id)?;
+                Ok((archived_event_ids, session))
+            })?;
         let personality_scope_id = session.metadata.personality_scope_id.clone().or_else(|| {
             (session.metadata.event_count == 0 && session.events.is_empty())
                 .then(|| request.core_scope.clone())

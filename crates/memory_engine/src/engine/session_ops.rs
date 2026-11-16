@@ -87,12 +87,10 @@ impl<S: Storage> MemoryEngine<S> {
             .collect())
     }
 
-    pub(super) fn archived_event_ids_for_session(
-        &self,
-        session_id: &str,
-    ) -> Result<HashSet<String>> {
+    /// Read a coherent session snapshot while local writes or Sleep rotate it.
+    pub fn read_session(&self, session_id: &str) -> Result<SessionRecord> {
         self.with_resource_lock(session_lock_key(session_id), || {
-            self.archived_event_ids_for_session_unlocked(session_id)
+            self.storage.read_session(session_id)
         })
     }
 

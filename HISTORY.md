@@ -46,6 +46,22 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage checks archive coverage before resuming Sleep
+
+Sleep recovery checks completed Archives before returning older runs to the
+host. Runs with input already covered by another Archive are closed as
+superseded. Viable legacy checkpoints with disjoint input remain eligible
+on restart. An unreadable run file stays available for diagnosis while
+valid runs in other sessions can proceed.
+
+## 2026-11-16 — FileStorage keeps session access isolated during ingest
+
+Python `read_session` and context packaging take the session lock while
+reading local data. A write to another scope can proceed during scope
+enumeration for erasure. Python exposes distinct exceptions for ingest
+conflicts, unavailable results and incomplete operations. The exceptions
+inherit from `RuntimeError`.
+
 ## 2026-11-16 — FileStorage accepts stable IDs for retryable ingest
 
 `ingest_idempotent` is available in Rust, Python and Godot. Replaying the

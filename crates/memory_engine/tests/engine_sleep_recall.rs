@@ -2951,8 +2951,8 @@ fn engine_repeated_sleep_start_returns_the_persisted_run() {
 }
 
 #[test]
-fn engine_sleep_start_rejects_preexisting_duplicate_runs() {
-    let root = unique_temp_dir("engine_sleep_start_rejects_preexisting_duplicate_runs");
+fn engine_sleep_recovers_best_checkpoint_from_preexisting_overlapping_runs() {
+    let root = unique_temp_dir("sleep_recovers_best_checkpoint");
     let storage = FileStorage::with_host_id(&root, "terminal");
     let mut engine = MemoryEngine::new(storage.clone());
     ingest_text(
@@ -2962,17 +2962,176 @@ fn engine_sleep_start_rejects_preexisting_duplicate_runs() {
         vec![],
     );
     let first = engine.begin_sleep_run("live_session").unwrap();
-    engine.cancel_sleep_run(&first.sleep_task_id).unwrap();
-    let second = engine.begin_sleep_run("live_session").unwrap();
+    let mut hidden = first.clone();
+    hidden.stage = SleepRunStage::Finished;
+    storage.save_sleep_run(&hidden).unwrap();
+    let second = engine
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ready = engine.next_sleep_batch(second).unwrap().run;
     storage.save_sleep_run(&first).unwrap();
+    drop(engine);
 
-    let error = engine.begin_sleep_run("live_session").unwrap_err();
-    assert!(error.to_string().contains("multiple open Sleep runs"));
-    assert_eq!(engine.pending_sleep_runs().unwrap().len(), 2);
+    let reopened = MemoryEngine::new(storage.clone());
+    assert_eq!(reopened.pending_sleep_runs().unwrap(), vec![ready.clone()]);
+    assert_eq!(reopened.begin_sleep_run("live_session").unwrap(), ready);
+    assert_eq!(storage.load_sleep_run(&first.sleep_task_id).unwrap(), first);
+    reopened.finish_sleep_run(ready).unwrap();
+    assert!(reopened.pending_sleep_runs().unwrap().is_empty());
+    assert_eq!(
+        storage.load_task(&first.sleep_task_id).unwrap().state,
+        TaskState::Cancelled
+    );
+    assert_eq!(
+        storage
+            .read_archive_entry_by_id(&first.archive_id)
+            .unwrap()
+            .status,
+        ArchiveStatus::Superseded
+    );
 
-    engine.cancel_sleep_run(&first.sleep_task_id).unwrap();
-    assert_eq!(engine.begin_sleep_run("live_session").unwrap(), second);
+    fs::remove_dir_all(root).ok();
+}
 
+#[test]
+fn engine_sleep_recovers_disjoint_checkpoints_from_same_session() {
+    let root = unique_temp_dir("sleep_recovers_disjoint_checkpoints");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut options = EngineOptions::default();
+    options.sleep.max_events = 1;
+    let mut engine = MemoryEngine::with_options(storage.clone(), options);
+    ingest_text(&mut engine, "2026-05-17T16:00:00Z", "First event", vec![]);
+    let first = engine.begin_sleep_run("live_session").unwrap();
+    let mut hidden = first.clone();
+    hidden.stage = SleepRunStage::Finished;
+    storage.save_sleep_run(&hidden).unwrap();
+    ingest_text(&mut engine, "2026-05-17T16:00:01Z", "Second event", vec![]);
+    let other = engine.begin_sleep_run("live_session").unwrap();
+    storage.save_sleep_run(&first).unwrap();
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    let recovered = reopened.pending_sleep_runs().unwrap();
+    assert_eq!(recovered.len(), 2);
+    assert!(recovered.contains(&first) && recovered.contains(&other));
+    let first_archive = reopened
+        .finish_sleep_run_with_available(first)
+        .unwrap()
+        .archive_entry;
+    let other_archive = reopened
+        .finish_sleep_run_with_available(other)
+        .unwrap()
+        .archive_entry;
+    assert_eq!(first_archive.source_event_ids.len(), 1);
+    assert_eq!(other_archive.source_event_ids.len(), 1);
+    assert_ne!(
+        first_archive.source_event_ids,
+        other_archive.source_event_ids
+    );
+    assert!(reopened.pending_sleep_runs().unwrap().is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_retires_partial_overlap_and_keeps_unarchived_events_after_restart() {
+    let root = unique_temp_dir("sleep_retires_partial_overlap");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00Z",
+        "Already archived.",
+        vec![],
+    );
+    let competing = engine.sleep("live_session").unwrap();
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:01Z",
+        "Still unarchived.",
+        vec![],
+    );
+    let stale = engine.begin_sleep_run("live_session").unwrap();
+    let stale_input = stale.shared_prompt_context.as_ref().unwrap();
+    assert_eq!(stale_input.source_event_ids.len(), 2);
+
+    let before_publication = storage.read_session_metadata("live_session").unwrap();
+    resume_test_sleep(
+        &mut engine,
+        &competing,
+        "Archive first event",
+        "Archive first event.",
+    );
+    // The earlier archive write survives an interruption before its index update.
+    storage.write_session_metadata(&before_publication).unwrap();
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    assert!(reopened.pending_sleep_runs().unwrap().is_empty());
+    let retired = storage.load_sleep_run(&stale.sleep_task_id).unwrap();
+    assert_eq!(retired.stage, SleepRunStage::Finished);
+    assert_eq!(retired.completion_mode.as_deref(), Some("superseded"));
+    assert!(reopened.finish_sleep_run_with_available(stale).is_err());
+    let next = reopened.begin_sleep_run("live_session").unwrap();
+    let outcome = reopened.finish_sleep_run_with_available(next).unwrap();
+    assert_eq!(outcome.archive_entry.source_event_ids.len(), 1);
+    assert!(competing
+        .archive_entry
+        .source_event_ids
+        .iter()
+        .all(|id| !outcome.archive_entry.source_event_ids.contains(id)));
+    assert_eq!(
+        storage
+            .read_archive_entry_by_id(&retired.archive_id)
+            .unwrap()
+            .status,
+        ArchiveStatus::Superseded
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_recovers_its_own_partially_finalized_run_despite_unreadable_other_run() {
+    let root = unique_temp_dir("sleep_recovers_its_own_archive");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00Z",
+        "A memory to consolidate.",
+        vec![],
+    );
+    let run = engine
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ready = engine.next_sleep_batch(run).unwrap().run;
+    let mut archive = storage.read_archive_entry_by_id(&ready.archive_id).unwrap();
+    archive.status = ArchiveStatus::Complete;
+    storage
+        .update_archive_entry(&archive.archive_id, &archive)
+        .unwrap();
+    let unreadable = root.join("runs/sleep/unreadable.json");
+    fs::write(&unreadable, b"{unfinished").unwrap();
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    assert_eq!(reopened.pending_sleep_runs().unwrap(), vec![ready.clone()]);
+    assert_eq!(reopened.begin_sleep_run("live_session").unwrap(), ready);
+    let outcome = reopened.finish_sleep_run(ready).unwrap();
+    assert_eq!(outcome.archive_entry.archive_id, archive.archive_id);
+    assert_eq!(fs::read(&unreadable).unwrap(), b"{unfinished");
+    assert!(reopened.pending_sleep_runs().unwrap().is_empty());
     fs::remove_dir_all(root).ok();
 }
 

@@ -68,6 +68,16 @@ pub trait Storage {
     fn update_archive_entry(&self, archive_id: &str, entry: &ArchiveEntry) -> Result<()>;
     fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry>;
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>>;
+    /// Read the persisted Archive entries needed to recover Sleep for a session.
+    /// Coverage and publication status do not require hydrating memory units.
+    fn read_sleep_archives(&self, session_id: &str) -> Result<Vec<ArchiveEntry>> {
+        Ok(self
+            .read_archive(&ArchiveFilters::default())?
+            .into_items()
+            .into_iter()
+            .filter(|entry| entry.source_session_id == session_id)
+            .collect())
+    }
     fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()>;
     fn read_memory_unit_by_id(&self, memory_unit_id: &str) -> Result<MemoryUnit>;
     fn read_memory_units(&self) -> Result<StorageCollection<MemoryUnit>>;
