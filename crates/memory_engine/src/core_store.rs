@@ -54,6 +54,62 @@ pub struct CoreFact {
     pub links: Vec<Link>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution_changed_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribution_history: Vec<CoreFactAttributionRevision>,
+}
+
+pub const CORE_FACT_ATTRIBUTION_INPUT_SCHEMA: &str = "core_fact_attribution_input.v1";
+pub const CORE_FACT_ATTRIBUTION_RESULT_SCHEMA: &str = "core_fact_attribution_result.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreFactAttributionInput {
+    pub schema_version: String,
+    pub scope_id: String,
+    pub core_fact_id: Id,
+    pub operation_id: Id,
+    pub expected_updated_at: Timestamp,
+    pub change: CoreFactSubjectChange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum CoreFactSubjectChange {
+    Assign { subject: Speaker },
+    Clear,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreFactAttributionRevision {
+    pub applied_at: Timestamp,
+    pub operation_digest: String,
+    pub request_digest: String,
+    pub assertion_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_subject_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_subject_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoreFactAttributionResult {
+    pub schema_version: String,
+    pub category: String,
+    pub fact: CoreFact,
+    pub applied_at: Timestamp,
+    pub already_applied: bool,
+}
+
+pub(crate) fn core_subject_digest(scope: &str, subject_id: &str) -> crate::Result<String> {
+    crate::engine::storage_digest(&("core_fact_attribution_subject", scope, subject_id))
+}
+
+impl CoreFactAttributionRevision {
+    pub(crate) fn refers_to_subject(&self, subject_digest: &str) -> bool {
+        self.previous_subject_digest.as_deref() == Some(subject_digest)
+            || self.assigned_subject_digest.as_deref() == Some(subject_digest)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

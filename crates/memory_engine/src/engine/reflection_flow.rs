@@ -86,6 +86,20 @@ struct CandidateReviewOperationIntent {
     candidate_applied: bool,
 }
 
+impl CandidateReviewOperationIntent {
+    fn clear_attribution_histories(&mut self) {
+        for fact in self
+            .core_effects
+            .iter_mut()
+            .flat_map(|effect| &mut effect.category.facts)
+            .chain(self.result.promoted_fact.iter_mut())
+            .chain(&mut self.result.contested_facts)
+        {
+            fact.attribution_history.clear();
+        }
+    }
+}
+
 impl<S: Storage> MemoryEngine<S> {
     pub fn bind_reflection_session(
         &self,
@@ -1331,7 +1345,7 @@ impl<S: Storage> MemoryEngine<S> {
                 promoted_fact,
                 contested_facts,
             };
-            let intent = CandidateReviewOperationIntent {
+            let mut intent = CandidateReviewOperationIntent {
                 schema_version: REFLECTION_OPERATION_SCHEMA_VERSION.to_string(),
                 candidate_id: candidate.candidate_id.clone(),
                 previous_candidate_updated_at: candidate.updated_at.clone(),
@@ -1342,6 +1356,7 @@ impl<S: Storage> MemoryEngine<S> {
                 applied_core_categories: Vec::new(),
                 candidate_applied: false,
             };
+            intent.clear_attribution_histories();
             let operation = JournalOperation {
                 schema_version: JOURNAL_OPERATION_SCHEMA_VERSION.to_string(),
                 op_id: operation_id,
@@ -1412,6 +1427,14 @@ impl<S: Storage> MemoryEngine<S> {
                 return Err(MemoryEngineError::Validation(format!(
                     "candidate Core evidence is no longer active in its scope: {fact_id}"
                 )));
+            }
+            if let Some(correction) = fact.attribution_changed_at.as_deref() {
+                let reviewed_basis = OffsetDateTime::parse(&candidate.created_at, &Rfc3339);
+                let corrected_basis = OffsetDateTime::parse(correction, &Rfc3339);
+                if !matches!((reviewed_basis, corrected_basis), (Ok(reviewed), Ok(corrected)) if reviewed > corrected)
+                {
+                    return Err(MemoryEngineError::NeedsNewReview);
+                }
             }
         }
         Ok(())
@@ -1484,12 +1507,30 @@ impl<S: Storage> MemoryEngine<S> {
                 tags.push("manual_review".to_string());
                 let tags = unique_strings(tags);
                 let source_archive_ids = unique_strings(candidate.supporting_archive_ids.clone());
+                let incoming = CoreFactInput {
+                    schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                    category: promotion_category.clone(),
+                    scope: candidate.core_scope.clone(),
+                    subject: candidate.subject.clone(),
+                    text: text.clone(),
+                    confidence: candidate.confidence,
+                    source_archive_ids: source_archive_ids.clone(),
+                    source_candidate_id: Some(candidate.candidate_id.clone()),
+                    tags: tags.clone(),
+                };
+                for fact in &desired.facts {
+                    if core_policy::would_recreate_corrected_attribution(fact, &incoming)? {
+                        return Err(MemoryEngineError::NeedsNewReview);
+                    }
+                }
                 let fact = if let Some(existing) = desired.facts.iter_mut().find(|fact| {
                     normalize_match_text(&fact.text) == needle
                         && fact.scope == candidate.core_scope
                         && same_subject(fact.subject.as_ref(), candidate.subject.as_ref())
                 }) {
-                    existing.subject = candidate.subject.clone();
+                    if existing.attribution_changed_at.is_none() {
+                        existing.subject = candidate.subject.clone();
+                    }
                     existing.text = text;
                     existing.status = CoreFactStatus::Active;
                     existing.confidence = existing
@@ -1519,6 +1560,8 @@ impl<S: Storage> MemoryEngine<S> {
                         tags,
                         links: Vec::new(),
                         review: None,
+                        attribution_history: Vec::new(),
+                        attribution_changed_at: None,
                     };
                     desired.facts.push(fact.clone());
                     fact
@@ -1582,15 +1625,36 @@ impl<S: Storage> MemoryEngine<S> {
                 actual: intent.schema_version,
             });
         }
+        intent.clear_attribution_histories();
         if operation.state == JournalState::Completed {
             return Ok(intent.result);
         }
 
         for effect in intent.core_effects.clone() {
-            let category_name = effect.category.category.clone();
+            let mut desired = effect.category;
+            let category_name = desired.category.clone();
             self.with_resource_lock(core_lock_key(&category_name), || {
                 let current = self.storage.read_core_store_category(&category_name)?;
-                if current == effect.category {
+                // Approval owns the changes it prepared. Attribution history
+                // belongs to the current fact and stays out of review journals.
+                let histories = current
+                    .facts
+                    .iter()
+                    .map(|fact| {
+                        (
+                            (fact.core_fact_id.as_str(), fact.scope.as_deref()),
+                            &fact.attribution_history,
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                for fact in &mut desired.facts {
+                    if let Some(history) =
+                        histories.get(&(fact.core_fact_id.as_str(), fact.scope.as_deref()))
+                    {
+                        fact.attribution_history = (*history).clone();
+                    }
+                }
+                if current == desired {
                     return Ok(());
                 }
                 if current.updated_at != effect.previous_updated_at {
@@ -1598,7 +1662,7 @@ impl<S: Storage> MemoryEngine<S> {
                         "Core category changed while durable candidate review was being applied: {category_name}"
                     )));
                 }
-                self.storage.write_core_store_category(&effect.category)
+                self.storage.write_core_store_category(&desired)
             })?;
             if !intent.applied_core_categories.contains(&category_name) {
                 intent.applied_core_categories.push(category_name);

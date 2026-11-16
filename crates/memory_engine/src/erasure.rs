@@ -144,8 +144,16 @@ pub struct SubjectErasurePlan {
     pub suppressed_event_ids_by_session: BTreeMap<String, Vec<Id>>,
     pub detached_quote_event_ids_by_session: BTreeMap<String, Vec<Id>>,
     pub suppressed_archive_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution_scrub: Option<CoreAttributionScrub>,
     pub records: MemoryErasurePlan,
     pub incomplete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreAttributionScrub {
+    pub subject_digest: String,
+    pub facts: Vec<ErasureCoreFactRef>,
 }
 
 impl SubjectErasurePlan {
@@ -154,6 +162,7 @@ impl SubjectErasurePlan {
             || !self.suppressed_event_ids_by_session.is_empty()
             || !self.detached_quote_event_ids_by_session.is_empty()
             || !self.suppressed_archive_ids.is_empty()
+            || self.attribution_scrub.is_some()
             || !self.records.archive_ids.is_empty()
             || !self.records.memory_unit_ids.is_empty()
             || !self.records.core_facts.is_empty()

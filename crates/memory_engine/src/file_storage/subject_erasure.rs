@@ -39,6 +39,7 @@ impl FileStorage {
         self.rewrite_subject_vectors(&plan.scope_id, &erased_units)?;
         self.retire_subject_ingest_receipts(plan)?;
         self.apply_erasure_records(&plan.records)?;
+        self.scrub_subject_attribution_histories(plan)?;
 
         let sessions = plan
             .event_ids_by_session
@@ -55,6 +56,37 @@ impl FileStorage {
                 &retired_events,
                 &superseded_archives,
             )?;
+        }
+        Ok(())
+    }
+
+    fn scrub_subject_attribution_histories(&self, plan: &SubjectErasurePlan) -> Result<()> {
+        let Some(scrub) = &plan.attribution_scrub else {
+            return Ok(());
+        };
+        let mut by_category = BTreeMap::<&str, HashSet<&str>>::new();
+        for reference in &scrub.facts {
+            by_category
+                .entry(&reference.category)
+                .or_default()
+                .insert(&reference.core_fact_id);
+        }
+        for (name, ids) in by_category {
+            let mut category = self.read_core_store_category(name)?;
+            let mut changed = false;
+            for fact in &mut category.facts {
+                if fact.scope.as_deref() == Some(&plan.scope_id)
+                    && ids.contains(fact.core_fact_id.as_str())
+                {
+                    let before = fact.attribution_history.len();
+                    fact.attribution_history
+                        .retain(|revision| !revision.refers_to_subject(&scrub.subject_digest));
+                    changed |= before != fact.attribution_history.len();
+                }
+            }
+            if changed {
+                self.write_core_store_category(&category)?;
+            }
         }
         Ok(())
     }
@@ -453,6 +485,12 @@ fn validate_subject_plan(plan: &SubjectErasurePlan) -> Result<()> {
     }
     for id in &plan.suppressed_archive_ids {
         validate_erasure_path_component("archive id", id)?;
+    }
+    if let Some(scrub) = &plan.attribution_scrub {
+        for reference in &scrub.facts {
+            validate_erasure_path_component("Core category", &reference.category)?;
+            validate_erasure_path_component("Core fact id", &reference.core_fact_id)?;
+        }
     }
     Ok(())
 }

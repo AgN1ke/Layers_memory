@@ -46,6 +46,18 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage supports explicit Core attribution correction
+
+The Rust API assigns or clears a fact's subject within the requested scope.
+It checks the expected revision and supports retry with the same operation
+ID. The fact keeps its identity, text, status, confidence, and source
+dependencies. An equivalent fact for the new subject blocks a collision.
+
+The correction history uses timestamps and scope-bound identity and
+operation digests. It stays outside model prompts. Subject erasure removes
+associated history. Automation based on stale sources or a challenge formed
+before the correction cannot undo the owner's decision.
+
 ## 2026-11-16 — FileStorage supports inspection and erasure by subject
 
 The Rust API identifies people by a stable subject ID within a scope.

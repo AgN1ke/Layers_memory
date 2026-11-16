@@ -14,6 +14,12 @@ where
     let subject = normalize_speaker(input.subject.as_ref());
     let fact_text = normalize_whitespace(&input.text);
 
+    for fact in &category.facts {
+        if would_recreate_corrected_attribution(fact, input)? {
+            return Err(MemoryEngineError::OperationStale);
+        }
+    }
+
     if category.schema_version.trim().is_empty() {
         category.schema_version = CORE_STORE_SCHEMA_VERSION.to_string();
     }
@@ -28,7 +34,9 @@ where
             && same_subject(fact.subject.as_ref(), subject.as_ref())
     }) {
         existing.scope = scope.clone();
-        existing.subject = subject.clone();
+        if existing.attribution_changed_at.is_none() {
+            existing.subject = subject.clone();
+        }
         existing.text = fact_text;
         existing.status = CoreFactStatus::Active;
         existing.confidence = existing.confidence.max(input.confidence).clamp(0.0, 1.0);
@@ -56,6 +64,8 @@ where
             tags: unique_strings(input.tags.clone()),
             links: Vec::new(),
             review: None,
+            attribution_changed_at: None,
+            attribution_history: Vec::new(),
         };
         category.facts.push(fact.clone());
         fact
@@ -68,6 +78,42 @@ where
         fact,
     };
     Ok((category, result))
+}
+
+/// A corrected subject blocks a retry of the same assertion from its original
+/// provenance. The same words with independent sources remain valid.
+pub(super) fn would_recreate_corrected_attribution(
+    fact: &CoreFact,
+    incoming: &CoreFactInput,
+) -> Result<bool> {
+    if fact.attribution_history.is_empty()
+        || fact.scope != normalize_optional_string(incoming.scope.as_deref())
+        || same_subject(fact.subject.as_ref(), incoming.subject.as_ref())
+        || !(fact.source_candidate_id.is_some()
+            && fact.source_candidate_id == incoming.source_candidate_id
+            || fact
+                .source_archive_ids
+                .iter()
+                .any(|id| incoming.source_archive_ids.contains(id)))
+    {
+        return Ok(false);
+    }
+    let Some(scope) = fact.scope.as_deref() else {
+        return Ok(false);
+    };
+    let subject = normalize_speaker(incoming.subject.as_ref());
+    let incoming_digest = subject
+        .as_ref()
+        .map(|subject| crate::core_store::core_subject_digest(scope, &subject.id))
+        .transpose()?;
+    let assertion_digest = super::transactional_support::serializable_digest(&(
+        scope,
+        normalize_match_text(&incoming.text),
+    ))?;
+    Ok(fact.attribution_history.iter().any(|revision| {
+        revision.previous_subject_digest == incoming_digest
+            && revision.assertion_digest == assertion_digest
+    }))
 }
 
 pub(super) fn apply_core_fact_patch(

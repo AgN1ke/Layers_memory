@@ -256,6 +256,7 @@ impl<S: Storage> MemoryEngine<S> {
             plan.records
                 .core_facts
                 .iter()
+                .chain(plan.attribution_scrub.iter().flat_map(|scrub| &scrub.facts))
                 .map(|fact| core_lock_key(&fact.category))
                 .collect::<BTreeSet<_>>(),
         );

@@ -3,7 +3,7 @@ use std::collections::{btree_map::Entry, BTreeMap};
 use super::erasure_flow::sleep_run_task_ids;
 use super::scope_inspection::inspection_id_is_valid;
 use super::*;
-use crate::erasure::SubjectErasurePlan;
+use crate::erasure::{CoreAttributionScrub, SubjectErasurePlan};
 
 impl<S: Storage> MemoryEngine<S> {
     pub(super) fn build_subject_erasure_plan(
@@ -327,6 +327,7 @@ impl<S: Storage> MemoryEngine<S> {
             suppressed_event_ids_by_session,
             detached_quote_event_ids_by_session,
             suppressed_archive_ids,
+            attribution_scrub: graph.attribution_scrub,
             records: MemoryErasurePlan {
                 schema_version: MEMORY_ERASURE_PLAN_SCHEMA_VERSION.to_string(),
                 operation: MemoryErasureKind::PurgeScope,
@@ -465,22 +466,30 @@ impl<S: Storage> MemoryEngine<S> {
             }
         }
 
-        let core_facts = categories
-            .iter()
-            .flat_map(|category| {
-                category
-                    .facts
+        let subject_digest = crate::core_store::core_subject_digest(scope, subject)?;
+        let mut history_refs = Vec::new();
+        let mut core_facts = Vec::new();
+        for category in &categories {
+            for fact in category
+                .facts
+                .iter()
+                .filter(|fact| fact.scope.as_deref() == Some(scope))
+            {
+                let reference = ErasureCoreFactRef {
+                    category: category.category.clone(),
+                    core_fact_id: fact.core_fact_id.clone(),
+                };
+                if core_ids.contains(&fact.core_fact_id) {
+                    core_facts.push(reference);
+                } else if fact
+                    .attribution_history
                     .iter()
-                    .filter(|fact| {
-                        fact.scope.as_deref() == Some(scope)
-                            && core_ids.contains(&fact.core_fact_id)
-                    })
-                    .map(|fact| ErasureCoreFactRef {
-                        category: category.category.clone(),
-                        core_fact_id: fact.core_fact_id.clone(),
-                    })
-            })
-            .collect();
+                    .any(|entry| entry.refers_to_subject(&subject_digest))
+                {
+                    history_refs.push(reference);
+                }
+            }
+        }
         let candidate_ids = candidates
             .iter()
             .filter(|candidate| {
@@ -516,6 +525,10 @@ impl<S: Storage> MemoryEngine<S> {
             .collect();
         Ok(SubjectGraphRecords {
             core_facts,
+            attribution_scrub: (!history_refs.is_empty()).then_some(CoreAttributionScrub {
+                subject_digest,
+                facts: history_refs,
+            }),
             candidate_ids,
             node_ids,
             evidence_ids,
@@ -526,6 +539,7 @@ impl<S: Storage> MemoryEngine<S> {
 
 struct SubjectGraphRecords {
     core_facts: Vec<ErasureCoreFactRef>,
+    attribution_scrub: Option<CoreAttributionScrub>,
     candidate_ids: BTreeSet<String>,
     node_ids: BTreeSet<String>,
     evidence_ids: BTreeSet<String>,

@@ -880,9 +880,23 @@ impl<S: Storage> MemoryEngine<S> {
             .filter(|archive| archive.status == ArchiveStatus::Complete)
         {
             summary.archives += 1;
-            let archive_summary = self
-                .with_resource_lock(session_lock_key(&archive.source_session_id), || {
-                    self.apply_archive_personal_signal_bridge(&archive)
+            if archive.personal_signals.is_empty() {
+                continue;
+            }
+            let scope = archive.effective_personality_scope_id();
+            let archive_summary =
+                self.with_memory_write(scope, &archive.source_session_id, || {
+                    let Some(current) = self
+                        .storage
+                        .read_archive_detail_scoped(scope, &archive.archive_id)?
+                        .and_then(|snapshot| snapshot.items.into_iter().next())
+                    else {
+                        return Ok(CoreSignalSummary::default());
+                    };
+                    if current.source_session_id != archive.source_session_id {
+                        return Ok(CoreSignalSummary::default());
+                    }
+                    self.apply_archive_personal_signal_bridge(&current)
                 })?;
             summary.created += archive_summary.created;
             summary.updated += archive_summary.updated;
@@ -896,18 +910,22 @@ impl<S: Storage> MemoryEngine<S> {
         archive: &ArchiveEntry,
     ) -> Result<CoreSignalSummary> {
         let mut summary = CoreSignalSummary::default();
-        if archive.status != ArchiveStatus::Complete {
+        if archive.status != ArchiveStatus::Complete || archive.personal_signals.is_empty() {
             return Ok(summary);
         }
 
+        let scope = archive.effective_personality_scope_id();
         let session_events = self.read_session_events_with_archived(&archive.source_session_id)?;
         let attribution_events = session_events
             .iter()
+            .filter(|event| {
+                event.session_id == archive.source_session_id
+                    && event.effective_personality_scope_id() == scope
+            })
             .map(AttributionEvent::from)
             .collect::<Vec<_>>();
         let mut signals = archive.personal_signals.clone();
         attribute_personal_signals(&mut signals, &attribution_events);
-        let scope = Some(archive.effective_personality_scope_id());
 
         for signal in &signals {
             let text = normalize_whitespace(&signal.text);
@@ -937,37 +955,30 @@ impl<S: Storage> MemoryEngine<S> {
                 continue;
             }
 
+            let incoming = CoreFactInput {
+                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                category: category.clone(),
+                scope: Some(scope.to_string()),
+                subject: signal.subject.clone(),
+                text,
+                confidence: signal.confidence,
+                tags: vec![
+                    "archive_signal".to_string(),
+                    "signal_category".to_string(),
+                    format!("signal_category:{category}"),
+                ],
+                source_archive_ids: vec![archive.archive_id.clone()],
+                source_candidate_id: None,
+            };
             let result = self.with_resource_lock(core_lock_key(&category), || {
-                if self.is_near_duplicate_core_fact(
-                    &category,
-                    scope,
-                    signal.subject.as_ref(),
-                    &text,
-                )? {
+                if let Some(reason) = self.core_signal_conflict(&incoming)? {
+                    record_core_signal_skip(&mut summary, reason);
                     return Ok(None);
                 }
-                self.upsert_core_fact_unlocked(
-                    CoreFactInput {
-                        schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
-                        category: category.clone(),
-                        scope: scope.map(str::to_string),
-                        subject: signal.subject.clone(),
-                        text,
-                        confidence: signal.confidence,
-                        tags: vec![
-                            "archive_signal".to_string(),
-                            "signal_category".to_string(),
-                            format!("signal_category:{category}"),
-                        ],
-                        source_archive_ids: vec![archive.archive_id.clone()],
-                        source_candidate_id: None,
-                    },
-                    category.clone(),
-                )
-                .map(Some)
+                self.upsert_core_fact_unlocked(incoming, category.clone())
+                    .map(Some)
             })?;
             let Some(result) = result else {
-                record_core_signal_skip(&mut summary, "near_duplicate");
                 continue;
             };
             if result.created {
@@ -1161,34 +1172,32 @@ impl<S: Storage> MemoryEngine<S> {
         }))
     }
 
-    pub(super) fn is_near_duplicate_core_fact(
-        &self,
-        category_name: &str,
-        scope: Option<&str>,
-        subject: Option<&Speaker>,
-        text: &str,
-    ) -> Result<bool> {
-        let normalized_scope = normalize_optional_string(scope);
-        let needle = normalize_match_text(text);
-        let needle_tokens = meaningful_tokens(text);
-        let category = self.storage.read_core_store_category(category_name)?;
-
+    fn core_signal_conflict(&self, incoming: &CoreFactInput) -> Result<Option<&'static str>> {
+        let normalized_scope = normalize_optional_string(incoming.scope.as_deref());
+        let needle = normalize_match_text(&incoming.text);
+        let needle_tokens = meaningful_tokens(&incoming.text);
+        let category = self.storage.read_core_store_category(&incoming.category)?;
+        for fact in &category.facts {
+            if core_policy::would_recreate_corrected_attribution(fact, incoming)? {
+                return Ok(Some("corrected_attribution"));
+            }
+        }
         for fact in category.facts {
             if fact.status != CoreFactStatus::Active
                 || fact.scope != normalized_scope
-                || !same_subject(fact.subject.as_ref(), subject)
+                || !same_subject(fact.subject.as_ref(), incoming.subject.as_ref())
             {
                 continue;
             }
             if normalize_match_text(&fact.text) == needle {
-                return Ok(false);
+                return Ok(None);
             }
             if token_overlap_sets(&needle_tokens, &meaningful_tokens(&fact.text)) >= 0.55 {
-                return Ok(true);
+                return Ok(Some("near_duplicate"));
             }
         }
 
-        Ok(false)
+        Ok(None)
     }
 
     pub fn resume_sleep_compression(

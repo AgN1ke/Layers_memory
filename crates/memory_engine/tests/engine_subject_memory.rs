@@ -365,6 +365,68 @@ fn legacy_reply_with_opaque_copy_reports_incomplete_and_leaves_no_recall_text() 
     assert!(!author.to_string().contains("marigold"));
 }
 
+#[test]
+fn erasing_a_former_scopes_archive_preserves_a_reused_session() {
+    let fixture = Fixture::new("reused_session");
+    let engine = fixture.open();
+    let original = engine
+        .ingest(event_input(
+            SCOPE,
+            SESSION,
+            FIRST,
+            TARGET_TEXT,
+            Some(vec![]),
+            None,
+        ))
+        .unwrap()
+        .stored_event;
+    let archive = publish_archive(
+        &engine,
+        SESSION,
+        vec![unit(TARGET_TEXT, FIRST, &[&original.event_id])],
+        TARGET_TEXT,
+    );
+    assert!(
+        engine
+            .delete_session(SESSION)
+            .unwrap()
+            .archived_memory_preserved
+    );
+    let replacement = engine
+        .ingest(event_input(
+            OTHER_SCOPE,
+            SESSION,
+            FIRST,
+            FOREIGN_TEXT,
+            Some(vec![]),
+            None,
+        ))
+        .unwrap()
+        .stored_event;
+    drop(engine);
+
+    let engine = fixture.open();
+    let report = engine
+        .erase_subject(SCOPE, FIRST, "erase_prior_scope")
+        .unwrap();
+    assert_eq!(report.deleted_events, 0);
+    assert_eq!(report.deleted_memory_units, 1);
+    let prior = engine.inspect_archive(SCOPE, &archive.archive_id).unwrap();
+    assert!(!serde_json::to_string(&prior).unwrap().contains(TARGET_TEXT));
+    let current = engine.read_session(SESSION).unwrap();
+    assert_eq!(
+        current.metadata.effective_personality_scope_id(),
+        OTHER_SCOPE
+    );
+    assert_eq!(current.metadata.event_count, 1);
+    assert_eq!(current.events, [replacement]);
+    assert!(view_has(
+        &subject_view(&engine, OTHER_SCOPE, FIRST),
+        "event",
+        FOREIGN_TEXT
+    ));
+}
+
 fn event_input(
     scope: &str,
     session: &str,
