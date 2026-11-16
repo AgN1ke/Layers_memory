@@ -166,6 +166,17 @@ impl PyMemoryEngine {
         dump_json(&stored, "stored event")
     }
 
+    fn ingest_idempotent(
+        &self,
+        py: Python<'_>,
+        operation_id: &str,
+        event_json: &str,
+    ) -> PyResult<String> {
+        let event: IngestEvent = parse_json(event_json, "event")?;
+        let result = run_without_gil(py, || self.inner.ingest_idempotent(operation_id, event))?;
+        dump_json(&result, "idempotent ingest result")
+    }
+
     fn sleep(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
         let result = run_without_gil(py, || self.inner.sleep(session_id))?;
         dump_json(&result, "sleep result")

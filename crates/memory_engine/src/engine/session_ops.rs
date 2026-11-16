@@ -16,15 +16,7 @@ impl<S: Storage> MemoryEngine<S> {
 
         let session_id = event.session_id.clone();
         self.with_resource_lock(session_lock_key(&session_id), || {
-            let (initial_weight, weight_reason) =
-                self.options.event_scoring.score_ingest_event(&event);
-            let stored = StoredEvent::from_ingest(
-                event,
-                new_id("event")?,
-                now_rfc3339()?,
-                initial_weight,
-                weight_reason,
-            );
+            let stored = self.prepare_ingest_event(event)?;
 
             self.storage.append_event(&stored.session_id, &stored)?;
 
@@ -33,6 +25,17 @@ impl<S: Storage> MemoryEngine<S> {
                 stored_event: stored,
             })
         })
+    }
+
+    pub(super) fn prepare_ingest_event(&self, event: IngestEvent) -> Result<StoredEvent> {
+        let (initial_weight, weight_reason) = self.options.event_scoring.score_ingest_event(&event);
+        Ok(StoredEvent::from_ingest(
+            event,
+            new_id("event")?,
+            now_rfc3339()?,
+            initial_weight,
+            weight_reason,
+        ))
     }
 
     pub(super) fn ensure_manifest(&self) -> Result<()> {

@@ -1116,7 +1116,7 @@ impl<S: Storage> MemoryEngine<S> {
                             session_lock_key(&intent.plan.target_id)
                         }
                         MemoryErasureKind::PurgeScope => {
-                            format!("memory_erasure:scope:{}", intent.plan.target_id)
+                            super::erasure_flow::scope_erasure_lock_key(&intent.plan.target_id)
                         }
                     };
                     self.with_resource_lock(lock_key, || {
@@ -1133,6 +1133,9 @@ impl<S: Storage> MemoryEngine<S> {
                             .map(|_| ())
                     })?;
                     recovered += 1;
+                }
+                JournalOperationType::IngestEvent => {
+                    recovered += usize::from(self.recover_ingest_operation(operation)?);
                 }
                 _ => {}
             }

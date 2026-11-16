@@ -46,6 +46,15 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage accepts stable IDs for retryable ingest
+
+`ingest_idempotent` is available in Rust, Python and Godot. Replaying the
+same operation within 30 days returns the original event, including after
+restart or raw event rotation. A changed request under the same ID is
+rejected. An interrupted append is repaired from the journal before it
+can be acknowledged. Legacy `ingest` retains its append behavior.
+Generation checks for events first delivered after erasure belong to H2.2.
+
 ## 2026-11-15 — Release workflow for installed Python wheels
 
 The repository can build Linux and Windows x86-64 wheels for CPython 3.12 in

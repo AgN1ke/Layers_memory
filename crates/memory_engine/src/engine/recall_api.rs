@@ -496,6 +496,8 @@ pub(super) fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 pub(super) fn session_lock_key(session_id: &str) -> String {
+    #[cfg(windows)]
+    let session_id = session_id.to_lowercase();
     format!("session:{session_id}")
 }
 

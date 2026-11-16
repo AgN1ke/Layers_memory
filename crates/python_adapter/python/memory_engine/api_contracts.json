@@ -16,6 +16,7 @@
   "MemoryEngine.finish_sleep_run_with_available": {"request": {"run_json": "SleepRun"}, "result": "SleepOutcome"},
   "MemoryEngine.flush_recall_stats": {"request": {}, "result": "int"},
   "MemoryEngine.ingest": {"request": {"event_json": "IngestEvent"}, "result": "IngestResult"},
+  "MemoryEngine.ingest_idempotent": {"request": {"event_json": "IngestEvent"}, "result": "IdempotentIngestResult"},
   "MemoryEngine.list_candidates": {"request": {}, "result": "list[CandidateBelief]"},
   "MemoryEngine.list_forgotten_memory_units": {"request": {}, "result": "ForgottenMemoryUnits"},
   "MemoryEngine.migrate_hypothesis_graph": {"request": {}, "result": "HypothesisGraphMigrationResult"},

@@ -73,6 +73,17 @@ impl MemoryEngineGodot {
     }
 
     #[func]
+    fn ingest_idempotent(&self, operation_id: GString, event_json: GString) -> GString {
+        self.with_engine(|engine| {
+            let event: IngestEvent = parse_json(&event_json.to_string(), "event")?;
+            let result = engine
+                .ingest_idempotent(&operation_id.to_string(), event)
+                .map_err(|err| err.to_string())?;
+            dump_json(&result, "idempotent ingest result")
+        })
+    }
+
+    #[func]
     fn begin_sleep_run(&self, session_id: GString) -> GString {
         self.with_engine(|engine| {
             let run = engine

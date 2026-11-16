@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | H2.1 idempotent FileStorage ingest
+
+Recorded `ingest_idempotent` in the [FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and [integrator guide](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю).
+Updated the integration plan and roadmap.
+
 ## [2026-11-15] update | H2 FileStorage operation contract
 
 Recorded the target [FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)

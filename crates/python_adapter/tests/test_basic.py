@@ -188,7 +188,7 @@ def test_autonomous_reflection_abstains_without_validated_memory(
     assert engine.recover_pending_memory_operations() == 0
 
 
-def _ingest(engine: memory_engine.MemoryEngine, session_id: str, text: str, **overrides) -> dict:
+def _ingest_event_json(session_id: str, text: str, **overrides) -> str:
     event = {
         "schema_version": "event.v1",
         "type": "user_message",
@@ -201,7 +201,11 @@ def _ingest(engine: memory_engine.MemoryEngine, session_id: str, text: str, **ov
         "importance_hint": "high",
     }
     event.update(overrides)
-    return json.loads(engine.ingest(json.dumps(event)))
+    return json.dumps(event)
+
+
+def _ingest(engine: memory_engine.MemoryEngine, session_id: str, text: str, **overrides) -> dict:
+    return json.loads(engine.ingest(_ingest_event_json(session_id, text, **overrides)))
 
 
 def test_ingest_creates_stored_event(engine: memory_engine.MemoryEngine):
@@ -214,6 +218,48 @@ def test_ingest_creates_stored_event(engine: memory_engine.MemoryEngine):
     assert stored["session_id"] == "session_a"
     assert stored["initial_weight"] >= 0.75
     assert "high importance floor" in stored["weight_reason"]
+
+
+def test_idempotent_ingest_replays_across_restart(tmp_path, engine_factory):
+    event_json = _ingest_event_json("retry_session", "Keep this once.")
+    engine = engine_factory(tmp_path, host_id="pytest")
+    accepted = json.loads(engine.ingest_idempotent("pytest-operation-1", event_json))
+    assert accepted["schema_version"] == "idempotent_ingest_result.v1"
+    assert accepted["already_applied"] is False
+    del engine
+
+    reopened = engine_factory(tmp_path, host_id="pytest")
+    replay = json.loads(reopened.ingest_idempotent("pytest-operation-1", event_json))
+    assert replay == {**accepted, "already_applied": True}
+    session = json.loads(reopened.read_session("retry_session"))
+    assert session["metadata"]["event_count"] == 1
+    assert session["events"] == [accepted["event"]]
+
+    legacy = json.loads(reopened.ingest(event_json))
+    assert legacy["schema_version"] == "ingest_result.v1"
+    assert legacy["stored_event"]["event_id"] != accepted["event"]["event_id"]
+    session = json.loads(reopened.read_session("retry_session"))
+    assert session["metadata"]["event_count"] == 2
+    assert session["events"] == [accepted["event"], legacy["stored_event"]]
+
+
+def test_idempotent_ingest_supports_optional_event_fields(engine):
+    event_json = _ingest_event_json("plain_event", "Plain", tags=[], theme=None)
+    plain = json.loads(engine.ingest_idempotent("plain-1", event_json))["event"]
+    assert "theme" not in plain and "tags" not in plain
+
+    event_json = _ingest_event_json(
+        "attributed_event", "Original",
+        personality_scope_id="group_scope",
+        memory_text="Memory text",
+        emotional_tone="calm",
+        speaker={"id": "person_a", "name": "A"},
+        links=[{"kind": "source", "target": "message_1"}],
+    )
+    attributed = json.loads(engine.ingest_idempotent("attributed-1", event_json))["event"]
+    assert attributed["personality_scope_id"] == "group_scope"
+    assert attributed["memory_text"] == "Memory text"
+    assert attributed["speaker"]["id"] == "person_a"
 
 
 def test_read_session_returns_stored_events(engine: memory_engine.MemoryEngine):

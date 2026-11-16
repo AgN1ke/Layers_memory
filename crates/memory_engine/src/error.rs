@@ -10,6 +10,15 @@ pub enum MemoryEngineError {
     #[error("storage error: {0}")]
     Storage(String),
 
+    #[error("operation ID was already used with different input")]
+    OperationConflict,
+
+    #[error("the stored result of this operation is no longer available")]
+    OperationResultUnavailable,
+
+    #[error("a journaled operation is incomplete")]
+    OperationIncomplete,
+
     #[error("incompatible schema version: expected {expected}, got {actual}")]
     IncompatibleSchema { expected: String, actual: String },
 

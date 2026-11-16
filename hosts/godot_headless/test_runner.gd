@@ -39,6 +39,10 @@ func _init() -> void:
     if failed:
         return
 
+    _assert_idempotent_ingest(runtime_dir.path_join("memory"))
+    if failed:
+        return
+
     _send_user_message("Мене звати Микита.")
     if failed:
         return
@@ -88,6 +92,26 @@ func _arg_value(name: String) -> String:
         if args[index] == name and index + 1 < args.size():
             return args[index + 1]
     return ""
+
+func _assert_idempotent_ingest(memory_dir: String) -> void:
+    var event := _dumps({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "godot_user",
+        "timestamp": "2026-11-16T12:00:00Z",
+        "session_id": "godot_idempotent_ingest",
+        "payload": {"text": "Записати один раз."},
+    })
+    var first: Variant = _loads(engine.ingest_idempotent("retry-1", event))
+    if not (first is Dictionary) or first.get("already_applied") != false or not first.has("event"):
+        _fail("idempotent ingest must apply a new operation")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    var replay: Variant = _loads(engine.ingest_idempotent("retry-1", event))
+    if not (replay is Dictionary) or replay.get("already_applied") != true or replay.get("event") != first["event"]:
+        _fail("idempotent ingest must return the original event after reopening")
 
 func _send_user_message(text: String) -> String:
     turn_index += 1

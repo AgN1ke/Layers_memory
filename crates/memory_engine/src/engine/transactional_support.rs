@@ -6,7 +6,7 @@ use super::*;
 use crate::server_runtime::VaultContext;
 use crate::storage_v2::{RecordKey, TransactionalStorage, WorkUnitReceipt};
 
-pub(super) fn serializable_digest<T: Serialize>(value: &T) -> Result<String> {
+pub(crate) fn serializable_digest<T: Serialize>(value: &T) -> Result<String> {
     let bytes = serde_json::to_vec(value)?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }

@@ -108,6 +108,7 @@ mod erasure_flow;
 mod fidelity_flow;
 mod forgetting_flow;
 mod hypothesis_flow;
+mod idempotent_ingest;
 mod options;
 mod recall_api;
 mod recall_stage1;
@@ -124,6 +125,7 @@ mod validation;
 mod vector_flow;
 
 use context_budget::*;
+pub use idempotent_ingest::IdempotentIngestResult;
 use options::ForgetApplyAction;
 pub use options::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, FidelityConfig, ForgetConfig,
@@ -148,6 +150,7 @@ pub use transactional_sleep::{
     MAX_SLEEP_MEMORY_UNITS_PER_RUN, MAX_SLEEP_SUBMIT_RESPONSE_BYTES,
     MAX_SLEEP_WORKFLOW_INPUT_BYTES,
 };
+pub(crate) use transactional_support::serializable_digest as storage_digest;
 use validation::*;
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SLEEP_RUN_SCHEMA_VERSION: &str = "sleep_run.v1";

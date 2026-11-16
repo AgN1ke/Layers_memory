@@ -32,6 +32,9 @@ use crate::vector::{
 };
 use crate::{MemoryEngineError, Result};
 
+mod idempotent_ingest;
+pub(crate) use idempotent_ingest::JournaledIngest;
+
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
@@ -271,6 +274,15 @@ impl FileStorage {
     }
 
     fn upsert_session_metadata(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
+        let metadata = self.session_metadata_after_event(session_id, event)?;
+        self.write_session_metadata_file(&metadata)
+    }
+
+    fn session_metadata_after_event(
+        &self,
+        session_id: &str,
+        event: &StoredEvent,
+    ) -> Result<SessionMetadata> {
         let path = self.session_json_path(session_id);
         let mut metadata = if path.exists() {
             let metadata = self.read_session_metadata_file(session_id)?;
@@ -322,7 +334,7 @@ impl FileStorage {
 
         metadata.validate()?;
 
-        self.write_session_metadata_file(&metadata)
+        Ok(metadata)
     }
 
     fn update_session_markdown(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
@@ -334,22 +346,24 @@ impl FileStorage {
         let needs_header = !path.exists() || fs::metadata(&path)?.len() == 0;
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
-        if needs_header {
-            write!(
-                file,
-                "---\nschema_version: session_view.v1\nsession_id: {session_id}\nstatus: active\n---\n\n# Сесія {session_id}\n\n## Події\n\n"
-            )?;
-        }
-
-        let line = format!(
-            "- {} {}: {}\n",
-            event.timestamp,
-            event.event_type,
-            event_summary(event)
-        );
-        file.write_all(line.as_bytes())?;
+        file.write_all(event_markdown(session_id, event, needs_header).as_bytes())?;
         Ok(())
     }
+}
+
+fn event_markdown(session_id: &str, event: &StoredEvent, needs_header: bool) -> String {
+    let mut text = if needs_header {
+        format!("---\nschema_version: session_view.v1\nsession_id: {session_id}\nstatus: active\n---\n\n# Сесія {session_id}\n\n## Події\n\n")
+    } else {
+        String::new()
+    };
+    text.push_str(&format!(
+        "- {} {}: {}\n",
+        event.timestamp,
+        event.event_type,
+        event_summary(event)
+    ));
+    text
 }
 
 impl Storage for FileStorage {
@@ -367,6 +381,7 @@ impl Storage for FileStorage {
     }
 
     fn read_session(&self, session_id: &str) -> Result<SessionRecord> {
+        self.require_complete_ingest(session_id)?;
         let metadata = if self.session_json_path(session_id).exists() {
             self.read_session_metadata_file(session_id)?
         } else if self.session_dir(session_id).exists() {
@@ -377,6 +392,7 @@ impl Storage for FileStorage {
             self.empty_session_metadata(session_id)
         };
         let events = read_jsonl(&self.events_path(session_id))?;
+        self.require_complete_ingest(session_id)?;
         Ok(SessionRecord { metadata, events })
     }
 
@@ -387,6 +403,14 @@ impl Storage for FileStorage {
         for entry in fs::read_dir(self.root.join("sessions"))? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            if let Err(error) = self.require_complete_ingest(&entry.file_name().to_string_lossy()) {
+                warnings.push(StorageReadWarning {
+                    collection: "session metadata".to_string(),
+                    path: self.relative_path(&entry.path()),
+                    error: error.to_string(),
+                });
                 continue;
             }
             let path = entry.path().join("session.json");
@@ -410,6 +434,7 @@ impl Storage for FileStorage {
     }
 
     fn read_session_metadata(&self, session_id: &str) -> Result<SessionMetadata> {
+        self.require_complete_ingest(session_id)?;
         if self.session_json_path(session_id).exists() {
             self.read_session_metadata_file(session_id)
         } else if self.session_dir(session_id).exists() {
@@ -422,6 +447,7 @@ impl Storage for FileStorage {
     }
 
     fn write_session_metadata(&self, metadata: &SessionMetadata) -> Result<()> {
+        self.require_complete_ingest(&metadata.session_id)?;
         self.ensure_layout()?;
         if let Some(parent) = self.session_json_path(&metadata.session_id).parent() {
             fs::create_dir_all(parent)?;
@@ -430,6 +456,7 @@ impl Storage for FileStorage {
     }
 
     fn read_session_archived_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
+        self.require_complete_ingest(session_id)?;
         let mut files = Vec::new();
         collect_jsonl_files_shallow(&self.archived_events_dir(session_id), &mut files)?;
         files.sort();
@@ -442,6 +469,7 @@ impl Storage for FileStorage {
     }
 
     fn append_event(&self, session_id: &str, event: &StoredEvent) -> Result<()> {
+        self.require_complete_ingest(session_id)?;
         self.ensure_layout()?;
         event.validate()?;
         if event.session_id != session_id {
@@ -484,6 +512,7 @@ impl Storage for FileStorage {
         session_id: &str,
         covered_event_ids: &[String],
     ) -> Result<usize> {
+        self.require_complete_ingest(session_id)?;
         if covered_event_ids.is_empty() {
             return Ok(0);
         }
@@ -1376,6 +1405,10 @@ impl Storage for FileStorage {
     fn delete_journaled_operation(&self, op_id: &str) -> Result<()> {
         validate_erasure_path_component("journal operation id", op_id)?;
         remove_file_if_exists(&self.journal_path(op_id))
+    }
+
+    fn recover_journaled_ingest(&self, operation: &JournalOperation) -> Result<()> {
+        self.finish_journaled_ingest(operation)
     }
 
     fn apply_memory_erasure_plan(&self, plan: &MemoryErasurePlan) -> Result<()> {

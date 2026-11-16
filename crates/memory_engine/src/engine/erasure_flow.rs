@@ -18,13 +18,10 @@ impl<S: Storage> MemoryEngine<S> {
     pub fn purge_scope(&self, personality_scope_id: &str) -> Result<MemoryErasureReport> {
         validate_erasure_target("personality_scope_id", personality_scope_id)?;
         self.ensure_manifest()?;
-        self.with_resource_lock(
-            format!("memory_erasure:scope:{personality_scope_id}"),
-            || {
-                let (plan, counts) = self.build_purge_scope_plan_unlocked(personality_scope_id)?;
-                self.begin_memory_erasure_unlocked(plan, counts, false)
-            },
-        )
+        self.with_resource_lock(scope_erasure_lock_key(personality_scope_id), || {
+            let (plan, counts) = self.build_purge_scope_plan_unlocked(personality_scope_id)?;
+            self.begin_memory_erasure_unlocked(plan, counts, false)
+        })
     }
 
     fn begin_memory_erasure_unlocked(
@@ -410,6 +407,10 @@ impl<S: Storage> MemoryEngine<S> {
         };
         Ok((plan, counts))
     }
+}
+
+pub(super) fn scope_erasure_lock_key(scope: &str) -> String {
+    format!("memory_erasure:scope:{scope}")
 }
 
 fn clean_storage_collection<T>(collection: StorageCollection<T>) -> Result<Vec<T>> {

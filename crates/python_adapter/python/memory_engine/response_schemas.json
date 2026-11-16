@@ -2084,6 +2084,138 @@
       ],
       "additionalProperties": false
     },
+    "IdempotentIngestResult": {
+      "type": "object",
+      "properties": {
+        "already_applied": {
+          "type": "boolean"
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "emotional_tone": {
+              "type": "string"
+            },
+            "event_id": {
+              "type": "string"
+            },
+            "importance_hint": {
+              "type": "string"
+            },
+            "initial_weight": {
+              "type": "number"
+            },
+            "links": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "target"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "memory_text": {
+              "type": "string"
+            },
+            "payload": {
+              "type": "object"
+            },
+            "personality_scope_id": {
+              "type": "string"
+            },
+            "processing_mode": {
+              "type": "string"
+            },
+            "received_at": {
+              "type": "string"
+            },
+            "schema_version": {
+              "type": "string",
+              "enum": [
+                "event.v1"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "speaker": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "theme": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "weight_reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "importance_hint",
+            "initial_weight",
+            "payload",
+            "processing_mode",
+            "received_at",
+            "schema_version",
+            "session_id",
+            "source",
+            "timestamp",
+            "type",
+            "weight_reason"
+          ],
+          "additionalProperties": false
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "idempotent_ingest_result.v1"
+          ]
+        }
+      },
+      "required": [
+        "already_applied",
+        "event",
+        "schema_version"
+      ],
+      "additionalProperties": false
+    },
     "IngestResult": {
       "type": "object",
       "properties": {

@@ -136,6 +136,12 @@ pub trait Storage {
     fn load_journaled_operations(&self) -> Result<StorageCollection<JournalOperation>>;
     fn delete_journaled_operation(&self, op_id: &str) -> Result<()>;
 
+    fn recover_journaled_ingest(&self, _operation: &JournalOperation) -> Result<()> {
+        Err(crate::MemoryEngineError::Storage(
+            "storage does not support journaled ingest recovery".to_string(),
+        ))
+    }
+
     /// Apply an engine-prepared deletion plan idempotently. The plan is
     /// journaled before this method is called and may be replayed after a
     /// process crash.
