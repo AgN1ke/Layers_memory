@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Canonical FileStorage Archive reads
+
+Recorded the [canonical reading contract](pages/foundation/contracts.md#143-канонічне-читання-archive-у-filestorage)
+and the [decision on quote sources](pages/planning/integration-hardening-plan-2026-11-15.md#h3--канонічне-читання-і-перегляд-у-межах-scope-та-людини).
+Updated H3 progress in the roadmap.
+
 ## [2026-11-16] update | Legacy recovery and Storage v2 extraction outcomes
 
 Recorded the rules for recovering saved FileStorage operations and the

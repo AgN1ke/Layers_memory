@@ -277,7 +277,7 @@ impl<S: Storage> MemoryEngine<S> {
                 continue;
             };
             let result = self.with_resource_lock(archive_lock_key(&archive_id), || {
-                let mut entry = self.storage.read_archive_entry_by_id(&archive_id)?;
+                let mut entry = self.storage.read_archive_entry_raw(&archive_id)?;
                 entry.recall_count = entry.recall_count.saturating_add(delta.added_count);
                 entry.last_recalled_at = newest_timestamp(
                     entry.last_recalled_at.as_deref(),

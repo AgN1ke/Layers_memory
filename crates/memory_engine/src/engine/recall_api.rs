@@ -51,10 +51,11 @@ impl<S: Storage> MemoryEngine<S> {
                 .contains(&RecallSourceLayer::Archive);
 
         let archive_read = if archive_enabled {
-            Some(
-                self.storage
-                    .read_archive(&archive_filters_from_recall(&query.filters))?,
-            )
+            Some(self.storage.read_archive_scoped(
+                &archive_filters_from_recall(&query.filters),
+                query.personality_scope_id.as_deref(),
+                query.session_id.as_deref(),
+            )?)
         } else {
             None
         };

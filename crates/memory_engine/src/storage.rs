@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
 use crate::erasure::MemoryErasurePlan;
@@ -20,6 +22,8 @@ pub(crate) fn memory_unit_publication_key(archive_id: &str) -> String {
         Sha256::digest(archive_id.as_bytes())
     )
 }
+
+pub(crate) const MEMORY_UNIT_TASK_OUTCOME_SCHEMA: &str = "memory_unit_task_outcome.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageReadWarning {
@@ -77,6 +81,21 @@ pub trait Storage {
     fn update_archive_entry(&self, archive_id: &str, entry: &ArchiveEntry) -> Result<()>;
     fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry>;
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>>;
+    fn read_archive_scoped(
+        &self,
+        filters: &ArchiveFilters,
+        scope: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<StorageCollection<ArchiveEntry>> {
+        let mut collection = self.read_archive(filters)?;
+        if scope.is_some() || session_id.is_some() {
+            collection
+                .items
+                .retain(|entry| archive_in_scope(entry, scope, session_id));
+            collection.warnings.clear();
+        }
+        Ok(collection)
+    }
     /// Internal publication view of the persisted Archive before unit hydration.
     fn read_archive_entry_raw(&self, archive_id: &str) -> Result<ArchiveEntry> {
         self.read_archive_entry_by_id(archive_id)
@@ -97,6 +116,13 @@ pub trait Storage {
     }
     fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()>;
     fn read_memory_unit_by_id(&self, memory_unit_id: &str) -> Result<MemoryUnit>;
+    fn read_memory_units_by_id(&self, ids: &[&str]) -> Result<HashMap<String, MemoryUnit>> {
+        Ok(ids
+            .iter()
+            .filter_map(|id| self.read_memory_unit_by_id(id).ok())
+            .map(|unit| (unit.memory_unit_id.clone(), unit))
+            .collect())
+    }
     fn read_memory_units(&self) -> Result<StorageCollection<MemoryUnit>>;
     fn read_memory_units_for_archive(
         &self,
@@ -214,4 +240,15 @@ pub trait Storage {
     /// journaled before this method is called and may be replayed after a
     /// process crash.
     fn apply_memory_erasure_plan(&self, plan: &MemoryErasurePlan) -> Result<()>;
+}
+
+pub(crate) fn archive_in_scope(
+    entry: &ArchiveEntry,
+    scope: Option<&str>,
+    session_id: Option<&str>,
+) -> bool {
+    match scope {
+        Some(scope) => entry.effective_personality_scope_id() == scope,
+        None => session_id.is_none_or(|id| entry.source_session_id == id),
+    }
 }

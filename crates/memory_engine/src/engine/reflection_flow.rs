@@ -2224,11 +2224,7 @@ impl<S: Storage> MemoryEngine<S> {
             .collect::<Vec<_>>();
         let mut contexts = Vec::new();
         for archive in archives {
-            for unit in self
-                .storage
-                .read_memory_units_for_archive(&archive.archive_id)?
-                .into_items()
-            {
+            for unit in &archive.memory_units {
                 if unit.source_session_id != archive.source_session_id
                     || !allowed_sessions.contains(&unit.source_session_id)
                     || unit.status != MemoryUnitStatus::ActiveArchive
@@ -2237,7 +2233,7 @@ impl<S: Storage> MemoryEngine<S> {
                     continue;
                 }
                 contexts.push(ReflectionUnitContext {
-                    unit,
+                    unit: unit.clone(),
                     archive: archive.clone(),
                 });
             }
@@ -2281,16 +2277,10 @@ impl<S: Storage> MemoryEngine<S> {
             .collect::<Vec<_>>();
         let mut units = Vec::new();
         for archive in archives {
-            units.extend(
-                self.storage
-                    .read_memory_units_for_archive(&archive.archive_id)?
-                    .into_items()
-                    .into_iter()
-                    .filter(|unit| {
-                        unit.status == MemoryUnitStatus::ActiveArchive
-                            && allowed_sessions.contains(&unit.source_session_id)
-                    }),
-            );
+            units.extend(archive.memory_units.into_iter().filter(|unit| {
+                unit.status == MemoryUnitStatus::ActiveArchive
+                    && allowed_sessions.contains(&unit.source_session_id)
+            }));
         }
         Ok(units)
     }

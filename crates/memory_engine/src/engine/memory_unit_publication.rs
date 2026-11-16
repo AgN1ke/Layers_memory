@@ -200,6 +200,7 @@ impl<S: Storage> MemoryEngine<S> {
                     .ok_or(MemoryEngineError::OperationResultUnavailable)
             })
             .collect::<Result<Vec<_>>>()?;
+        archive.compact_memory = render_compact_memory_from_units(&archive.memory_units);
         Ok(archive)
     }
 }

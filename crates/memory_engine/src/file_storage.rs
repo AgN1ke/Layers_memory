@@ -33,6 +33,7 @@ use crate::vector::{
 };
 use crate::{MemoryEngineError, Result};
 
+mod archive_reader;
 mod idempotent_ingest;
 pub(crate) use idempotent_ingest::JournaledIngest;
 
@@ -557,11 +558,7 @@ impl Storage for FileStorage {
     }
 
     fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry> {
-        self.require_archive_publication_complete(archive_id)?;
-        let path = self.archive_entry_path_by_id(archive_id)?;
-        let entry = read_json(&path)?;
-        let units = self.read_memory_units_for_archive_raw(archive_id)?.items;
-        self.visible_archive_projection(&path, entry, &units)
+        self.read_projected_archive(archive_id)
     }
 
     fn read_archive_entry_raw(&self, archive_id: &str) -> Result<ArchiveEntry> {
@@ -599,42 +596,16 @@ impl Storage for FileStorage {
     }
 
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>> {
-        let mut files = Vec::new();
-        collect_archive_entry_files(&self.root.join("archive"), &mut files)?;
+        self.read_archive_collection(filters, None, None)
+    }
 
-        let mut entries = Vec::new();
-        let mut warnings = Vec::new();
-        let mut canonical_units = None;
-        for path in files {
-            let Some(entry) =
-                read_json_from_collection::<ArchiveEntry>(self, &path, "archive", &mut warnings)?
-            else {
-                continue;
-            };
-            if archive_matches_filters(&entry, filters) {
-                if canonical_units.is_none() {
-                    canonical_units = Some(self.read_canonical_memory_units_by_archive()?);
-                }
-                let units = canonical_units
-                    .as_ref()
-                    .and_then(|grouped| grouped.get(&entry.archive_id))
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                match self.visible_archive_projection(&path, entry, units) {
-                    Ok(entry) => entries.push(entry),
-                    Err(error) => warnings.push(StorageReadWarning {
-                        collection: "archive".into(),
-                        path: self.relative_path(&path),
-                        error: error.to_string(),
-                    }),
-                }
-            }
-        }
-
-        Ok(StorageCollection {
-            items: entries,
-            warnings,
-        })
+    fn read_archive_scoped(
+        &self,
+        filters: &ArchiveFilters,
+        scope: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<StorageCollection<ArchiveEntry>> {
+        self.read_archive_collection(filters, scope, session_id)
     }
 
     fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()> {
@@ -644,45 +615,19 @@ impl Storage for FileStorage {
 
     fn read_memory_unit_by_id(&self, memory_unit_id: &str) -> Result<MemoryUnit> {
         self.ensure_layout()?;
-        let path = self.memory_unit_path(memory_unit_id);
-        if !path.exists() {
-            return Err(MemoryEngineError::Storage(format!(
-                "memory unit not found: {memory_unit_id}"
-            )));
-        }
-        let unit: MemoryUnit = read_json(&path)?;
-        if self
-            .visible_publication_ids(&unit.archive_id)?
-            .is_some_and(|ids| !ids.contains(&unit.memory_unit_id))
-        {
-            return Err(MemoryEngineError::OperationIncomplete);
-        }
-        Ok(unit)
+        self.read_canonical_unit(memory_unit_id)
+    }
+
+    fn read_memory_units_by_id(&self, ids: &[&str]) -> Result<HashMap<String, MemoryUnit>> {
+        self.read_canonical_units(ids)
     }
 
     fn read_memory_units(&self) -> Result<StorageCollection<MemoryUnit>> {
-        let StorageCollection {
-            items,
-            mut warnings,
-        } = self.read_memory_unit_records(|_| true)?;
-        let mut grouped = BTreeMap::<String, Vec<MemoryUnit>>::new();
-        for unit in items {
-            grouped
-                .entry(unit.archive_id.clone())
-                .or_default()
-                .push(unit);
-        }
-        let mut items = Vec::new();
-        for (archive_id, mut units) in grouped {
-            match self.validate_published_unit_set(&archive_id, &units) {
-                Ok(_) => items.append(&mut units),
-                Err(error) => warnings.push(StorageReadWarning {
-                    collection: "memory unit publication".into(),
-                    path: archive_id,
-                    error: error.to_string(),
-                }),
-            }
-        }
+        let StorageCollection { items, warnings } = self.read_archive(&ArchiveFilters::default())?;
+        let mut items = items
+            .into_iter()
+            .flat_map(|archive| archive.memory_units)
+            .collect::<Vec<_>>();
         items.sort_by(|left, right| left.memory_unit_id.cmp(&right.memory_unit_id));
         Ok(StorageCollection { items, warnings })
     }
@@ -699,10 +644,7 @@ impl Storage for FileStorage {
         &self,
         archive_id: &str,
     ) -> Result<StorageCollection<MemoryUnit>> {
-        self.require_archive_publication_complete(archive_id)?;
-        let units = self.read_memory_units_for_archive_raw(archive_id)?;
-        self.validate_published_unit_set(archive_id, &units.items)?;
-        Ok(units)
+        self.read_projected_archive_units(archive_id)
     }
 
     fn read_memory_units_for_archive_raw(
@@ -794,12 +736,12 @@ impl Storage for FileStorage {
         node.validate_basic()?;
         atomic_write_json(&node_path, &node)?;
         for mut link in evidence_links_from_candidate(candidate, |memory_unit_id| {
-            read_json::<MemoryUnit>(&self.memory_unit_path(memory_unit_id))
-                .ok()
-                .map(|unit| ResolvedHypothesisEvidenceSource {
+            self.read_canonical_unit(memory_unit_id).ok().map(|unit| {
+                ResolvedHypothesisEvidenceSource {
                     archive_id: unit.archive_id,
                     source_session_id: unit.source_session_id,
-                })
+                }
+            })
         }) {
             let link_path = self.hypothesis_evidence_path(&link.evidence_link_id);
             if link_path.exists() {
@@ -1690,85 +1632,6 @@ impl FileStorage {
         Ok(())
     }
 
-    fn visible_publication_ids(&self, archive_id: &str) -> Result<Option<HashSet<String>>> {
-        self.require_archive_publication_complete(archive_id)?;
-        let Some(receipt) = self.read_memory_unit_publication_receipt(archive_id)? else {
-            return Ok(None);
-        };
-        #[derive(serde::Deserialize)]
-        struct PublishedUnits {
-            archive_id: String,
-            memory_unit_ids: Vec<String>,
-        }
-        let receipt: PublishedUnits = serde_json::from_value(receipt)?;
-        if receipt.archive_id != archive_id {
-            return Err(MemoryEngineError::OperationIncomplete);
-        }
-        let count = receipt.memory_unit_ids.len();
-        let ids: HashSet<_> = receipt.memory_unit_ids.into_iter().collect();
-        if ids.len() != count {
-            return Err(MemoryEngineError::OperationIncomplete);
-        }
-        Ok(Some(ids))
-    }
-
-    // Read the marker and then the durable receipt after collecting the files.
-    // If publication completes during a collection scan, the final receipt
-    // still detects a snapshot containing only some of the published units.
-    fn validate_published_unit_set(
-        &self,
-        archive_id: &str,
-        units: &[MemoryUnit],
-    ) -> Result<Option<HashSet<String>>> {
-        let ids = self.visible_publication_ids(archive_id)?;
-        if ids
-            .as_ref()
-            .is_some_and(|ids| !matches_publication_ids(units, ids))
-        {
-            return Err(MemoryEngineError::OperationIncomplete);
-        }
-        Ok(ids)
-    }
-
-    fn visible_archive_projection(
-        &self,
-        path: &Path,
-        mut entry: ArchiveEntry,
-        canonical: &[MemoryUnit],
-    ) -> Result<ArchiveEntry> {
-        if let Some(ids) = self.validate_published_unit_set(&entry.archive_id, canonical)? {
-            if !matches_publication_ids(&entry.memory_units, &ids) {
-                // The grouped units may be complete although the Archive was
-                // read before its final compact projection became durable.
-                entry = read_json(path)?;
-                self.require_archive_publication_complete(&entry.archive_id)?;
-                if !matches_publication_ids(&entry.memory_units, &ids) {
-                    return Err(MemoryEngineError::OperationIncomplete);
-                }
-            }
-            entry.memory_units = canonical.to_vec();
-        } else if !canonical.is_empty() {
-            entry.memory_units = canonical.to_vec();
-        }
-        Ok(entry)
-    }
-
-    fn read_canonical_memory_units_by_archive(&self) -> Result<HashMap<String, Vec<MemoryUnit>>> {
-        // Hydration has historically ignored unreadable unit warnings. Keep
-        // that behavior while parsing each canonical unit file only once.
-        let mut grouped: HashMap<String, Vec<MemoryUnit>> = HashMap::new();
-        for unit in self.read_memory_unit_records(|_| true)?.items {
-            grouped
-                .entry(unit.archive_id.clone())
-                .or_default()
-                .push(unit);
-        }
-        for units in grouped.values_mut() {
-            sort_archive_memory_units(units);
-        }
-        Ok(grouped)
-    }
-
     fn read_memory_unit_records(
         &self,
         include: impl Fn(&MemoryUnit) -> bool,
@@ -1800,13 +1663,6 @@ fn lock_publication_receipt_retirement() -> Result<std::sync::MutexGuard<'static
     PUBLICATION_RECEIPT_RETIREMENT.lock().map_err(|_| {
         MemoryEngineError::Storage("publication receipt retirement lock was poisoned".into())
     })
-}
-
-fn matches_publication_ids(units: &[MemoryUnit], ids: &HashSet<String>) -> bool {
-    units.len() == ids.len() && {
-        let actual: HashSet<_> = units.iter().map(|unit| &unit.memory_unit_id).collect();
-        actual.len() == ids.len() && ids.iter().all(|id| actual.contains(id))
-    }
 }
 
 fn sort_archive_memory_units(units: &mut [MemoryUnit]) {
@@ -2257,16 +2113,7 @@ mod tests {
                 "2026-01-01T00:00:00Z",
             )],
         );
-        let second = archive_fixture(
-            "archive_second",
-            "scope_two",
-            vec![unit_fixture(
-                "embedded_second",
-                "archive_second",
-                "embedded",
-                "2026-01-01T00:00:00Z",
-            )],
-        );
+        let second = archive_fixture("archive_second", "scope_two", Vec::new());
         storage.write_archive_entry(&first).expect("first archive");
         storage
             .write_archive_entry(&second)
@@ -2301,10 +2148,11 @@ mod tests {
         let collection = storage
             .read_archive(&ArchiveFilters::default())
             .expect("archive collection");
-        assert!(
-            collection.warnings.is_empty(),
-            "unit hydration warnings stay discarded"
-        );
+        assert_eq!(collection.warnings.len(), 1);
+        assert!(collection.warnings[0].path.ends_with("embedded_first"));
+        assert!(storage.read_memory_unit_inventory().unwrap().warnings[0]
+            .path
+            .ends_with("corrupt.json"));
         for entry in collection.items {
             assert_eq!(
                 entry,
@@ -2323,8 +2171,8 @@ mod tests {
         assert_eq!(first_read.memory_units[2].memory_unit_id, "unit_later");
         let fallback = storage
             .read_archive_entry_by_id("archive_second")
-            .expect("embedded fallback");
-        assert_eq!(fallback.memory_units[0].memory_unit_id, "embedded_second");
+            .expect("legacy episode");
+        assert_eq!(fallback, second);
 
         let no_matches = storage
             .read_archive(&ArchiveFilters {
@@ -2337,7 +2185,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_unit_publication_isolates_archive_and_rejects_stale_snapshot_after_commit() {
+    fn incomplete_unit_publication_isolates_archive_until_commit() {
         use crate::journal::{
             JournalOperation, JournalOperationType, JournalState, RecoveryPolicy,
         };
@@ -2406,6 +2254,7 @@ mod tests {
 
         storage.write_memory_unit(&second).unwrap();
         let published = ArchiveEntry {
+            compact_memory: Some("unit_first\nunit_second".into()),
             memory_units: vec![first.clone(), second.clone()],
             ..archive.clone()
         };
@@ -2416,6 +2265,7 @@ mod tests {
             .write_memory_unit_publication_receipt(
                 &archive.archive_id,
                 &serde_json::json!({
+                    "schema_version": "memory_unit_task_outcome.v1",
                     "archive_id": archive.archive_id,
                     "memory_unit_ids": [first.memory_unit_id, second.memory_unit_id],
                 }),
@@ -2423,21 +2273,221 @@ mod tests {
             .unwrap();
         storage.delete_journaled_operation(&key).unwrap();
 
-        // A reader can collect its snapshots during publication and then see
-        // the marker disappear. The receipt still rules out the partial set.
-        let path = storage
-            .archive_entry_path_by_id(&archive.archive_id)
-            .unwrap();
-        assert!(matches!(
-            storage.visible_archive_projection(&path, archive, &[first]),
-            Err(MemoryEngineError::OperationIncomplete)
-        ));
+        // A scan begun during publication can fill gaps from the committed IDs.
+        let projection = storage.project_archive(archive, Some(&[first])).unwrap();
+        assert!(projection.warnings.is_empty());
+        assert_eq!(
+            projection.entry.unwrap().memory_units,
+            published.memory_units
+        );
         assert_eq!(
             storage
                 .read_archive_entry_by_id(&published.archive_id)
                 .unwrap(),
             published
         );
+        let root = root.canonicalize().unwrap();
+        assert!(root.starts_with(&temp) && root != temp);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn damaged_published_units_leave_healthy_siblings_and_scoped_diagnostics() {
+        use crate::recall::{RecallFilters, RecallQuery};
+        use crate::types::RECALL_QUERY_SCHEMA_VERSION;
+        use crate::MemoryEngine;
+
+        let temp = std::env::temp_dir().canonicalize().unwrap();
+        let root = temp.join(format!(
+            "damaged-published-units-{}-{}",
+            std::process::id(),
+            TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let storage = FileStorage::new(&root);
+        let mut archive = archive_fixture("target_archive", "target_scope", Vec::new());
+        let healthy = unit_fixture(
+            "healthy_unit",
+            &archive.archive_id,
+            "target_scope",
+            &archive.created_at,
+        );
+        let missing = unit_fixture(
+            "missing_unit",
+            &archive.archive_id,
+            "target_scope",
+            &archive.created_at,
+        );
+        let corrupt = unit_fixture(
+            "corrupt_unit",
+            &archive.archive_id,
+            "target_scope",
+            &archive.created_at,
+        );
+        archive.memory_units = vec![healthy.clone(), missing.clone(), corrupt.clone()];
+        for embedded in &mut archive.memory_units {
+            embedded.thesis = format!("stale copy of {}", embedded.memory_unit_id);
+        }
+        archive.compact_memory = Some("stale compact projection".into());
+        storage.write_archive_entry(&archive).unwrap();
+        storage
+            .write_archive_entry(&archive_fixture(
+                "neighbor_archive",
+                "other_scope",
+                Vec::new(),
+            ))
+            .unwrap();
+        for unit in [&healthy, &missing, &corrupt] {
+            storage.write_memory_unit(unit).unwrap();
+        }
+        storage
+            .write_memory_unit_publication_receipt(
+                &archive.archive_id,
+                &serde_json::json!({
+                    "schema_version": "memory_unit_task_outcome.v1",
+                    "archive_id": archive.archive_id,
+                    "memory_unit_ids": [healthy.memory_unit_id, missing.memory_unit_id, corrupt.memory_unit_id],
+                }),
+            )
+            .unwrap();
+        fs::remove_file(storage.memory_unit_path(&missing.memory_unit_id)).unwrap();
+        fs::write(storage.memory_unit_path(&corrupt.memory_unit_id), b"{").unwrap();
+        drop(storage);
+
+        let storage = FileStorage::new(&root);
+        let detail = storage
+            .read_archive_entry_by_id(&archive.archive_id)
+            .unwrap();
+        assert_eq!(detail.memory_units, std::slice::from_ref(&healthy));
+        assert_eq!(
+            detail.compact_memory.as_deref(),
+            Some(healthy.thesis.as_str())
+        );
+
+        let batch = storage.read_archive(&ArchiveFilters::default()).unwrap();
+        assert_eq!(batch.items.len(), 2);
+        assert!(batch.items.contains(&detail));
+        for damaged_id in [&missing.memory_unit_id, &corrupt.memory_unit_id] {
+            assert!(batch
+                .warnings
+                .iter()
+                .any(|warning| warning.note().contains(damaged_id)));
+        }
+        let units = storage
+            .read_memory_units_for_archive(&archive.archive_id)
+            .unwrap();
+        assert_eq!(units.items, std::slice::from_ref(&healthy));
+        assert_eq!(units.warnings.len(), 2);
+
+        let engine = MemoryEngine::new(storage.clone());
+        let recall = |scope: &str| {
+            engine
+                .recall(RecallQuery {
+                    schema_version: RECALL_QUERY_SCHEMA_VERSION.to_string(),
+                    query_id: None,
+                    created_at: None,
+                    personality_scope_id: Some(scope.to_string()),
+                    session_id: None,
+                    context: serde_json::Value::Null,
+                    query_text: None,
+                    query_embedding: None,
+                    filters: RecallFilters::default(),
+                    limit: 5,
+                    include_core: false,
+                    explain: false,
+                })
+                .unwrap()
+        };
+        let target_recall = recall("target_scope");
+        assert_eq!(target_recall.items.len(), 1);
+        assert_eq!(target_recall.items[0].id, archive.archive_id);
+        assert_eq!(
+            target_recall.items[0].compact_memory.as_deref(),
+            Some(healthy.thesis.as_str())
+        );
+        assert!(!target_recall.notes.is_empty());
+        assert!(recall("other_scope").notes.is_empty());
+
+        fs::remove_file(storage.memory_unit_path(&healthy.memory_unit_id)).unwrap();
+        assert!(storage
+            .read_archive_entry_by_id(&archive.archive_id)
+            .is_err());
+        let units = storage
+            .read_memory_units_for_archive(&archive.archive_id)
+            .unwrap();
+        assert!(units.items.is_empty());
+        assert_eq!(units.warnings.len(), 3);
+        assert!(recall("target_scope").items.is_empty());
+
+        let root = root.canonicalize().unwrap();
+        assert!(root.starts_with(&temp) && root != temp);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn published_empty_set_ignores_stale_archive_and_unlisted_unit() {
+        let temp = std::env::temp_dir().canonicalize().unwrap();
+        let root = temp.join(format!(
+            "published-empty-units-{}-{}",
+            std::process::id(),
+            TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let storage = FileStorage::new(&root);
+        let mut archive = archive_fixture("empty_archive", "target_scope", Vec::new());
+        let stale = unit_fixture(
+            "unlisted_unit",
+            &archive.archive_id,
+            "target_scope",
+            &archive.created_at,
+        );
+        archive.memory_units.push(stale.clone());
+        archive.compact_memory = Some(stale.thesis.clone());
+        storage.write_archive_entry(&archive).unwrap();
+        storage.write_memory_unit(&stale).unwrap();
+        storage
+            .write_memory_unit_publication_receipt(
+                &archive.archive_id,
+                &serde_json::json!({
+                    "schema_version": "memory_unit_task_outcome.v1",
+                    "archive_id": archive.archive_id,
+                    "memory_unit_ids": [],
+                }),
+            )
+            .unwrap();
+
+        let detail = storage
+            .read_archive_entry_by_id(&archive.archive_id)
+            .unwrap();
+        assert!(detail.memory_units.is_empty());
+        assert!(detail.compact_memory.is_none());
+        assert_eq!(
+            storage
+                .read_archive(&ArchiveFilters::default())
+                .unwrap()
+                .items,
+            [detail]
+        );
+        assert!(storage
+            .read_memory_units_for_archive(&archive.archive_id)
+            .unwrap()
+            .items
+            .is_empty());
+        assert!(storage
+            .read_memory_unit_by_id(&stale.memory_unit_id)
+            .is_err());
+
+        fs::write(
+            storage.memory_unit_publication_receipt_path(&archive.archive_id),
+            b"{",
+        )
+        .unwrap();
+        let damaged = storage.read_archive(&ArchiveFilters::default()).unwrap();
+        assert!(damaged.items.is_empty());
+        assert_eq!(damaged.warnings.len(), 1);
+        assert_eq!(
+            damaged.warnings[0].error,
+            "corrupt memory unit publication receipt"
+        );
+
         let root = root.canonicalize().unwrap();
         assert!(root.starts_with(&temp) && root != temp);
         fs::remove_dir_all(root).unwrap();

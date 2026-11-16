@@ -46,6 +46,19 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage reads Archive units from canonical records
+
+A missing or corrupt unit file produces a diagnostic for its owning
+Archive. Healthy canonical units remain readable. When no expected unit
+can be read, the Archive stays out of recall. An unfinished publication
+or an invalid receipt also keeps the affected Archive out of recall.
+
+Legacy episodes without a known unit set retain their episode text. A
+receipt with an empty set keeps the episode and clears stale compact unit
+text. Scoped recall diagnostics name records owned by the requested scope
+or session. Diagnostics with an unknown owner belong to the trusted
+storage inventory.
+
 ## 2026-11-16 — Legacy operations require saved evidence for recovery
 
 Existing Archives remain readable. Replaying a completed legacy operation

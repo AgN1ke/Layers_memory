@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use crate::archive::render_compact_memory_from_units;
 use crate::archive::{
     archive_has_prompt_eligible_memory, memory_unit_is_prompt_eligible, ArchiveEntry,
     ArchiveFilters, ArchiveStatus, FidelityReview, FidelityStatus, ForgetDecision,
@@ -66,7 +67,9 @@ use crate::sleep::{
     render_sleep_prompt_context, resolve_attributed_subject, AttributionEvent,
     MemoryUnitPassResult, SleepCompressionResult, SleepInputEvent, SleepInputReference,
 };
-use crate::storage::{Storage, StorageCollection, StorageReadWarning};
+use crate::storage::{
+    Storage, StorageCollection, StorageReadWarning, MEMORY_UNIT_TASK_OUTCOME_SCHEMA,
+};
 use crate::tasks::{AttemptStatus, PendingTask, TaskAttempt, TaskState, TaskType};
 use crate::types::{
     ImportanceHint, Link, ModelRole, Quote, RecallStage, Speaker, TimeRange, WeightedFact,

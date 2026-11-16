@@ -131,21 +131,18 @@ impl<S: Storage> MemoryEngine<S> {
                     inputs.scope
                 )));
             }
+            // A tombstone is keyed by unit ID, so remove the old row and its
+            // tombstone before writing a replacement for the same unit.
+            self.compact_vector_scope_if_needed_unlocked(&inputs.scope, &mut index)?;
 
             let result_by_id = result
                 .results
                 .iter()
                 .map(|item| (item.memory_unit_id.as_str(), item))
                 .collect::<HashMap<_, _>>();
-            let tombstoned = index
-                .tombstones
-                .iter()
-                .map(|item| item.memory_unit_id.as_str())
-                .collect::<HashSet<_>>();
             let live_existing = index
                 .rows
                 .iter()
-                .filter(|row| !tombstoned.contains(row.memory_unit_id.as_str()))
                 .map(|row| (row.memory_unit_id.as_str(), row.thesis_hash.as_str()))
                 .collect::<HashMap<_, _>>();
 
@@ -158,7 +155,10 @@ impl<S: Storage> MemoryEngine<S> {
                     )));
                 };
                 let unit = self.storage.read_memory_unit_by_id(&item.memory_unit_id)?;
-                if !memory_unit_is_vector_eligible(&unit) {
+                if unit.memory_unit_id != item.memory_unit_id
+                    || unit.effective_personality_scope_id() != inputs.scope
+                    || !memory_unit_is_vector_eligible(&unit)
+                {
                     continue;
                 }
                 let hash = thesis_hash(&unit.thesis);
@@ -283,21 +283,27 @@ impl<S: Storage> MemoryEngine<S> {
                 .map(|item| item.memory_unit_id.as_str())
                 .collect::<HashSet<_>>();
 
+            let candidates = index
+                .rows
+                .iter()
+                .zip(&index.vectors)
+                .filter(|(row, _)| !tombstoned.contains(row.memory_unit_id.as_str()))
+                .filter_map(|(row, vector)| {
+                    let sim = dot_product(&query_vec, vector);
+                    (sim >= min_sim).then_some((row, sim))
+                })
+                .collect::<Vec<_>>();
+            let unit_ids = candidates
+                .iter()
+                .map(|(row, _)| row.memory_unit_id.as_str())
+                .collect::<Vec<_>>();
+            let units = self.storage.read_memory_units_by_id(&unit_ids)?;
             let mut scored = Vec::new();
-            for (row, vector) in index.rows.iter().zip(index.vectors.iter()) {
-                if tombstoned.contains(row.memory_unit_id.as_str()) {
-                    continue;
-                }
-                let sim = dot_product(&query_vec, vector);
-                if sim < min_sim {
-                    continue;
-                }
-                let Ok(unit) = self.storage.read_memory_unit_by_id(&row.memory_unit_id) else {
+            for (row, sim) in candidates {
+                let Some(unit) = units.get(&row.memory_unit_id) else {
                     continue;
                 };
-                if unit.effective_personality_scope_id() != query.scope
-                    || !memory_unit_is_vector_eligible(&unit)
-                {
+                if !vector_row_matches_unit(row, unit, &query.scope) {
                     continue;
                 }
                 let age_days = timestamp_age_days(&unit.created_at, &now).unwrap_or(0.0);
@@ -309,10 +315,10 @@ impl<S: Storage> MemoryEngine<S> {
                     + (self.options.vectors.deep_recall_unit_weight
                         * unit.weight.clamp(0.0, 1.0) as f32);
                 scored.push(DeepRecallHit {
-                    memory_unit_id: unit.memory_unit_id,
-                    archive_id: unit.archive_id,
-                    thesis: unit.thesis,
-                    created_at: unit.created_at,
+                    memory_unit_id: unit.memory_unit_id.clone(),
+                    archive_id: unit.archive_id.clone(),
+                    thesis: unit.thesis.clone(),
+                    created_at: unit.created_at.clone(),
                     sim,
                     score,
                 });
@@ -396,21 +402,26 @@ impl<S: Storage> MemoryEngine<S> {
                 .iter()
                 .map(|item| item.memory_unit_id.as_str())
                 .collect::<HashSet<_>>();
+            let candidates = index
+                .rows
+                .iter()
+                .zip(&index.vectors)
+                .filter(|(row, _)| {
+                    archive_ids.contains(&row.archive_id)
+                        && !tombstoned.contains(row.memory_unit_id.as_str())
+                })
+                .collect::<Vec<_>>();
+            let unit_ids = candidates
+                .iter()
+                .map(|(row, _)| row.memory_unit_id.as_str())
+                .collect::<Vec<_>>();
+            let units = self.storage.read_memory_units_by_id(&unit_ids)?;
             let mut archive_matches = HashMap::<String, Stage2ArchiveMatch>::new();
-
-            for (row, vector) in index.rows.iter().zip(index.vectors.iter()) {
-                if !archive_ids.contains(&row.archive_id)
-                    || tombstoned.contains(row.memory_unit_id.as_str())
-                {
-                    continue;
-                }
-                let Ok(unit) = self.storage.read_memory_unit_by_id(&row.memory_unit_id) else {
+            for (row, vector) in candidates {
+                let Some(unit) = units.get(&row.memory_unit_id) else {
                     continue;
                 };
-                if unit.effective_personality_scope_id() != scope
-                    || unit.archive_id != row.archive_id
-                    || !memory_unit_is_vector_eligible(&unit)
-                {
+                if !vector_row_matches_unit(row, unit, scope) {
                     continue;
                 }
 
@@ -425,7 +436,7 @@ impl<S: Storage> MemoryEngine<S> {
                         row.archive_id.clone(),
                         Stage2ArchiveMatch {
                             memory_unit_id: row.memory_unit_id.clone(),
-                            thesis: unit.thesis,
+                            thesis: unit.thesis.clone(),
                             similarity,
                         },
                     );
@@ -703,6 +714,14 @@ impl<S: Storage> MemoryEngine<S> {
         }
         Ok(ids)
     }
+}
+
+fn vector_row_matches_unit(row: &VectorRow, unit: &MemoryUnit, scope: &str) -> bool {
+    row.memory_unit_id == unit.memory_unit_id
+        && row.archive_id == unit.archive_id
+        && unit.effective_personality_scope_id() == scope
+        && memory_unit_is_vector_eligible(unit)
+        && row.thesis_hash == thesis_hash(&unit.thesis)
 }
 
 fn disabled_vector_state(scope: &str, reason: &str) -> VectorScopeState {

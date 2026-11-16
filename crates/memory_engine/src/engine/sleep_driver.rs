@@ -324,21 +324,6 @@ pub(super) fn build_memory_unit_repair_task(
     })
 }
 
-pub(super) fn render_compact_memory_from_units(units: &[MemoryUnit]) -> Option<String> {
-    let lines = units
-        .iter()
-        .filter(|unit| unit.status == MemoryUnitStatus::ActiveArchive)
-        .map(|unit| unit.thesis.trim())
-        .filter(|thesis| !thesis.is_empty())
-        .collect::<Vec<_>>();
-
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
-}
-
 pub(super) fn memory_unit_status_after_fidelity(status: FidelityStatus) -> MemoryUnitStatus {
     match status {
         FidelityStatus::Valid | FidelityStatus::SelfChecked => MemoryUnitStatus::ActiveArchive,
@@ -1317,8 +1302,6 @@ pub(super) fn materialize_memory_unit(
         last_reflection_operation_id: None,
     })
 }
-
-pub(super) const MEMORY_UNIT_TASK_OUTCOME_SCHEMA: &str = "memory_unit_task_outcome.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct MemoryUnitTaskOutcome {

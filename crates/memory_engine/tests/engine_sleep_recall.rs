@@ -980,7 +980,7 @@ fn engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts() {
 }
 
 #[test]
-fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
+fn scoped_recall_and_context_skip_unreadable_archives_with_unknown_owner() {
     let root = unique_temp_dir("engine_recall_skips_unreadable_archive_files");
     let storage = FileStorage::with_host_id(&root, "terminal");
     let mut engine = MemoryEngine::new(storage);
@@ -1002,6 +1002,13 @@ fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
     let broken_dir = root.join("archive").join("2026").join("05");
     fs::create_dir_all(&broken_dir).expect("create archive dir");
     fs::write(broken_dir.join("broken.json"), "{ not valid json").expect("write broken archive");
+    assert!(engine
+        .storage()
+        .read_archive_inventory()
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|warning| warning.path.ends_with("broken.json")));
 
     let recall = engine
         .recall(make_recall_query(
@@ -1011,17 +1018,8 @@ fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
         ))
         .expect("recall with broken archive");
     assert_eq!(recall.items.len(), 1);
-    assert!(recall
-        .notes
-        .iter()
-        .any(|note| note.contains("archive") && note.contains("broken.json")));
-    assert!(recall
-        .debug
-        .as_ref()
-        .expect("debug")
-        .notes
-        .iter()
-        .any(|note| note.contains("broken.json")));
+    assert!(recall.notes.is_empty());
+    assert!(recall.debug.as_ref().expect("debug").notes.is_empty());
 
     let package = engine
         .core_context_package(CoreContextRequest {
@@ -1042,10 +1040,7 @@ fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
         })
         .expect("context with broken archive");
     assert_eq!(package.archive_relevant.len(), 1);
-    assert!(package
-        .notes
-        .iter()
-        .any(|note| note.contains("broken.json")));
+    assert!(package.notes.is_empty());
 
     fs::remove_dir_all(root).ok();
 }
