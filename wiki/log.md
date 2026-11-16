@@ -8,6 +8,13 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Legacy recovery and Storage v2 extraction outcomes
+
+Recorded the rules for recovering saved FileStorage operations and the
+publication behavior shared with Storage v2 in the
+[operation contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage).
+Recorded H2 completion in the integration plan and roadmap.
+
 ## [2026-11-16] update | FileStorage lifecycle for completed operations
 
 Recorded replay expiration and recovery dependencies in the

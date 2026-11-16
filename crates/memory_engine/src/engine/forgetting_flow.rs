@@ -152,7 +152,9 @@ impl<S: Storage> MemoryEngine<S> {
                     serde_json::from_value(receipt.clone())?;
                 return receipt.replay(&request_digest);
             }
-            if task.state == TaskState::Completed && !inputs.candidates.is_empty() {
+            if task.state == TaskState::Completed
+                && (!inputs.candidates.is_empty() || !forget_task_has_basis(&task))
+            {
                 return Err(MemoryEngineError::OperationResultUnavailable);
             }
             if task.state == TaskState::Cancelled {
@@ -236,13 +238,10 @@ impl<S: Storage> MemoryEngine<S> {
         candidate_ids: &HashSet<&str>,
         recommendations: &[ForgetRecommendation],
     ) -> Result<()> {
-        let frozen = task
-            .inputs
-            .get("availability_basis")
-            .map(|basis| {
-                serde_json::from_value::<BTreeMap<String, ForgetAvailabilityBasis>>(basis.clone())
-            })
-            .transpose()?;
+        let frozen = frozen_forget_basis(task).ok_or(MemoryEngineError::NeedsNewReview)?;
+        if !candidate_ids.iter().all(|id| frozen.contains_key(*id)) {
+            return Err(MemoryEngineError::NeedsNewReview);
+        }
         // Check the whole batch before applying any recommendation. The last
         // review survives remember_back, so a forget/restore cycle is visible.
         for id in recommendations.iter().map(|r| r.memory_unit_id.as_str()) {
@@ -250,19 +249,7 @@ impl<S: Storage> MemoryEngine<S> {
                 continue;
             }
             let unit = self.storage.read_memory_unit_by_id(id)?;
-            let matches = if let Some(basis) = &frozen {
-                basis.get(id) == Some(&ForgetAvailabilityBasis::from(&unit))
-            } else {
-                // Legacy pending reviews have no snapshot. Reject a recorded
-                // decision at or after their creation, including a restoration.
-                unit.status == MemoryUnitStatus::ActiveArchive
-                    && unit.forget_review.as_ref().is_none_or(|review| {
-                        let reviewed = OffsetDateTime::parse(&review.reviewed_at, &Rfc3339);
-                        let created = OffsetDateTime::parse(&task.created_at, &Rfc3339);
-                        matches!((reviewed, created), (Ok(reviewed), Ok(created)) if reviewed < created)
-                    })
-            };
-            if !matches {
+            if frozen.get(id) != Some(&ForgetAvailabilityBasis::from(&unit)) {
                 return Err(MemoryEngineError::NeedsNewReview);
             }
         }
@@ -690,4 +677,26 @@ impl<S: Storage> MemoryEngine<S> {
         task.last_error = Some(detail);
         self.storage.save_task(&task)
     }
+}
+
+pub(super) fn forget_task_has_basis(task: &PendingTask) -> bool {
+    if !task.inputs["candidates"].is_array() {
+        return false;
+    }
+    let Ok(inputs) = serde_json::from_value::<ForgetReviewInputs>(task.inputs.clone()) else {
+        return false;
+    };
+    frozen_forget_basis(task).is_some_and(|basis| {
+        inputs
+            .candidates
+            .iter()
+            .all(|candidate| basis.contains_key(&candidate.memory_unit_id))
+    })
+}
+
+fn frozen_forget_basis(task: &PendingTask) -> Option<BTreeMap<String, ForgetAvailabilityBasis>> {
+    if task.schema_version != PENDING_TASK_SCHEMA_VERSION {
+        return None;
+    }
+    serde_json::from_value(task.inputs.get("availability_basis")?.clone()).ok()
 }

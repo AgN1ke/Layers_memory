@@ -89,6 +89,15 @@ impl<S: Storage> MemoryEngine<S> {
             .into_items()
             .into_iter()
             .filter(|task| matches!(task.state, TaskState::Pending | TaskState::Submitted))
+            .filter(|task| task.schema_version == PENDING_TASK_SCHEMA_VERSION)
+            .filter(|task| match task.task_type {
+                TaskType::MemoryFidelityPass => super::fidelity_flow::fidelity_task_has_basis(task),
+                TaskType::ForgetReview => super::forgetting_flow::forget_task_has_basis(task),
+                TaskType::SleepCompression | TaskType::MemoryUnitPass => task.inputs["events"]
+                    .as_array()
+                    .is_some_and(|events| !events.is_empty()),
+                _ => true,
+            })
             .collect())
     }
 

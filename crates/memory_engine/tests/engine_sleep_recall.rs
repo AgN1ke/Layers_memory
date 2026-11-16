@@ -186,6 +186,173 @@ fn completed_extraction_replay_returns_same_units_and_rejects_changed_result() {
 }
 
 #[test]
+fn legacy_extraction_without_receipt_stays_unknown_and_does_not_queue_repair() {
+    let root = unique_temp_dir("legacy_extraction_unknown");
+    let storage = FileStorage::new(&root);
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00Z",
+        "A short conversation.",
+        vec![],
+    );
+    let sleep = engine.sleep("live_session").unwrap();
+    let mut archive = sleep.archive_entry;
+    archive.status = ArchiveStatus::Complete;
+    storage
+        .update_archive_entry(&archive.archive_id, &archive)
+        .unwrap();
+    let mut task = sleep.memory_unit_task.unwrap();
+    task.state = TaskState::Completed;
+    task.schema_version.clear();
+    let path = root
+        .join("tasks")
+        .join("completed")
+        .join(format!("{}.json", task.task_id));
+    storage.save_task(&task).unwrap();
+    let mut bytes = serde_json::to_value(&task).unwrap();
+    bytes.as_object_mut().unwrap().remove("schema_version");
+    fs::write(path, serde_json::to_vec(&bytes).unwrap()).unwrap();
+
+    let restarted = MemoryEngine::new(storage.clone());
+    let empty = MemoryUnitPassResult {
+        schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+        archive_id: archive.archive_id.clone(),
+        memory_units: vec![],
+    };
+    assert!(matches!(
+        restarted.resume_memory_unit_pass(&task.task_id, empty),
+        Err(MemoryEngineError::OperationResultUnavailable)
+    ));
+    assert!(restarted
+        .pending_memory_unit_repairs("live_session")
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        storage
+            .read_archive_entry_by_id(&archive.archive_id)
+            .unwrap(),
+        archive
+    );
+    assert!(storage
+        .read_memory_unit_publication_receipt(&archive.archive_id)
+        .unwrap()
+        .is_none());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn legacy_sleep_recovers_only_from_frozen_inputs() {
+    let root = unique_temp_dir("legacy_sleep_frozen_input");
+    let storage = FileStorage::new(&root);
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00Z",
+        "The original Sleep evidence.",
+        vec![],
+    );
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:01:00Z",
+        "A second source event.",
+        vec![],
+    );
+    let mut run = engine.begin_sleep_run("live_session").unwrap();
+    let expected = run.shared_prompt_context.take().unwrap();
+    storage.save_sleep_run(&run).unwrap();
+    let original_task = storage.load_task(&run.sleep_task_id).unwrap();
+    let mut incomplete_task = original_task.clone();
+    incomplete_task.inputs["events"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    storage.save_task(&incomplete_task).unwrap();
+    drop(engine);
+
+    let restarted = MemoryEngine::new(storage.clone());
+    let pending = restarted.pending_sleep_runs().unwrap();
+    assert_eq!(pending[0].sleep_task_id, run.sleep_task_id);
+    assert!(pending[0].shared_prompt_context.is_none());
+    assert!(matches!(
+        restarted.begin_sleep_run("live_session"),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert!(matches!(
+        restarted.next_sleep_batch(run.clone()),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert!(matches!(
+        restarted.finish_sleep_run_with_available(run.clone()),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    let summary = SleepCompressionResult {
+        schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+        archive_id: run.archive_id.clone(),
+        gist: "Unverified summary.".to_string(),
+        narrative: "A delayed response arrived.".to_string(),
+        compact_memory: None,
+        facts: vec![],
+        quotes: vec![],
+        tags: vec![],
+        theme: None,
+        weight: 0.5,
+        links: vec![],
+        emotional_markers: vec![],
+        topic_thread: vec![],
+        personal_signals: vec![],
+        relational_tone: None,
+    };
+    assert!(matches!(
+        restarted.resume_sleep_compression(&run.sleep_task_id, summary),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert_eq!(
+        storage
+            .load_sleep_run(&run.sleep_task_id)
+            .unwrap()
+            .provider_calls_issued,
+        0
+    );
+
+    storage.save_task(&original_task).unwrap();
+    assert_eq!(
+        restarted.pending_sleep_runs().unwrap()[0]
+            .shared_prompt_context
+            .as_ref(),
+        Some(&expected)
+    );
+    storage.save_task(&incomplete_task).unwrap();
+
+    run.requests[0].request.prompt_inputs["sleep_task"] = original_task.inputs;
+    storage.save_sleep_run(&run).unwrap();
+    let step = restarted.next_sleep_batch(run).unwrap();
+    let batch = step.batch.unwrap();
+    assert_eq!(batch.shared_context.unwrap(), expected);
+    assert!(batch
+        .requests
+        .iter()
+        .all(|request| request.prompt_inputs.get("sleep_task").is_none()));
+
+    let mut legacy = step.run;
+    legacy.shared_prompt_context = None;
+    storage.save_sleep_run(&legacy).unwrap();
+    let task_path = root
+        .join("tasks")
+        .join(format!("{}.json", legacy.sleep_task_id));
+    fs::remove_file(task_path).unwrap();
+    let cancelled = restarted.cancel_sleep_run(&legacy.sleep_task_id).unwrap();
+    assert_eq!(cancelled.completion_mode.as_deref(), Some("cancelled"));
+    let fresh = restarted.begin_sleep_run("live_session").unwrap();
+    assert_ne!(fresh.sleep_task_id, legacy.sleep_task_id);
+    assert_eq!(
+        fresh.shared_prompt_context.unwrap().source_event_ids,
+        expected.source_event_ids
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_context_keeps_preliminary_sleep_events_active() {
     let root = unique_temp_dir("engine_context_keeps_preliminary_sleep_events_active");
     let storage = FileStorage::with_host_id(&root, "terminal");

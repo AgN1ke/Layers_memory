@@ -39,6 +39,7 @@ pub enum AttemptStatus {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingTask {
+    #[serde(default)]
     pub schema_version: String,
     pub task_id: Id,
     pub task_type: TaskType,

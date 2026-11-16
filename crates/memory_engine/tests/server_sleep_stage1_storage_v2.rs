@@ -4,7 +4,7 @@ use std::thread;
 
 use memory_engine::archive::{ArchiveEntry, ArchiveStatus};
 use memory_engine::event::IngestEvent;
-use memory_engine::llm::{LlmResponse, SleepRun, SleepRunStage, SleepTrack};
+use memory_engine::llm::{LlmErrorKind, LlmResponse, SleepRun, SleepRunStage, SleepTrack};
 use memory_engine::server_runtime::{
     AccountVaultMembership, AuthenticatedPrincipal, MembershipStatus, PrincipalKind, VaultContext,
     ACCOUNT_VAULT_MEMBERSHIP_SCHEMA_VERSION, AUTHENTICATED_PRINCIPAL_SCHEMA_VERSION,
@@ -884,6 +884,148 @@ fn transactional_sleep_lifecycle_finishes_once_and_publishes_canonical_memory() 
         .finalize_sleep_run_transactional(&context, finalize_request)
         .unwrap();
     assert_eq!(replay, finished);
+}
+
+#[test]
+fn transactional_sleep_records_empty_publication_only_after_accepted_extraction() {
+    for provider_succeeded in [true, false] {
+        let context = context("account_alpha", "vault_empty_publication");
+        let storage = InMemoryTransactionalStorage::new();
+        let engine = MemoryEngine::new(storage.clone());
+        let event_id = ingest(
+            &engine,
+            &context,
+            "ingest_empty_publication",
+            "session_owner",
+            T0,
+            "I was talking about Mars.",
+            true,
+        );
+        let start = engine
+            .begin_sleep_run_transactional(
+                &context,
+                sleep_request(&engine, "sleep_empty_publication", "session_owner"),
+            )
+            .unwrap();
+        let mut run = start.run;
+        let mut batch = start.batch.unwrap();
+        let mut extraction_attempts = 0;
+        while run.stage == SleepRunStage::Extraction {
+            let request_id = batch
+                .requests
+                .iter()
+                .find(|request| request.prompt_id == "memory_unit_pass")
+                .unwrap()
+                .request_id
+                .clone();
+            let mut responses = extraction_responses(&run, batch, &event_id);
+            let extraction = responses
+                .iter_mut()
+                .find(|response| matches!(response, LlmResponse::Ok { request_id: id, .. } if *id == request_id))
+                .unwrap();
+            *extraction = if provider_succeeded {
+                LlmResponse::Ok {
+                    request_id,
+                    text: json!({
+                        "schema_version": "memory_units_result.v1",
+                        "archive_id": run.archive_id,
+                        "memory_units": [],
+                    })
+                    .to_string(),
+                }
+            } else {
+                LlmResponse::Err {
+                    request_id,
+                    kind: LlmErrorKind::Transport,
+                    detail: "fixture provider timeout".to_string(),
+                }
+            };
+            extraction_attempts += 1;
+            let step = engine
+                .submit_sleep_batch_transactional(
+                    &context,
+                    TransactionalSleepSubmitRequest::new(
+                        format!("submit_empty_extraction_{extraction_attempts}"),
+                        T2,
+                        T2,
+                        &run,
+                        responses,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            assert!(extraction_attempts <= run.max_pass_attempts);
+            run = step.run;
+            batch = step.batch.unwrap();
+        }
+        assert_eq!(run.stage, SleepRunStage::Consolidation);
+        assert_eq!(batch.requests.len(), 1);
+        let ready = engine
+            .submit_sleep_batch_transactional(
+                &context,
+                TransactionalSleepSubmitRequest::new(
+                    "submit_empty_consolidation",
+                    T3,
+                    T3,
+                    &run,
+                    vec![LlmResponse::Ok {
+                        request_id: batch.requests[0].request_id.clone(),
+                        text: "GIST: The user discussed Mars.\n\nThe conversation covered Mars."
+                            .to_string(),
+                    }],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(ready.run.stage, SleepRunStage::ReadyToFinish);
+        assert_eq!(
+            ready
+                .run
+                .failed_passes
+                .iter()
+                .any(|pass| pass == "memory_unit_pass"),
+            !provider_succeeded
+        );
+
+        let finalize = TransactionalSleepFinalizeRequest::new(
+            "finalize_empty_publication",
+            T4,
+            T4,
+            &ready.run,
+        )
+        .unwrap();
+        let finished = engine
+            .finalize_sleep_run_transactional(&context, finalize.clone())
+            .unwrap();
+        assert_eq!(
+            finished.outcome.archive_entry.status,
+            ArchiveStatus::Complete
+        );
+        assert!(finished.outcome.archive_entry.memory_units.is_empty());
+        let task_id = finished.run.memory_unit_task_id.as_deref().unwrap();
+        let task = read_task(&storage, &context, task_id);
+        assert_eq!(task.state, TaskState::Completed);
+        let expected_outcome = provider_succeeded.then(|| {
+            json!({
+                "schema_version": "memory_unit_task_outcome.v1",
+                "archive_id": finished.run.archive_id,
+                "memory_unit_ids": [],
+            })
+        });
+        assert_eq!(task.outcome, expected_outcome);
+
+        let reopened = MemoryEngine::new(storage.clone());
+        assert_eq!(
+            reopened
+                .finalize_sleep_run_transactional(&context, finalize)
+                .unwrap(),
+            finished
+        );
+        assert_eq!(
+            read_task(&storage, &context, task_id).outcome,
+            expected_outcome
+        );
+    }
 }
 
 #[test]

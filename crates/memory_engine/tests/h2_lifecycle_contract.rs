@@ -180,11 +180,52 @@ fn changed_thesis_subject_and_unverifiable_legacy_tasks_require_new_fidelity_rev
     engine.storage().save_task(&legacy).unwrap();
     drop(engine);
     let engine = fixture.open();
+    assert!(engine
+        .pending_tasks()
+        .unwrap()
+        .iter()
+        .all(|task| task.task_id != legacy.task_id));
     assert!(matches!(
         engine.resume_memory_fidelity_pass(&legacy.task_id, valid_review(&unit)),
         Err(MemoryEngineError::NeedsNewReview)
     ));
     assert_eq!(stored_unit(&engine, &unit), unit);
+}
+
+#[test]
+fn legacy_forgetting_without_basis_requires_an_explicit_fresh_review() {
+    let fixture = Fixture::new("legacy_forget_basis");
+    let engine = fixture.open();
+    let unit = create_routine_unit(&engine);
+    let mut original = start_forgetting(&engine, &unit);
+    original
+        .pending_task
+        .inputs
+        .as_object_mut()
+        .unwrap()
+        .remove("availability_basis");
+    engine.storage().save_task(&original.pending_task).unwrap();
+    drop(engine);
+    let engine = fixture.open();
+    assert!(engine
+        .pending_tasks()
+        .unwrap()
+        .iter()
+        .all(|task| task.task_id != original.pending_task.task_id));
+    assert!(matches!(
+        engine.submit_forget_review_response(
+            &original.pending_task.task_id,
+            forgetting_response(&original, &unit)
+        ),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert_eq!(stored_unit(&engine, &unit), unit);
+    let fresh = start_forgetting(&engine, &unit);
+    forget(&engine, &fresh, &unit);
+    assert_eq!(
+        stored_unit(&engine, &unit).status,
+        MemoryUnitStatus::Forgotten
+    );
 }
 
 #[test]

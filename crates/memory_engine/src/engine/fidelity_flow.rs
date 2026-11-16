@@ -336,11 +336,9 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     fn fidelity_basis_matches(&self, task: &PendingTask, unit: &MemoryUnit) -> Result<bool> {
-        let Some(frozen) = task.inputs.get("fidelity_basis") else {
+        let Some((frozen, pack)) = frozen_fidelity_inputs(task) else {
             return Ok(false);
         };
-        let frozen: FrozenFidelityBasis = serde_json::from_value(frozen.clone())?;
-        let pack: EvidencePack = serde_json::from_value(task.inputs.clone())?;
         let source_ids = self.fidelity_source_ids(unit)?;
         if pack.target_thesis != unit.thesis
             || pack.unit_evidence != unit.evidence
@@ -378,6 +376,27 @@ impl<S: Storage> MemoryEngine<S> {
             self.storage.save_task(&task)
         });
     }
+}
+
+pub(super) fn fidelity_task_has_basis(task: &PendingTask) -> bool {
+    frozen_fidelity_inputs(task).is_some()
+}
+
+fn frozen_fidelity_inputs(task: &PendingTask) -> Option<(FrozenFidelityBasis, EvidencePack)> {
+    if task.schema_version != PENDING_TASK_SCHEMA_VERSION {
+        return None;
+    }
+    let frozen: FrozenFidelityBasis =
+        serde_json::from_value(task.inputs.get("fidelity_basis")?.clone()).ok()?;
+    let digest = frozen.digest.strip_prefix("sha256:")?;
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let pack: EvidencePack = serde_json::from_value(task.inputs.clone()).ok()?;
+    pack.events
+        .iter()
+        .any(|event| event.role == EvidenceEventRole::Source)
+        .then_some((frozen, pack))
 }
 
 fn fidelity_basis_digest(

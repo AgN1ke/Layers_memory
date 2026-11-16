@@ -121,10 +121,7 @@ impl MemoryEngineGodot {
     #[func]
     fn begin_sleep_run(&self, session_id: GString) -> GString {
         self.with_engine(|engine| {
-            let run = engine
-                .begin_sleep_run(&session_id.to_string())
-                .map_err(|err| err.to_string())?;
-            dump_json(&run, "sleep run")
+            dump_operation_result(engine.begin_sleep_run(&session_id.to_string()), "sleep run")
         })
     }
 
@@ -133,10 +130,10 @@ impl MemoryEngineGodot {
         self.with_engine(|engine| {
             let options: SleepRunOptions =
                 parse_json(&options_json.to_string(), "sleep run options")?;
-            let run = engine
-                .begin_sleep_run_with_options(&session_id.to_string(), options)
-                .map_err(|err| err.to_string())?;
-            dump_json(&run, "sleep run")
+            dump_operation_result(
+                engine.begin_sleep_run_with_options(&session_id.to_string(), options),
+                "sleep run",
+            )
         })
     }
 

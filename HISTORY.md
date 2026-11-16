@@ -46,6 +46,20 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — Legacy operations require saved evidence for recovery
+
+Existing Archives remain readable. Replaying a completed legacy operation
+without a verifiable receipt reports an unavailable result. A pending review
+without its frozen basis requires a new review initiated by the host. Sleep
+reuses inputs saved for the same run. Automatic extraction repair requires a
+recorded failure or skip and recoverable source events.
+
+Transactional Storage v2 Sleep and FileStorage share memory-unit construction
+and the published list of IDs, including `[]` for successful empty extraction.
+Storage v2 commits this outcome in its own transaction. Generation checks for
+ingest and erasure, review recovery, and payload pruning remain FileStorage
+contracts.
+
 ## 2026-11-16 — FileStorage can prune expired operation payloads
 
 The explicit maintenance call removes expired copies from terminal tasks,

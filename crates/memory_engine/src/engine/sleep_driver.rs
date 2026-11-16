@@ -734,7 +734,11 @@ pub(super) fn cancel_task_if_active<S: Storage>(
     task_id: &str,
     reason: &str,
 ) -> Result<()> {
-    let mut task = storage.load_task(task_id)?;
+    let mut task = match storage.load_task(task_id) {
+        Ok(task) => task,
+        Err(MemoryEngineError::TaskNotFound(_)) => return Ok(()),
+        Err(error) => return Err(error),
+    };
     if matches!(
         task.state,
         TaskState::Completed | TaskState::Failed | TaskState::Cancelled
@@ -923,31 +927,57 @@ pub(super) fn sleep_pass_reports(run: &SleepRun) -> Vec<SleepPassReport> {
         .collect()
 }
 
-pub(super) fn migrate_legacy_sleep_prompt_context(run: &mut SleepRun) -> Result<()> {
-    if run.shared_prompt_context.is_none() {
-        let inputs = run
-            .requests
-            .iter()
-            .find_map(|state| state.request.prompt_inputs.get("sleep_task"))
-            .cloned();
-        if let Some(inputs) = inputs {
-            run.shared_prompt_context = Some(sleep_shared_context_from_task_inputs(&inputs)?);
+pub(super) fn migrate_legacy_sleep_prompt_context(
+    run: &mut SleepRun,
+    archive: Option<&ArchiveEntry>,
+    saved_inputs: Option<&Value>,
+) -> Result<()> {
+    if run
+        .shared_prompt_context
+        .as_ref()
+        .is_none_or(|context| context.content.is_empty() || context.source_event_ids.is_empty())
+    {
+        if matches!(
+            run.stage,
+            SleepRunStage::ReadyToFinish | SleepRunStage::Finished
+        ) {
+            return Ok(());
         }
+        let archive = archive.ok_or(MemoryEngineError::NeedsNewReview)?;
+        let context = saved_inputs
+            .into_iter()
+            .chain(
+                run.requests
+                    .iter()
+                    .filter_map(|state| state.request.prompt_inputs.get("sleep_task")),
+            )
+            .filter(|input| sleep_task_covers_archive(input, archive))
+            .filter_map(|input| sleep_shared_context_from_task_inputs(input).ok())
+            .find(|context| !context.source_event_ids.is_empty())
+            .ok_or(MemoryEngineError::NeedsNewReview)?;
+        run.shared_prompt_context = Some(context);
     }
-    if run.shared_prompt_context.is_some() {
-        for state in &mut run.requests {
-            if let Value::Object(inputs) = &mut state.request.prompt_inputs {
-                inputs.remove("sleep_task");
-                inputs
-                    .entry("source".to_string())
-                    .or_insert_with(|| json!("shared_context"));
-                inputs
-                    .entry("archive_id".to_string())
-                    .or_insert_with(|| json!(run.archive_id));
+    for state in &mut run.requests {
+        if let Value::Object(inputs) = &mut state.request.prompt_inputs {
+            if inputs.remove("sleep_task").is_some() {
+                inputs.insert("source".to_string(), json!("shared_context"));
+                inputs.insert("archive_id".to_string(), json!(run.archive_id));
             }
         }
     }
     Ok(())
+}
+
+pub(super) fn sleep_task_covers_archive(inputs: &Value, archive: &ArchiveEntry) -> bool {
+    inputs["session_id"].as_str() == Some(&archive.source_session_id)
+        && inputs["preliminary_archive_id"].as_str() == Some(&archive.archive_id)
+        && inputs["events"].as_array().is_some_and(|events| {
+            !events.is_empty()
+                && events
+                    .iter()
+                    .map(|event| event["event_id"].as_str())
+                    .eq(archive.source_event_ids.iter().map(|id| Some(id.as_str())))
+        })
 }
 
 pub(super) fn parse_sleep_response_text(
@@ -1235,6 +1265,84 @@ pub(super) fn empty_memory_unit_result(archive_id: &str) -> MemoryUnitPassResult
         schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
         archive_id: archive_id.to_string(),
         memory_units: Vec::new(),
+    }
+}
+
+pub(super) fn accepted_memory_unit_result(run: &SleepRun) -> Result<Option<MemoryUnitPassResult>> {
+    let successful_pass = run.requests.iter().any(|state| {
+        state.track == SleepTrack::MemoryUnit && state.completed && state.last_error.is_none()
+    });
+    let result = run
+        .memory_unit_result
+        .clone()
+        .map(serde_json::from_value::<MemoryUnitPassResult>)
+        .transpose()?;
+    Ok(result.filter(|result| successful_pass || !result.memory_units.is_empty()))
+}
+
+pub(super) fn materialize_memory_unit(
+    archive: &ArchiveEntry,
+    draft: crate::sleep::MemoryUnitDraft,
+    evidence: &[AttributionEvent],
+    now: &str,
+    id: impl FnOnce(&str) -> Result<String>,
+) -> Result<MemoryUnit> {
+    let thesis = normalize_whitespace(&draft.thesis);
+    let subject = resolve_attributed_subject(
+        &draft.source_event_ids,
+        draft.subject_hint,
+        draft.speaker_id.as_deref(),
+        evidence,
+    );
+    Ok(MemoryUnit {
+        schema_version: MEMORY_UNIT_SCHEMA_VERSION.into(),
+        memory_unit_id: id(&thesis)?,
+        archive_id: archive.archive_id.clone(),
+        personality_scope_id: archive.personality_scope_id.clone(),
+        source_session_id: archive.source_session_id.clone(),
+        created_at: now.into(),
+        updated_at: now.into(),
+        thesis,
+        subject,
+        source_event_ids: draft.source_event_ids,
+        evidence: normalize_optional_string(draft.evidence.as_deref()),
+        tags: draft.tags,
+        weight: draft.weight,
+        status: MemoryUnitStatus::ActiveArchive,
+        fidelity_status: FidelityStatus::Unchecked,
+        fidelity_review: None,
+        forget_review: None,
+        reflection_count: 0,
+        last_reflected_at: None,
+        last_reflection_operation_id: None,
+    })
+}
+
+pub(super) const MEMORY_UNIT_TASK_OUTCOME_SCHEMA: &str = "memory_unit_task_outcome.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct MemoryUnitTaskOutcome {
+    pub(super) schema_version: String,
+    pub(super) archive_id: String,
+    pub(super) memory_unit_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(super) task_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(super) request_digest: String,
+}
+
+impl MemoryUnitTaskOutcome {
+    pub(super) fn published(archive_id: &str, units: &[MemoryUnit]) -> Self {
+        Self {
+            schema_version: MEMORY_UNIT_TASK_OUTCOME_SCHEMA.into(),
+            archive_id: archive_id.into(),
+            memory_unit_ids: units
+                .iter()
+                .map(|unit| unit.memory_unit_id.clone())
+                .collect(),
+            task_id: String::new(),
+            request_digest: String::new(),
+        }
     }
 }
 

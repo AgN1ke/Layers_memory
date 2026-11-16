@@ -1,22 +1,9 @@
 use super::*;
 use crate::storage::memory_unit_publication_key;
 
-const PUBLICATION_SCHEMA: &str = "memory_unit_task_outcome.v1";
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PublicationReceipt {
-    schema_version: String,
-    archive_id: String,
-    #[serde(default)]
-    task_id: String,
-    #[serde(default)]
-    request_digest: String,
-    memory_unit_ids: Vec<String>,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct PublicationIntent {
-    receipt: PublicationReceipt,
+    receipt: MemoryUnitTaskOutcome,
     source_session_id: String,
     scope: String,
     units: Vec<MemoryUnit>,
@@ -31,8 +18,10 @@ impl<S: Storage> MemoryEngine<S> {
         else {
             return Ok(false);
         };
-        let receipt: PublicationReceipt = serde_json::from_value(value)?;
-        if receipt.schema_version != PUBLICATION_SCHEMA || receipt.archive_id != archive_id {
+        let receipt: MemoryUnitTaskOutcome = serde_json::from_value(value)?;
+        if receipt.schema_version != MEMORY_UNIT_TASK_OUTCOME_SCHEMA
+            || receipt.archive_id != archive_id
+        {
             return Err(MemoryEngineError::OperationResultUnavailable);
         }
         Ok(true)
@@ -59,14 +48,12 @@ impl<S: Storage> MemoryEngine<S> {
                 .read_memory_unit_publication_receipt(archive_id)?
                 .or_else(|| task.outcome.clone())
             {
-                let receipt: PublicationReceipt = serde_json::from_value(stored)?;
+                let receipt: MemoryUnitTaskOutcome = serde_json::from_value(stored)?;
                 receipt.require_request(task, &request_digest)?;
                 return self.read_published_memory_units(&receipt);
             }
             if task.state == TaskState::Completed {
-                // A legacy completion lacks an exact batch receipt. Preserve
-                // the old read API and leave classification to migration.
-                return self.storage.read_archive_entry_by_id(archive_id);
+                return Err(MemoryEngineError::OperationResultUnavailable);
             }
 
             let archive = self.storage.read_archive_entry_raw(archive_id)?;
@@ -191,7 +178,7 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(archive)
     }
 
-    fn read_published_memory_units(&self, receipt: &PublicationReceipt) -> Result<ArchiveEntry> {
+    fn read_published_memory_units(&self, receipt: &MemoryUnitTaskOutcome) -> Result<ArchiveEntry> {
         let mut archive = self.storage.read_archive_entry_raw(&receipt.archive_id)?;
         let units = self
             .storage
@@ -217,12 +204,12 @@ impl<S: Storage> MemoryEngine<S> {
     }
 }
 
-impl PublicationReceipt {
+impl MemoryUnitTaskOutcome {
     fn require_request(&self, task: &PendingTask, request_digest: &str) -> Result<()> {
         if self.task_id.is_empty() || self.request_digest.is_empty() {
             return Err(MemoryEngineError::OperationResultUnavailable);
         }
-        if self.schema_version != PUBLICATION_SCHEMA
+        if self.schema_version != MEMORY_UNIT_TASK_OUTCOME_SCHEMA
             || self.task_id != task.task_id
             || self.request_digest != request_digest
         {
@@ -241,15 +228,10 @@ fn prepare_publication(
 ) -> Result<JournalOperation> {
     let now = now_rfc3339()?;
     let intent = PublicationIntent {
-        receipt: PublicationReceipt {
-            schema_version: PUBLICATION_SCHEMA.into(),
-            archive_id: archive.archive_id.clone(),
+        receipt: MemoryUnitTaskOutcome {
             task_id: task.task_id.clone(),
             request_digest,
-            memory_unit_ids: units
-                .iter()
-                .map(|unit| unit.memory_unit_id.clone())
-                .collect(),
+            ..MemoryUnitTaskOutcome::published(&archive.archive_id, &units)
         },
         source_session_id: archive.source_session_id.clone(),
         scope: archive.effective_personality_scope_id().into(),
@@ -279,7 +261,7 @@ fn publication_intent(operation: &JournalOperation) -> Result<PublicationIntent>
     }
     let intent: PublicationIntent = serde_json::from_value(operation.intent.clone())?;
     let receipt = &intent.receipt;
-    if receipt.schema_version != PUBLICATION_SCHEMA
+    if receipt.schema_version != MEMORY_UNIT_TASK_OUTCOME_SCHEMA
         || operation.op_id != memory_unit_publication_key(&receipt.archive_id)
         || !receipt
             .memory_unit_ids

@@ -156,7 +156,10 @@ impl<S: Storage> MemoryEngine<S> {
             .storage
             .load_task(task_id)
             .map_err(|error| self.task_after_erasure_error(task_id, error))?;
-        if super::retention::task_payload_compacted(&task) {
+        if super::retention::task_payload_compacted(&task)
+            || (task.state == TaskState::Completed
+                && task.schema_version != PENDING_TASK_SCHEMA_VERSION)
+        {
             return Err(MemoryEngineError::OperationResultUnavailable);
         }
         Ok(task)
