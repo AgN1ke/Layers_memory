@@ -119,6 +119,8 @@ mod recall_api;
 mod recall_stage1;
 mod reflection_flow;
 mod retention;
+mod scope_inspection;
+mod scope_operations;
 mod session_ops;
 mod sleep_driver;
 mod sleep_flow;

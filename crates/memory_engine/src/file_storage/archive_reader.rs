@@ -73,6 +73,27 @@ impl FileStorage {
         }
     }
 
+    pub(super) fn read_scoped_archive_detail(
+        &self,
+        scope_id: &str,
+        archive_id: &str,
+    ) -> Result<Option<StorageCollection<ArchiveEntry>>> {
+        let Some(path) = self.archive_entry_path_by_id_optional(archive_id)? else {
+            return Ok(None);
+        };
+        let Ok(archive) = read_archive_file(&path) else {
+            return Ok(None);
+        };
+        if archive.effective_personality_scope_id() != scope_id {
+            return Ok(None);
+        }
+        let projection = self.project_archive(archive, None)?;
+        Ok(Some(StorageCollection {
+            items: projection.entry.into_iter().collect(),
+            warnings: projection.warnings,
+        }))
+    }
+
     pub(super) fn read_projected_archive_units(
         &self,
         archive_id: &str,
@@ -257,6 +278,13 @@ impl FileStorage {
                     if error.kind() == std::io::ErrorKind::NotFound =>
                 {
                     "missing canonical memory unit"
+                }
+                Ok(_) => {
+                    warnings.push(archive_warning(
+                        &archive,
+                        "canonical memory unit ownership could not be verified",
+                    ));
+                    continue;
                 }
                 _ => "corrupt canonical memory unit",
             };

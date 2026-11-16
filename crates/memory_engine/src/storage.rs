@@ -25,7 +25,7 @@ pub(crate) fn memory_unit_publication_key(archive_id: &str) -> String {
 
 pub(crate) const MEMORY_UNIT_TASK_OUTCOME_SCHEMA: &str = "memory_unit_task_outcome.v1";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StorageReadWarning {
     pub collection: String,
     pub path: String,
@@ -95,6 +95,21 @@ pub trait Storage {
             collection.warnings.clear();
         }
         Ok(collection)
+    }
+    /// Return a scoped projection and its owned warnings if the parent Archive
+    /// can be attributed to the requested scope.
+    fn read_archive_detail_scoped(
+        &self,
+        scope_id: &str,
+        archive_id: &str,
+    ) -> Result<Option<StorageCollection<ArchiveEntry>>> {
+        let mut collection =
+            self.read_archive_scoped(&ArchiveFilters::default(), Some(scope_id), None)?;
+        collection
+            .items
+            .retain(|entry| entry.archive_id == archive_id);
+        collection.warnings.clear();
+        Ok((!collection.items.is_empty()).then_some(collection))
     }
     /// Internal publication view of the persisted Archive before unit hydration.
     fn read_archive_entry_raw(&self, archive_id: &str) -> Result<ArchiveEntry> {

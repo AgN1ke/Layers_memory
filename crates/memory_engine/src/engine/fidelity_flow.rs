@@ -202,17 +202,7 @@ impl<S: Storage> MemoryEngine<S> {
                 self.tombstone_vector_unit_if_indexed_unlocked(&unit)?;
             }
 
-            let mut archive_entry = self.storage.read_archive_entry_by_id(&unit.archive_id)?;
-            archive_entry.updated_at = now.clone();
-            for archive_unit in &mut archive_entry.memory_units {
-                if archive_unit.memory_unit_id == unit.memory_unit_id {
-                    *archive_unit = unit.clone();
-                }
-            }
-            archive_entry.compact_memory =
-                render_compact_memory_from_units(&archive_entry.memory_units);
-            self.storage
-                .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
+            self.rebuild_archive_units_and_compact_unlocked(&unit.archive_id, &unit, &now)?;
 
             task.state = TaskState::Completed;
             task.updated_at = now;

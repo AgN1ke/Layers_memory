@@ -608,6 +608,14 @@ impl Storage for FileStorage {
         self.read_archive_collection(filters, scope, session_id)
     }
 
+    fn read_archive_detail_scoped(
+        &self,
+        scope_id: &str,
+        archive_id: &str,
+    ) -> Result<Option<StorageCollection<ArchiveEntry>>> {
+        self.read_scoped_archive_detail(scope_id, archive_id)
+    }
+
     fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()> {
         self.ensure_layout()?;
         atomic_write_json(&self.memory_unit_path(&unit.memory_unit_id), unit)

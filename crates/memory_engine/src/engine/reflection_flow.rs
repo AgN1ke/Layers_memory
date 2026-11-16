@@ -1696,7 +1696,7 @@ impl<S: Storage> MemoryEngine<S> {
             let archive = if let Some(archive) = changed_archives.get_mut(&unit.archive_id) {
                 archive
             } else {
-                let archive = self.storage.read_archive_entry_by_id(&unit.archive_id)?;
+                let archive = self.storage.read_archive_entry_raw(&unit.archive_id)?;
                 changed_archives.insert(unit.archive_id.clone(), archive);
                 changed_archives
                     .get_mut(&unit.archive_id)

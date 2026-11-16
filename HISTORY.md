@@ -46,6 +46,16 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-16 — FileStorage exposes scope-bound inspection and restoration
+
+The Rust API provides scope metadata, canonical Archive and unit details,
+verified source projections, and explicit restoration of forgotten units.
+Unknown IDs and IDs outside the requested scope both return an empty result.
+Inspection leaves memory status and recall statistics intact. When a cited
+source cannot be verified, the affected text is withheld. Restoration
+checks ownership again under the write lock and requires verifiable recorded
+citations. Python, Godot, and Telegram integration are scheduled in H3.5.
+
 ## 2026-11-16 — FileStorage reads Archive units from canonical records
 
 A missing or corrupt unit file produces a diagnostic for its owning

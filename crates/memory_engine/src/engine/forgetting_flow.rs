@@ -331,25 +331,36 @@ impl<S: Storage> MemoryEngine<S> {
             unit.effective_personality_scope_id(),
             &unit.source_session_id,
             || {
-                let now = now_rfc3339()?;
-                let mut unit = self.storage.read_memory_unit_by_id(memory_unit_id)?;
-                if unit.status != MemoryUnitStatus::Forgotten {
-                    return Err(MemoryEngineError::Validation(format!(
-                        "memory unit is not forgotten: {memory_unit_id}"
-                    )));
+                let current = self.storage.read_memory_unit_by_id(memory_unit_id)?;
+                if current.archive_id != unit.archive_id
+                    || current.source_session_id != unit.source_session_id
+                    || current.effective_personality_scope_id()
+                        != unit.effective_personality_scope_id()
+                {
+                    return Err(MemoryEngineError::OperationStale);
                 }
-                unit.status = match unit.fidelity_status {
-                    FidelityStatus::Unchecked => MemoryUnitStatus::ActiveArchive,
-                    status => memory_unit_status_after_fidelity(status),
-                };
-                unit.updated_at = now.clone();
-                unit.tags.retain(|tag| tag != "forgotten");
-                merge_unique(&mut unit.tags, &["remembered_back".to_string()]);
-                self.storage.write_memory_unit(&unit)?;
-                self.rebuild_archive_units_and_compact_unlocked(&unit.archive_id, &unit, &now)?;
-                Ok(unit)
+                self.remember_back_unlocked(current)
             },
         )
+    }
+
+    pub(super) fn remember_back_unlocked(&self, mut unit: MemoryUnit) -> Result<MemoryUnit> {
+        if unit.status != MemoryUnitStatus::Forgotten {
+            return Err(MemoryEngineError::Validation(
+                "memory unit is not forgotten".to_string(),
+            ));
+        }
+        let now = now_rfc3339()?;
+        unit.status = match unit.fidelity_status {
+            FidelityStatus::Unchecked => MemoryUnitStatus::ActiveArchive,
+            status => memory_unit_status_after_fidelity(status),
+        };
+        unit.updated_at = now.clone();
+        unit.tags.retain(|tag| tag != "forgotten");
+        merge_unique(&mut unit.tags, &["remembered_back".to_string()]);
+        self.storage.write_memory_unit(&unit)?;
+        self.rebuild_archive_units_and_compact_unlocked(&unit.archive_id, &unit, &now)?;
+        Ok(unit)
     }
 
     fn build_forget_review_inputs_unlocked(
@@ -553,7 +564,8 @@ impl<S: Storage> MemoryEngine<S> {
         updated_unit: &MemoryUnit,
         now: &str,
     ) -> Result<()> {
-        let mut archive = self.storage.read_archive_entry_by_id(archive_id)?;
+        let mut archive = self.storage.read_archive_entry_raw(archive_id)?;
+        let visible = self.storage.read_memory_units_for_archive(archive_id)?;
         let mut replaced = false;
         for unit in &mut archive.memory_units {
             if unit.memory_unit_id == updated_unit.memory_unit_id {
@@ -566,7 +578,9 @@ impl<S: Storage> MemoryEngine<S> {
             archive.memory_units.push(updated_unit.clone());
         }
         archive.updated_at = now.to_string();
-        archive.compact_memory = render_compact_memory_from_units(&archive.memory_units);
+        // Preserve expected embedded IDs for pre-receipt archives even when
+        // one of their canonical files is currently unavailable.
+        archive.compact_memory = render_compact_memory_from_units(&visible.items);
         self.storage
             .update_archive_entry(&archive.archive_id, &archive)
     }

@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::types::{Id, ModelRole, Timestamp};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskType {
     SleepCompression,

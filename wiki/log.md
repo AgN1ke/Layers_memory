@@ -8,6 +8,11 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-16] update | Scope-bound memory inspection
+
+Recorded the [Rust inspection and restoration contract](pages/foundation/contracts.md#144-перегляд-і-відновлення-в-межах-scope)
+and updated H3 progress in the roadmap.
+
 ## [2026-11-16] update | Canonical FileStorage Archive reads
 
 Recorded the [canonical reading contract](pages/foundation/contracts.md#143-канонічне-читання-archive-у-filestorage)
