@@ -92,6 +92,9 @@ func _init() -> void:
     _assert_subject_actions(runtime_dir.path_join("memory"))
     if failed:
         return
+    _assert_quoted_context(runtime_dir.path_join("memory"))
+    if failed:
+        return
     _assert_partial_archive_publication(archive, runtime_dir.path_join("memory"))
     if failed:
         return
@@ -259,6 +262,80 @@ func _assert_subject_actions(memory_dir: String) -> void:
     view = _loads(engine.inspect_subject(scope, corrected_subject["id"]))
     if not view.get("items", []).is_empty():
         _fail("erased Core fact must disappear from the subject view")
+
+func _assert_quoted_context(memory_dir: String) -> void:
+    var scope := "godot_quote_scope"
+    var session_id := "godot_quote_reply"
+    var timestamp := "2026-06-10T10:00:00Z"
+    var source_text := "The <Orion> telescope is packed."
+    var reply_text := "I can bring the stand."
+    var author := {"id": "alex_source", "name": "Alex"}
+    var source: Dictionary = _loads(engine.ingest(_dumps({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "godot_user",
+        "timestamp": timestamp,
+        "session_id": "godot_quote_previous",
+        "personality_scope_id": scope,
+        "memory_text": source_text,
+        "payload": {"text": "untrusted_quote_payload"},
+        "speaker": author,
+        "quoted_event_ids": [],
+    }))).get("stored_event", {})
+    if not source.has("event_id"):
+        _fail("could not ingest a quote source in the same scope")
+        return
+    var reply: Dictionary = _loads(engine.ingest(_dumps({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "godot_user",
+        "timestamp": "2026-06-10T10:01:00Z",
+        "session_id": session_id,
+        "personality_scope_id": scope,
+        "memory_text": reply_text,
+        "payload": {},
+        "speaker": {"id": "alex_reply", "name": "Alex"},
+        "quoted_event_ids": [source["event_id"]],
+    }))).get("stored_event", {})
+    if not reply.has("event_id"):
+        _fail("could not ingest a reply quoting another session")
+        return
+    var request := _dumps({"schema_version": "core_context_request.v1", "session_id": session_id})
+    var package_json := engine.core_context_package(request)
+    var package: Dictionary = _loads(package_json)
+    var current := "What did we discuss?"
+    var plan: Dictionary = _loads(engine.render_memory_prompt_plan(package_json, current))
+    var expected := [{
+        "event_id": source["event_id"],
+        "status": "available",
+        "speaker": author,
+        "timestamp": timestamp,
+        "text": source_text,
+    }]
+    for layer in [package.get("session_recent", []), package.get("session_trace", []), plan.get("dialogue_events", [])]:
+        if layer.size() != 1 or layer[0].get("event_id") != reply["event_id"] or layer[0].get("quoted_events") != expected:
+            _fail("the Godot context package and plan must project the same verified quote")
+            return
+    var view := engine.render_memory_view(package_json, current)
+    if "<quote " not in view or "The &lt;Orion&gt; telescope is packed." not in view or "untrusted_quote_payload" in view:
+        _fail("the text view must render the escaped authored quote")
+        return
+    var erased: Dictionary = _loads(engine.erase_subject(scope, author["id"], "godot_erase_quote_source"))
+    if erased.get("deleted_events") != 1 or erased.get("detached_quotes") != 1:
+        _fail("erasure must delete the source and detach its quote")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    package_json = engine.core_context_package(request)
+    plan = _loads(engine.render_memory_prompt_plan(package_json, current))
+    var dialogue: Array = plan.get("dialogue_events", [])
+    view = engine.render_memory_view(package_json, current)
+    if dialogue.size() != 1 or dialogue[0].get("event_id") != reply["event_id"] or dialogue[0].get("text") != reply_text or dialogue[0].has("quoted_events"):
+        _fail("reopened storage must retain the reply without the erased quote")
+        return
+    if "Orion" in view or reply_text not in view:
+        _fail("the reopened text view must retain only the reply's authored text")
 
 func _assert_partial_archive_publication(archive: Dictionary, memory_dir: String) -> void:
     var archive_id: String = archive["archive_id"]

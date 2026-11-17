@@ -242,6 +242,9 @@ pub struct CoreContextEvent {
     pub speaker: Option<Speaker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Budgeted source projections, present only for explicitly referenced quotes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quoted_events: Vec<CoreContextQuote>,
     /// Lossless host-owned event data. Prompt renderers ignore it; structured
     /// chat hosts can recover role/tool metadata without reading Session twice.
     #[serde(default, skip_serializing_if = "Value::is_null")]
@@ -250,6 +253,31 @@ pub struct CoreContextEvent {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreContextQuote {
+    pub event_id: Id,
+    pub status: CoreContextQuoteStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<Speaker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoreContextQuoteStatus {
+    Available,
+    Unavailable,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// A transient older memory activated by the current conversational focus.

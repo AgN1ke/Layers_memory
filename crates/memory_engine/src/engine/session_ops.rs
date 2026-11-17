@@ -1,5 +1,15 @@
 use super::*;
 
+pub(super) fn is_local_quote_source(event: &StoredEvent, session_id: &str, scope: &str) -> bool {
+    event.session_id == session_id
+        && event.effective_personality_scope_id() == scope
+        && event
+            .speaker
+            .as_ref()
+            .is_some_and(|speaker| !speaker.id.trim().is_empty())
+        && event.validate().is_ok()
+}
+
 impl<S: Storage> MemoryEngine<S> {
     pub(super) fn with_resource_lock<T, F>(&self, key: String, f: F) -> Result<T>
     where
@@ -72,14 +82,7 @@ impl<S: Storage> MemoryEngine<S> {
         sessions.push(event.session_id.clone());
         for session in sessions.into_iter().rev() {
             for source in self.read_session_events_with_archived(&session)? {
-                if source.session_id == session
-                    && source.effective_personality_scope_id() == scope
-                    && source
-                        .speaker
-                        .as_ref()
-                        .is_some_and(|speaker| !speaker.id.trim().is_empty())
-                    && source.validate().is_ok()
-                {
+                if is_local_quote_source(&source, &session, scope) {
                     missing.remove(source.event_id.as_str());
                 }
             }

@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-17] update | Scoped dialogue quote projection
+
+Documented source visibility, prompt budget, and the Smartest follow-up in
+the [context contract](pages/foundation/contracts.md#64-corecontextrequest)
+and [integration plan](pages/planning/integration-hardening-plan-2026-11-15.md#h3--канонічне-читання-і-перегляд-у-межах-scope-та-людини).
+
 ## [2026-11-16] update | H5 replay scenarios
 
 Recorded the [local reflection and memory-quality scenarios](pages/planning/integration-hardening-plan-2026-11-15.md#h5--живе-приймання-і-повернення-до-когнітивної-дороги)

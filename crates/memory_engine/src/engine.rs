@@ -105,6 +105,7 @@ use crate::vector::{
 use crate::{MemoryEngineError, Result};
 
 mod context_budget;
+mod context_quotes;
 mod core_attribution;
 mod core_context;
 mod core_policy;

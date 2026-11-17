@@ -46,6 +46,21 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-17 — Dialogue quotes resolve within their source scope
+
+The context package and structured prompt plan expose budgeted source
+projections for typed event references. They can resolve live and rotated
+events in sessions within the same scope. The text view renders the same
+projections on the turns it displays. Missing, hidden, foreign, and
+unverified legacy sources return an unavailable marker without source
+content when the reference remains. Completed erasure can remove the
+reference entirely. New packages reflect erasure without changing the
+reply author's words.
+
+Quote projection leaves Archive recall statistics unchanged. The optional
+`quoted_events` field is additive in the existing JSON schemas. Rust
+callers constructing a `CoreContextEvent` directly supply the new field.
+
 ## 2026-11-16 — Telegram uses scope-bound memory APIs
 
 The Python and Godot adapters expose scoped inspection and restoration,

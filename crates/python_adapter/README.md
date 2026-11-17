@@ -116,6 +116,14 @@ A copy in free text or a host payload can remain in ordinary context if the
 engine cannot link it to the original. For existing stores, the host must
 account for the quote formats it previously wrote when enabling erasure.
 
+`core_context_package` and `render_memory_prompt_plan` expose optional
+`quoted_events` on the dialogue event. An `available` entry carries the
+source `event_id`, `speaker`, `timestamp`, and budgeted `text`. Check
+`truncated` before matching an offset or digest against the original.
+An `unavailable` entry carries only status and the referenced ID. A
+reference removed by erasure is absent from newly built packages. Use the
+projection directly and fetch a fresh package for each turn.
+
 Correct a fact in place with `correct_core_fact_attribution(request_json)`.
 Send the current fact's `updated_at` as the expected version, a stable
 operation ID, the authorized scope, and a typed assign or clear action:

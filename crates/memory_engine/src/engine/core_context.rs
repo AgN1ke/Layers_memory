@@ -1,4 +1,5 @@
 use super::*;
+use crate::core_store::{CoreContextQuote, CoreContextQuoteStatus};
 
 impl<S: Storage> MemoryEngine<S> {
     pub fn upsert_core_fact(&self, input: CoreFactInput) -> Result<CoreFactUpsertResult> {
@@ -86,25 +87,6 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         let created_at = now_rfc3339()?;
-        let (archived_event_ids, session) =
-            self.with_resource_lock(session_lock_key(&request.session_id), || {
-                let archived_event_ids =
-                    self.archived_event_ids_for_session_unlocked(&request.session_id)?;
-                let session = self.storage.read_session(&request.session_id)?;
-                Ok((archived_event_ids, session))
-            })?;
-        let personality_scope_id = session.metadata.personality_scope_id.clone().or_else(|| {
-            (session.metadata.event_count == 0 && session.events.is_empty())
-                .then(|| request.core_scope.clone())
-                .flatten()
-        });
-        let effective_personality_scope_id = personality_scope_id
-            .clone()
-            .unwrap_or_else(|| request.session_id.clone());
-        self.require_erasure_complete(
-            MemoryErasureKind::PurgeScope,
-            &effective_personality_scope_id,
-        )?;
         let recent_limit = if request.session_recent_limit == 0 {
             self.options.context.default_session_recent_limit
         } else {
@@ -121,8 +103,17 @@ impl<S: Storage> MemoryEngine<S> {
             request.recall_limit
         };
 
-        let session_recent = session_context_events(&session, recent_limit, &archived_event_ids);
-        let session_trace = session_context_events(&session, trace_limit, &archived_event_ids);
+        let session = self.context_session_events(&request, recent_limit, trace_limit)?;
+        let personality_scope_id = session.personality_scope_id;
+        let session_recent = session.recent;
+        let session_trace = session.trace;
+        let effective_personality_scope_id = personality_scope_id
+            .clone()
+            .unwrap_or_else(|| request.session_id.clone());
+        self.require_erasure_complete(
+            MemoryErasureKind::PurgeScope,
+            &effective_personality_scope_id,
+        )?;
         let query_text = request
             .query_text
             .clone()
@@ -282,6 +273,117 @@ impl<S: Storage> MemoryEngine<S> {
         })
     }
 
+    fn context_session_events(
+        &self,
+        request: &CoreContextRequest,
+        recent_limit: usize,
+        trace_limit: usize,
+    ) -> Result<SessionContext> {
+        let session_id = &request.session_id;
+        let scope = self.with_resource_lock(session_lock_key(session_id), || {
+            Ok(self
+                .storage
+                .read_session_metadata(session_id)?
+                .effective_personality_scope_id()
+                .to_owned())
+        })?;
+        self.with_scope_memory_write(&scope, || {
+            let (session, covered) =
+                self.with_resource_lock(session_lock_key(session_id), || {
+                    self.require_erasure_complete(MemoryErasureKind::DeleteSession, session_id)?;
+                    let session = self.storage.read_session(session_id)?;
+                    if session.metadata.session_id != *session_id
+                        || session.metadata.effective_personality_scope_id() != scope
+                    {
+                        return Err(MemoryEngineError::OperationStale);
+                    }
+                    let covered = if session.metadata.archived_event_index_complete {
+                        session
+                            .metadata
+                            .archived_event_ids
+                            .iter()
+                            .cloned()
+                            .collect()
+                    } else {
+                        self.rebuild_archived_event_index_for_session_unlocked(session_id)?
+                    };
+                    Ok((session, covered))
+                })?;
+
+            let mut recent = session_context_events(&session, recent_limit, &covered);
+            let mut trace = session_context_events(&session, trace_limit, &covered);
+            self.attach_context_quotes(&scope, &session, &mut recent, &mut trace);
+            let personality_scope_id = session.metadata.personality_scope_id.or_else(|| {
+                (session.metadata.event_count == 0 && session.events.is_empty())
+                    .then(|| request.core_scope.clone())
+                    .flatten()
+            });
+            Ok(SessionContext {
+                personality_scope_id,
+                recent,
+                trace,
+            })
+        })
+    }
+
+    fn attach_context_quotes(
+        &self,
+        scope: &str,
+        session: &SessionRecord,
+        recent: &mut [CoreContextEvent],
+        trace: &mut [CoreContextEvent],
+    ) {
+        let visible_ids = recent
+            .iter()
+            .chain(trace.iter())
+            .map(|event| event.event_id.as_str())
+            .collect::<HashSet<_>>();
+        let references = session
+            .events
+            .iter()
+            .filter_map(|event| {
+                let ids = event
+                    .quoted_event_ids
+                    .as_ref()
+                    .filter(|ids| !ids.is_empty())?;
+                (event.effective_personality_scope_id() == scope
+                    && event.session_id == session.metadata.session_id
+                    && visible_ids.contains(event.event_id.as_str()))
+                .then_some((event.event_id.as_str(), ids))
+            })
+            .collect::<HashMap<_, _>>();
+        if references.is_empty() {
+            return;
+        }
+        let source_ids = references
+            .values()
+            .flat_map(|ids| ids.iter().map(String::as_str))
+            .collect::<HashSet<_>>();
+        let sources = self.resolve_context_quote_sources_unlocked(scope, session, &source_ids);
+        for event in recent.iter_mut().chain(trace.iter_mut()) {
+            if let Some(ids) = references.get(event.event_id.as_str()) {
+                event.quoted_events = ids
+                    .iter()
+                    .map(|id| {
+                        let source = sources.get(id).filter(|_| *id != event.event_id);
+                        CoreContextQuote {
+                            event_id: id.clone(),
+                            status: if source.is_some() {
+                                CoreContextQuoteStatus::Available
+                            } else {
+                                CoreContextQuoteStatus::Unavailable
+                            },
+                            speaker: source.and_then(|source| source.speaker.clone()),
+                            timestamp: source.map(|source| source.timestamp.clone()),
+                            text: source.and_then(|source| source.memory_text.clone()),
+                            truncated: false,
+                        }
+                    })
+                    .collect();
+            }
+        }
+    }
+
     pub(super) fn core_context_facts(
         &self,
         scope: Option<&str>,
@@ -394,6 +496,12 @@ impl<S: Storage> MemoryEngine<S> {
 
         Ok((items, notes))
     }
+}
+
+struct SessionContext {
+    personality_scope_id: Option<String>,
+    recent: Vec<CoreContextEvent>,
+    trace: Vec<CoreContextEvent>,
 }
 
 struct VisibleMemoryLayers<'a> {
