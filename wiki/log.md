@@ -8,6 +8,12 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-19] update | Авторство висновків після Sleep
+
+До [H5.2 та рядка 16 матриці](pages/planning/integration-hardening-plan-2026-11-15.md#h5--живе-приймання-і-повернення-до-когнітивної-дороги)
+додано відкриту правку за живим випадком Smartest і перевірку того, яку частину
+пропозиції асистента підтримала людина.
+
 ## [2026-11-17] update | Scoped dialogue quote projection
 
 Documented source visibility, prompt budget, and the Smartest follow-up in
