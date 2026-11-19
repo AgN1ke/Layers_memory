@@ -18,12 +18,14 @@ use std::path::PathBuf;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use ::memory_engine::archive::FidelityReview;
 use ::memory_engine::core_store::{
-    CandidateReviewInput, CoreContextPackage, CoreContextRequest, CoreFactInput, CoreFactPatchInput,
+    CandidateReviewInput, CoreContextPackage, CoreContextRequest, CoreFactAttributionInput,
+    CoreFactInput, CoreFactPatchInput,
 };
 use ::memory_engine::event::IngestEvent;
 use ::memory_engine::forgetting::ForgetReviewResult;
@@ -34,11 +36,22 @@ use ::memory_engine::reflection::{
     ReflectionActionsResult, ReflectionAnalyzeResult, ReflectionOpportunity,
 };
 use ::memory_engine::sleep::{MemoryUnitPassResult, SleepCompressionResult};
-use ::memory_engine::storage::Storage;
 use ::memory_engine::vector::{
     DeepRecallQuery, EmbedBatchResult, DEFAULT_ASSOCIATIVE_MEMORY_MIN_SIMILARITY,
 };
-use ::memory_engine::{EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError};
+use ::memory_engine::{
+    EngineOptions, FileStorage, MemoryEngine as CoreEngine, MemoryEngineError, WriteGeneration,
+};
+
+pyo3::create_exception!(memory_engine, OperationConflictError, PyRuntimeError);
+pyo3::create_exception!(
+    memory_engine,
+    OperationResultUnavailableError,
+    PyRuntimeError
+);
+pyo3::create_exception!(memory_engine, OperationIncompleteError, PyRuntimeError);
+pyo3::create_exception!(memory_engine, OperationStaleError, PyRuntimeError);
+pyo3::create_exception!(memory_engine, NeedsNewReviewError, PyRuntimeError);
 
 #[pyclass(name = "MemoryEngine")]
 pub struct PyMemoryEngine {
@@ -165,6 +178,47 @@ impl PyMemoryEngine {
         dump_json(&stored, "stored event")
     }
 
+    fn ingest_idempotent(
+        &self,
+        py: Python<'_>,
+        operation_id: &str,
+        event_json: &str,
+    ) -> PyResult<String> {
+        let event: IngestEvent = parse_json(event_json, "event")?;
+        let result = run_without_gil(py, || self.inner.ingest_idempotent(operation_id, event))?;
+        dump_json(&result, "idempotent ingest result")
+    }
+
+    #[pyo3(signature = (session_id, personality_scope_id=None))]
+    fn write_generation(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        personality_scope_id: Option<&str>,
+    ) -> PyResult<String> {
+        let generation = run_without_gil(py, || {
+            self.inner
+                .write_generation(session_id, personality_scope_id)
+        })?;
+        dump_json(&generation, "write generation")
+    }
+
+    fn ingest_idempotent_at_generation(
+        &self,
+        py: Python<'_>,
+        operation_id: &str,
+        event_json: &str,
+        generation_json: &str,
+    ) -> PyResult<String> {
+        let event: IngestEvent = parse_json(event_json, "event")?;
+        let generation: WriteGeneration = parse_json(generation_json, "write generation")?;
+        let result = run_without_gil(py, || {
+            self.inner
+                .ingest_idempotent_at_generation(operation_id, event, generation)
+        })?;
+        dump_json(&result, "idempotent ingest result")
+    }
+
     fn sleep(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
         let result = run_without_gil(py, || self.inner.sleep(session_id))?;
         dump_json(&result, "sleep result")
@@ -257,6 +311,19 @@ impl PyMemoryEngine {
         dump_json(&start, "memory fidelity pass")
     }
 
+    fn begin_memory_fidelity_pass_in_scope(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        memory_unit_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || {
+            self.inner
+                .begin_memory_fidelity_pass_in_scope(scope_id, memory_unit_id)
+        })?;
+        dump_json(&result, "scoped memory fidelity pass")
+    }
+
     fn submit_memory_fidelity_response(
         &self,
         py: Python<'_>,
@@ -308,6 +375,68 @@ impl PyMemoryEngine {
     fn remember_back(&self, py: Python<'_>, memory_unit_id: &str) -> PyResult<String> {
         let unit = run_without_gil(py, || self.inner.remember_back(memory_unit_id))?;
         dump_json(&unit, "memory unit")
+    }
+
+    fn inspect_scope(&self, py: Python<'_>, scope_id: &str) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.inspect_scope(scope_id))?;
+        dump_json(&result, "scoped memory summary")
+    }
+
+    fn inspect_archive(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        archive_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.inspect_archive(scope_id, archive_id))?;
+        dump_json(&result, "scoped archive detail")
+    }
+
+    fn inspect_memory_unit(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        memory_unit_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || {
+            self.inner.inspect_memory_unit(scope_id, memory_unit_id)
+        })?;
+        dump_json(&result, "scoped memory unit detail")
+    }
+
+    fn remember_back_in_scope(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        memory_unit_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || {
+            self.inner.remember_back_in_scope(scope_id, memory_unit_id)
+        })?;
+        dump_json(&result, "restored memory unit")
+    }
+
+    fn inspect_subject(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        subject_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || self.inner.inspect_subject(scope_id, subject_id))?;
+        dump_json(&result, "subject memory view")
+    }
+
+    fn erase_subject(
+        &self,
+        py: Python<'_>,
+        scope_id: &str,
+        subject_id: &str,
+        operation_id: &str,
+    ) -> PyResult<String> {
+        let result = run_without_gil(py, || {
+            self.inner.erase_subject(scope_id, subject_id, operation_id)
+        })?;
+        dump_json(&result, "subject erasure report")
     }
 
     #[pyo3(signature = (session_id, core_scope=None))]
@@ -433,6 +562,11 @@ impl PyMemoryEngine {
         run_without_gil(py, || self.inner.recover_pending_memory_operations())
     }
 
+    fn prune_completed_memory_operations(&self, py: Python<'_>) -> PyResult<String> {
+        let report = run_without_gil(py, || self.inner.prune_completed_memory_operations())?;
+        dump_json(&report, "memory operation prune report")
+    }
+
     fn delete_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
         let report = run_without_gil(py, || self.inner.delete_session(session_id))?;
         dump_json(&report, "session deletion report")
@@ -457,8 +591,18 @@ impl PyMemoryEngine {
     }
 
     fn read_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
-        let session = run_without_gil(py, || self.inner.storage().read_session(session_id))?;
+        let session = run_without_gil(py, || self.inner.read_session(session_id))?;
         dump_json(&session, "session")
+    }
+
+    fn list_local_sessions(&self, py: Python<'_>) -> PyResult<String> {
+        let session_ids = run_without_gil(py, || self.inner.list_local_sessions())?;
+        dump_json(&session_ids, "local session IDs")
+    }
+
+    fn read_unarchived_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
+        let session = run_without_gil(py, || self.inner.read_unarchived_session(session_id))?;
+        dump_json(&session, "unarchived session")
     }
 
     fn resume_sleep_compression(
@@ -497,8 +641,9 @@ impl PyMemoryEngine {
     }
 
     fn recall(&self, py: Python<'_>, query_json: &str) -> PyResult<String> {
-        let query: RecallQuery = parse_json(query_json, "recall query")?;
-        let result = run_without_gil(py, || self.inner.recall(query))?;
+        let (query, notes): (RecallQuery, _) = parse_query_json(query_json, "recall query")?;
+        let mut result = run_without_gil(py, || self.inner.recall(query))?;
+        result.append_notes(notes);
         dump_json(&result, "recall result")
     }
 
@@ -507,8 +652,10 @@ impl PyMemoryEngine {
     }
 
     fn core_context_package(&self, py: Python<'_>, request_json: &str) -> PyResult<String> {
-        let request: CoreContextRequest = parse_json(request_json, "core context request")?;
-        let package = run_without_gil(py, || self.inner.core_context_package(request))?;
+        let (request, notes): (CoreContextRequest, _) =
+            parse_query_json(request_json, "core context request")?;
+        let mut package = run_without_gil(py, || self.inner.core_context_package(request))?;
+        package.notes.extend(notes);
         dump_json(&package, "core context package")
     }
 
@@ -549,6 +696,17 @@ impl PyMemoryEngine {
         dump_json(&result, "core fact patch result")
     }
 
+    fn correct_core_fact_attribution(
+        &self,
+        py: Python<'_>,
+        request_json: &str,
+    ) -> PyResult<String> {
+        let request: CoreFactAttributionInput =
+            parse_json(request_json, "core fact attribution input")?;
+        let result = run_without_gil(py, || self.inner.correct_core_fact_attribution(request))?;
+        dump_json(&result, "core fact attribution result")
+    }
+
     fn pending_tasks(&self, py: Python<'_>) -> PyResult<String> {
         let tasks = run_without_gil(py, || self.inner.pending_tasks())?;
         dump_json(&tasks, "pending tasks")
@@ -557,6 +715,12 @@ impl PyMemoryEngine {
     fn seed_core_from_archives(&self, py: Python<'_>) -> PyResult<String> {
         let summary = run_without_gil(py, || self.inner.seed_core_from_archives())?;
         dump_json(&summary, "core archive seed summary")
+    }
+
+    fn seed_core_from_archives_in_scope(&self, py: Python<'_>, scope_id: &str) -> PyResult<String> {
+        let summary =
+            run_without_gil(py, || self.inner.seed_core_from_archives_in_scope(scope_id))?;
+        dump_json(&summary, "scoped core archive seed summary")
     }
 
     fn vector_state(&self, py: Python<'_>, scope: &str) -> PyResult<String> {
@@ -616,6 +780,11 @@ fn parse_json<T: DeserializeOwned>(raw: &str, what: &str) -> PyResult<T> {
         .map_err(|err| PyValueError::new_err(format!("Invalid {what} JSON: {err}")))
 }
 
+fn parse_query_json<T: DeserializeOwned>(raw: &str, what: &str) -> PyResult<(T, Vec<String>)> {
+    ::memory_engine::query_json::from_str(raw)
+        .map_err(|err| PyValueError::new_err(format!("Invalid {what} JSON: {err}")))
+}
+
 fn dump_json<T: Serialize>(value: &T, what: &str) -> PyResult<String> {
     serde_json::to_string(value)
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to serialize {what}: {err}")))
@@ -637,13 +806,59 @@ fn map_err(err: MemoryEngineError) -> PyErr {
         MemoryEngineError::IncompatibleSchema { expected, actual } => PyValueError::new_err(
             format!("Incompatible schema: expected {expected}, got {actual}"),
         ),
+        error @ MemoryEngineError::OperationConflict => {
+            OperationConflictError::new_err(error.to_string())
+        }
+        error @ MemoryEngineError::OperationResultUnavailable => {
+            OperationResultUnavailableError::new_err(error.to_string())
+        }
+        error @ MemoryEngineError::OperationIncomplete => {
+            OperationIncompleteError::new_err(error.to_string())
+        }
+        error @ MemoryEngineError::OperationStale => {
+            OperationStaleError::new_err(error.to_string())
+        }
+        error @ MemoryEngineError::NeedsNewReview => {
+            NeedsNewReviewError::new_err(error.to_string())
+        }
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
 
+#[pyfunction]
+fn build_info(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
+    let info = ::memory_engine::build_info();
+    let fields = PyDict::new_bound(py);
+    fields.set_item("version", info.version)?;
+    fields.set_item("commit", info.commit)?;
+    fields.set_item("dirty", info.dirty)?;
+    Ok(fields)
+}
+
 #[pymodule(name = "memory_engine")]
-fn memory_engine_py(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn memory_engine_py(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyMemoryEngine>()?;
+    module.add(
+        "OperationConflictError",
+        py.get_type_bound::<OperationConflictError>(),
+    )?;
+    module.add(
+        "OperationResultUnavailableError",
+        py.get_type_bound::<OperationResultUnavailableError>(),
+    )?;
+    module.add(
+        "OperationIncompleteError",
+        py.get_type_bound::<OperationIncompleteError>(),
+    )?;
+    module.add(
+        "OperationStaleError",
+        py.get_type_bound::<OperationStaleError>(),
+    )?;
+    module.add(
+        "NeedsNewReviewError",
+        py.get_type_bound::<NeedsNewReviewError>(),
+    )?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    module.add_function(wrap_pyfunction!(build_info, module)?)?;
     Ok(())
 }

@@ -5,6 +5,7 @@
 //! storage boundaries, and serialization tests.
 
 pub mod archive;
+mod build_info;
 pub mod config;
 pub mod core_store;
 pub mod engine;
@@ -15,10 +16,12 @@ pub mod fidelity;
 pub mod file_storage;
 pub mod forgetting;
 pub mod hypothesis;
+pub mod inspection;
 pub mod journal;
 pub mod llm;
 pub mod manifest;
 pub mod prompt_view;
+pub mod query_json;
 pub mod recall;
 pub mod reflection;
 pub mod server_runtime;
@@ -26,23 +29,27 @@ pub mod session;
 pub mod sleep;
 pub mod storage;
 pub mod storage_v2;
+pub mod subject_memory;
 pub mod tasks;
 pub mod types;
 pub mod vector;
 
+pub use build_info::{build_info, BuildInfo};
+pub use engine::MemoryOperationPruneReport;
 pub use engine::{
-    ContextPackageConfig, EngineOptions, EventScoringConfig, IngestResult, MemoryEngine,
-    RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result, SleepWorkflowInput,
-    TransactionalCorePatchRequest, TransactionalCorePatchResult, TransactionalCoreUpsertRequest,
-    TransactionalCoreUpsertResult, TransactionalIngestRequest, TransactionalIngestResult,
-    TransactionalRecallRequest, TransactionalRecallResult, TransactionalSleepCancelRequest,
-    TransactionalSleepCancelResult, TransactionalSleepFinalizeRequest,
-    TransactionalSleepFinalizeResult, TransactionalSleepPostFinalizeState,
-    TransactionalSleepStartRequest, TransactionalSleepStartResult, TransactionalSleepSubmitRequest,
-    TransactionalSleepSubmitResult, MAX_SLEEP_MEMORY_UNITS_PER_RUN,
-    MAX_SLEEP_SUBMIT_RESPONSE_BYTES, MAX_SLEEP_WORKFLOW_INPUT_BYTES,
+    ContextPackageConfig, EngineOptions, EventScoringConfig, IdempotentIngestResult, IngestResult,
+    MemoryEngine, RecallStage1Config, ReflectionConfig, SleepStage1Config, SleepStage1Result,
+    SleepWorkflowInput, TransactionalCorePatchRequest, TransactionalCorePatchResult,
+    TransactionalCoreUpsertRequest, TransactionalCoreUpsertResult, TransactionalIngestRequest,
+    TransactionalIngestResult, TransactionalRecallRequest, TransactionalRecallResult,
+    TransactionalSleepCancelRequest, TransactionalSleepCancelResult,
+    TransactionalSleepFinalizeRequest, TransactionalSleepFinalizeResult,
+    TransactionalSleepPostFinalizeState, TransactionalSleepStartRequest,
+    TransactionalSleepStartResult, TransactionalSleepSubmitRequest, TransactionalSleepSubmitResult,
+    MAX_SLEEP_MEMORY_UNITS_PER_RUN, MAX_SLEEP_SUBMIT_RESPONSE_BYTES,
+    MAX_SLEEP_WORKFLOW_INPUT_BYTES,
 };
-pub use erasure::{MemoryErasureCounts, MemoryErasureKind, MemoryErasureReport};
+pub use erasure::{MemoryErasureCounts, MemoryErasureKind, MemoryErasureReport, WriteGeneration};
 pub use error::{MemoryEngineError, Result};
 pub use file_storage::FileStorage;
 pub use llm::{

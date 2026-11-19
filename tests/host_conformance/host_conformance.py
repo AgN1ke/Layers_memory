@@ -657,11 +657,11 @@ class DirectHostDriver:
         return sleep_events_from_request(request, run)
 
     def _submit_valid_fidelity(self, request: dict[str, Any]) -> None:
-        unit = request.get("prompt_inputs", {}).get("memory_unit", {})
-        memory_unit_id = unit.get("memory_unit_id")
-        archive_id = unit.get("archive_id")
+        evidence = request["prompt_inputs"]["evidence_pack"]
+        memory_unit_id = evidence.get("memory_unit_id")
+        archive_id = evidence.get("archive_id")
         if not isinstance(memory_unit_id, str) or not isinstance(archive_id, str):
-            return
+            raise ConformanceError("Fidelity request did not identify its memory unit and archive")
         response = {
             "status": "ok",
             "request_id": request["request_id"],
@@ -679,6 +679,94 @@ class DirectHostDriver:
             ),
         }
         self.engine.submit_memory_fidelity_response(request["task_id"], dumps(response))
+
+
+class ReflectionHostDriver(DirectHostDriver):
+    def _response_for_request(self, run: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+        prompt_id = request["prompt_id"]
+        events = [
+            event for event in self._sleep_events(run, request)
+            if event_kind(event) == "user_message"
+        ]
+        if len(events) != 1:
+            raise ConformanceError("Expected one new source event per reflection cycle")
+        source = events[0]
+        text = event_text(source)
+        if prompt_id == "sleep_consolidator":
+            response_text = f"GIST: {text}\n\n{text}"
+        elif prompt_id == "memory_unit_pass":
+            response_text = dumps({
+                "schema_version": "memory_units_result.v1",
+                "archive_id": run["archive_id"],
+                "memory_units": [{
+                    "thesis": text,
+                    "source_event_ids": [event_id(source)],
+                    "evidence": text,
+                    "tags": ["reflection_conformance"],
+                    "weight": 0.95,
+                }],
+            })
+        else:
+            payload = {
+                "sleep_emotional_pass": {"emotional_markers": []},
+                "sleep_topic_thread_pass": {"topic_thread": []},
+                "sleep_personal_signal_pass": {"personal_signals": []},
+                "sleep_relational_pass": {"relational_tone": None},
+            }.get(prompt_id)
+            if payload is None:
+                raise ConformanceError(f"Unexpected Sleep request {prompt_id!r}")
+            response_text = dumps(payload)
+        return {"status": "ok", "request_id": request["request_id"], "text": response_text}
+
+    def start_cycle(self, text: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        self.turn_index += 1
+        stored = self._ingest("user_message", "conformance_user", text, ["reflection_conformance"])
+        outcome = self.run_sleep()
+        archive = outcome["archive_entry"]
+        if len(outcome.get("fidelity_requests", [])) != 1:
+            raise ConformanceError("Expected one fidelity review per cycle")
+        started = loads(self.engine.begin_reflection_if_due(SESSION_ID, CORE_SCOPE, "after_sleep"))
+        start = started.get("reflection")
+        if start is None or started["status"]["reason"] != "critical_memory":
+            raise ConformanceError(
+                f"Validated critical evidence did not trigger reflection: {started['status']}"
+            )
+        inputs = start["request"]["prompt_inputs"]["reflection_task"]
+        trigger_ids = inputs["new_memory_unit_ids"]
+        if len(trigger_ids) != 1 or trigger_ids[0] not in {
+            unit["memory_unit_id"] for unit in archive["memory_units"]
+        }:
+            raise ConformanceError("Reflection did not receive exactly the new archive's evidence")
+        if archive["source_event_ids"] != [stored["stored_event"]["event_id"]]:
+            raise ConformanceError("Reflection cycle did not archive the independent source")
+        return archive, start, inputs
+
+    def reopen_engine(self) -> None:
+        self.engine = memory_engine.MemoryEngine(
+            str(self.runtime_dir), host_id="host_conformance_direct"
+        )
+
+    def apply_reflection(
+        self,
+        start: dict[str, Any],
+        *,
+        actions: list[dict[str, Any]],
+        no_insight: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        response = {
+            "status": "ok",
+            "request_id": start["request"]["request_id"],
+            "text": dumps({
+                "schema_version": "reflection_actions_result.v1",
+                "source_session_id": SESSION_ID,
+                "core_scope": CORE_SCOPE,
+                "actions": actions,
+                "no_insight": no_insight,
+            }),
+        }
+        return loads(self.engine.submit_reflection_response(
+            start["pending_task"]["task_id"], dumps(response)
+        ))
 
 
 class EnglishDirectHostDriver(DirectHostDriver):
@@ -735,14 +823,20 @@ class EnglishDirectHostDriver(DirectHostDriver):
 class FakeTelegram:
     def __init__(self) -> None:
         self.messages: list[tuple[int, str]] = []
+        self.blocked_chat_ids: set[int] = set()
 
-    def send_message(self, chat_id: int, text: str) -> None:
+    def send_message(self, chat_id: int, text: str) -> list[int]:
+        if chat_id in self.blocked_chat_ids:
+            raise RuntimeError("fake Telegram private delivery unavailable")
         self.messages.append((chat_id, text))
+        return [1_900_000_000 + len(self.messages)]
 
 
 class FakeGemini:
     def __init__(self, telegram_bot: Any) -> None:
         self.telegram_bot = telegram_bot
+        self.last_chat_prompt = ""
+        self.calls = 0
 
     def generate_text(
         self,
@@ -755,6 +849,9 @@ class FakeGemini:
         telemetry: dict[str, Any] | None = None,
     ) -> Any:
         del system_instruction, response_mime_type, model_role, telemetry
+        self.calls += 1
+        if operation == "chat_reply":
+            self.last_chat_prompt = prompt
         if operation == "chat_reply" and "silver feather" in prompt.lower():
             text = "I remember the silver feather under the old bridge."
         elif operation == "chat_reply":
@@ -871,11 +968,11 @@ class TelegramLocalHostDriver:
         )
         self.sleep_runner = self.telegram_bot.SleepRunner(self.engine, self.gemini, self.llm_config)
         self.turn_index = 0
+        self.last_update: dict[str, Any] | None = None
         self._patch_runtime_paths()
 
     def _patch_runtime_paths(self) -> None:
         self.telegram_bot.MEMORY_DIR = self.runtime_dir / "memory"
-        self.telegram_bot.ARCHIVE_DIR = self.telegram_bot.MEMORY_DIR / "archive"
         self.telegram_bot.LOG_DIR = self.runtime_dir / "logs"
         self.telegram_bot.LOG_PATH = self.telegram_bot.LOG_DIR / "bot.log"
         self.telegram_bot.TOKEN_USAGE_PATH = self.telegram_bot.LOG_DIR / "token_usage.jsonl"
@@ -885,7 +982,17 @@ class TelegramLocalHostDriver:
         self.telegram_bot.LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.telegram_bot.STATE_DIR.mkdir(parents=True, exist_ok=True)
 
-    def send_user_message(self, text: str) -> str:
+    def send_user_message(
+        self,
+        text: str,
+        *,
+        chat_id: int | None = None,
+        sender_id: int | None = None,
+        chat_type: str = "private",
+        message_fields: dict[str, Any] | None = None,
+    ) -> str:
+        chat_id = self.chat_id if chat_id is None else chat_id
+        sender_id = chat_id if sender_id is None else sender_id
         self.turn_index += 1
         before = len(self.telegram.messages)
         update = {
@@ -893,11 +1000,19 @@ class TelegramLocalHostDriver:
             "message": {
                 "message_id": self.turn_index,
                 "date": 1781080000 + self.turn_index,
-                "chat": {"id": self.chat_id, "type": "private"},
-                "from": {"id": 311422683, "first_name": "Mykyta"},
+                "chat": {"id": chat_id, "type": chat_type},
+                "from": {"id": sender_id, "first_name": "Mykyta"},
                 "text": text,
+                **(message_fields or {}),
             },
         }
+        self.deliver_update(update)
+        if len(self.telegram.messages) <= before:
+            raise ConformanceError("telegram-local host did not send a reply")
+        return self.telegram.messages[-1][1]
+
+    def deliver_update(self, update: dict[str, Any]) -> None:
+        self.last_update = update
         self.telegram_bot.handle_update(
             update,
             telegram=self.telegram,
@@ -906,20 +1021,27 @@ class TelegramLocalHostDriver:
             llm_config=self.llm_config,
             sleep_runner=self.sleep_runner,
         )
-        if len(self.telegram.messages) <= before:
-            raise ConformanceError("telegram-local host did not send a reply")
-        return self.telegram.messages[-1][1]
 
-    def run_sleep(self) -> dict[str, Any]:
-        summary = self.telegram_bot.run_sleep(self.engine, self.gemini, self.llm_config, self.session_id)
+    def reopen_engine(self) -> None:
+        self.engine = memory_engine.MemoryEngine(
+            str(self.runtime_dir / "memory"), host_id="telegram_local_conformance"
+        )
+        self.sleep_runner = self.telegram_bot.SleepRunner(self.engine, self.gemini, self.llm_config)
+
+    def run_sleep(self, session_id: str | None = None) -> dict[str, Any]:
+        session_id = self.session_id if session_id is None else session_id
+        summary = self.telegram_bot.run_sleep(self.engine, self.gemini, self.llm_config, session_id)
         if "Archive:" not in summary:
             raise ConformanceError(f"telegram-local sleep returned unexpected summary:\n{summary}")
         if re.search(r"\b[1-9]\d* failed\b", summary):
             raise ConformanceError(f"telegram-local sleep had failed fidelity tasks:\n{summary}")
-        archives = self._completed_archives()
+        archives = self.telegram_bot.complete_archives(self.engine, session_id)
         if not archives:
             raise ConformanceError("telegram-local sleep produced no completed archive")
-        return {"archive_entry": archives[-1], "summary": summary}
+        detail = self.telegram_bot.inspect_archive(self.engine, session_id, archives[0]["archive_id"])
+        if not detail or not detail.get("archive"):
+            raise ConformanceError("telegram-local completed archive could not be inspected")
+        return {"archive_entry": detail["archive"], "summary": summary}
 
     def context_package(self, current_text: str) -> dict[str, Any]:
         return self.telegram_bot.context_package(self.engine, self.session_id, self.chat_id, current_text)
@@ -928,9 +1050,138 @@ class TelegramLocalHostDriver:
         package = self.context_package(current_text)
         return self.telegram_bot.chat_prompt(self.engine, package, current_text)
 
-    def _completed_archives(self) -> list[dict[str, Any]]:
-        archives = self.telegram_bot.complete_archives()
-        return [archive for archive in archives if archive.get("source_session_id") == self.session_id]
+def run_direct_reflection(keep_runtime: bool) -> DriverResult:
+    runtime = Path(tempfile.mkdtemp(prefix="memory_engine_direct_reflection_"))
+    driver = ReflectionHostDriver(runtime)
+    try:
+        core = loads(driver.engine.upsert_core_fact(dumps({
+            "schema_version": "core_fact_input.v1",
+            "scope": CORE_SCOPE,
+            "category": "location",
+            "text": "The user lives in Berlin.",
+            "confidence": 0.95,
+        })))["fact"]
+
+        first_archive, first_start, first = driver.start_cycle(
+            "I've logged the Moon and planets through my telescope every clear week for two years."
+        )
+        created = driver.apply_reflection(first_start, actions=[{
+            "action": "new_candidate",
+            "candidate": {
+                "text": "The user has a sustained interest in observational astronomy.",
+                "category": "interests",
+                "confidence": 0.72,
+                "evidence_summary": "The user describes a recurring astronomy practice over two years.",
+                "source_memory_unit_ids": first["new_memory_unit_ids"],
+                "supporting_archive_ids": [first_archive["archive_id"]],
+                "tags": ["astronomy"],
+            },
+        }])
+        candidate, = created["candidates"]
+
+        later_archive, later_start, later = driver.start_cycle(
+            "I started leading a monthly public observing session at the local astronomy club."
+        )
+        if [item["candidate_id"] for item in later["existing_candidates"]] != [candidate["candidate_id"]]:
+            raise ConformanceError("Later reflection did not receive the earlier candidate")
+        later_task = later_start["pending_task"]["task_id"]
+        driver.reopen_engine()
+        pending = loads(driver.engine.begin_reflection_if_due(SESSION_ID, CORE_SCOPE, "after_sleep"))
+        if (
+            pending["status"]["reason"] != "already_pending"
+            or pending["status"]["pending_task_id"] != later_task
+            or pending.get("reflection") is not None
+        ):
+            raise ConformanceError("Restart lost or duplicated the pending reflection")
+        actions = [{
+            "action": "reinforce_candidate",
+            "candidate_id": candidate["candidate_id"],
+            "confidence": 0.88,
+            "evidence_summary": "The user now leads observing sessions in addition to private observations.",
+            "source_memory_unit_ids": later["new_memory_unit_ids"],
+            "supporting_archive_ids": [later_archive["archive_id"]],
+            "tags": ["astronomy"],
+        }]
+        reinforced = driver.apply_reflection(later_start, actions=actions)
+        driver.reopen_engine()
+        repeated = driver.apply_reflection(later_start, actions=actions)
+        if repeated != reinforced or reinforced["candidates"]:
+            raise ConformanceError("Resubmitted reflection did not return its original durable outcome")
+        stored, = loads(driver.engine.list_candidates())
+        if (
+            stored["candidate_id"] != candidate["candidate_id"]
+            or set(stored["source_memory_unit_ids"]) != set(
+                first["new_memory_unit_ids"] + later["new_memory_unit_ids"]
+            )
+            or len(stored["reinforcements"]) != 1
+            or stored["reinforcements"][0]["source_memory_unit_ids"] != later["new_memory_unit_ids"]
+            or stored["confidence"] < candidate["confidence"]
+        ):
+            raise ConformanceError("Independent evidence did not reinforce the same candidate exactly once")
+
+        temporary_text = "I feel unusually tired just this evening after a delayed train."
+        temporary_archive, temporary_start, temporary = driver.start_cycle(temporary_text)
+        no_insight = driver.apply_reflection(temporary_start, actions=[], no_insight={
+            "reason": "temporary_state",
+            "explanation": "A single evening after travel does not establish a sustained pattern.",
+        })
+        if (
+            no_insight["no_insight"]["reason"] != "temporary_state"
+            or loads(driver.engine.list_candidates()) != [stored]
+        ):
+            raise ConformanceError("The temporary state created or reinforced a candidate")
+        unit = loads(driver.engine.inspect_memory_unit(CORE_SCOPE, temporary["new_memory_unit_ids"][0]))
+        if unit["unit"]["reflection_count"] != 1:
+            raise ConformanceError("No-insight reflection failed to checkpoint its episode")
+        package = driver.context_package("What did I say about the delayed train?")
+        if not any(
+            memory["id"] == temporary_archive["archive_id"] and temporary_text in dumps(memory)
+            for memory in package["archive_relevant"]
+        ):
+            raise ConformanceError("The temporary episode was no longer available in Archive")
+
+        challenge_archive, challenge_start, challenge = driver.start_cycle(
+            "I moved home to Kyiv permanently. Berlin is no longer my home."
+        )
+        challenged = driver.apply_reflection(challenge_start, actions=[{
+            "action": "challenge_core_fact",
+            "candidate": {
+                "text": "The user now lives in Kyiv.",
+                "category": "location",
+                "confidence": 0.95,
+                "evidence_summary": "The user explicitly updated their home after moving.",
+                "source_memory_unit_ids": challenge["new_memory_unit_ids"],
+                "supporting_archive_ids": [challenge_archive["archive_id"]],
+                "contradicting_archive_ids": [challenge_archive["archive_id"]],
+                "contradicted_core_fact_ids": [core["core_fact_id"]],
+            },
+        }])
+        proposal, = challenged["candidates"]
+        if "core_challenge" not in proposal["tags"] or proposal["status"] not in {"draft", "ready_for_review"}:
+            raise ConformanceError("Core challenge did not remain reviewable")
+        driver.reopen_engine()
+        match, = driver.context_package("Where do I live?")["core_facts"]
+        if (
+            match["core_fact_id"] != core["core_fact_id"]
+            or match["text"] != core["text"]
+            or match["status"] != "active"
+        ):
+            raise ConformanceError("Unreviewed challenge changed Core")
+        ids = {item["candidate_id"] for item in loads(driver.engine.list_candidates())}
+        if ids != {candidate["candidate_id"], proposal["candidate_id"]}:
+            raise ConformanceError("Reflection replay left a missing or duplicate candidate")
+        final_status = loads(driver.engine.reflection_status(SESSION_ID, CORE_SCOPE, "after_sleep"))
+        if final_status["reason"] != "no_eligible_memory":
+            raise ConformanceError("A completed cycle left reflection work eligible")
+        return DriverResult(
+            runtime_dir=runtime,
+            archive_id=challenge_archive["archive_id"],
+            memory_unit_count=final_status["valid_memory_unit_count"],
+            core_fact_count=1,
+        )
+    finally:
+        if not keep_runtime:
+            shutil.rmtree(runtime, ignore_errors=True)
 
 
 def run_direct(keep_runtime: bool) -> DriverResult:
@@ -1263,6 +1514,7 @@ def run_telegram_local(keep_runtime: bool) -> DriverResult:
         assert_memory_view(view)
         package = driver.context_package("Що ти пам'ятаєш про Іржу?")
         assert_core(package)
+        assert_telegram_scoped_memory(driver, archive)
         return DriverResult(
             runtime_dir=runtime,
             archive_id=archive["archive_id"],
@@ -1272,6 +1524,120 @@ def run_telegram_local(keep_runtime: bool) -> DriverResult:
     finally:
         if not keep_runtime:
             shutil.rmtree(runtime, ignore_errors=True)
+
+
+def assert_telegram_scoped_memory(driver: TelegramLocalHostDriver, archive: dict[str, Any]) -> None:
+    if archive["archive_id"] not in driver.send_user_message("/archives"):
+        raise ConformanceError("Telegram did not list its own completed archive")
+    if "Completed archives: 1" not in driver.send_user_message("/memory_stats"):
+        raise ConformanceError("Telegram did not show scoped archive counters")
+
+    other_chat = driver.chat_id + 1
+    other_scope = f"telegram_{other_chat}"
+    driver.send_user_message("My private account prefers a green notebook.", chat_id=other_chat)
+    other = driver.run_sleep(other_scope)["archive_entry"]
+    other_unit = other["memory_units"][0]["memory_unit_id"]
+    provider_calls = driver.gemini.calls
+    if driver.send_user_message(f"/archive {other['archive_id']}") != driver.send_user_message("/archive missing"):
+        raise ConformanceError("Telegram distinguished foreign and missing archive IDs")
+    for command in ("/evidence", "/fidelity", "/remember_back"):
+        if driver.send_user_message(f"{command} {other_unit}") != "Memory unit not found.":
+            raise ConformanceError(f"Telegram exposed a foreign unit via {command}")
+    if driver.gemini.calls != provider_calls:
+        raise ConformanceError("Telegram contacted the model for a refused memory command")
+
+    group_chat = -driver.chat_id
+    group_scope = f"telegram_{group_chat}"
+    first_sender, second_sender = 90011, 90012
+    first_text, second_text = "I use a yellow folder.", "I use a purple folder."
+    driver.send_user_message(first_text, chat_id=group_chat, sender_id=first_sender, chat_type="group")
+    original_message_id = driver.turn_index
+    untrusted_quote = "COPIED_QUOTE_SENTINEL"
+    driver.send_user_message(
+        second_text,
+        chat_id=group_chat,
+        sender_id=second_sender,
+        chat_type="group",
+        message_fields={
+            "reply_to_message": {
+                "message_id": original_message_id,
+                "chat": {"id": group_chat, "type": "group"},
+                "text": untrusted_quote,
+            },
+            "quote": {"text": untrusted_quote},
+        },
+    )
+    events = loads(driver.engine.read_session(group_scope))["events"]
+    first = next(event for event in events if event["memory_text"] == first_text)
+    second = next(event for event in events if event["memory_text"] == second_text)
+    if second["quoted_event_ids"] != [first["event_id"]] or untrusted_quote in dumps(second):
+        raise ConformanceError("Telegram did not persist quote provenance without duplicate text")
+    if untrusted_quote in driver.gemini.last_chat_prompt:
+        raise ConformanceError("Telegram inserted the copied quote text into the prompt")
+    reply_to_second = {
+        "message_id": driver.turn_index,
+        "chat": {"id": group_chat, "type": "group"},
+        "text": second_text,
+    }
+
+    def group_command(command: str, **kwargs: Any) -> str:
+        return driver.send_user_message(
+            command, chat_id=group_chat, sender_id=first_sender, chat_type="group", **kwargs
+        )
+
+    provider_calls = driver.gemini.calls
+    if not group_command(f"/my_memory telegram_user_{second_sender}").startswith("Unknown command"):
+        raise ConformanceError("Telegram let a manually entered ID choose the inspected subject")
+    if not group_command(f"/forget_me telegram_user_{second_sender}").startswith("Unknown command"):
+        raise ConformanceError("Telegram let a manually entered ID choose the erased subject")
+    offset = len(driver.telegram.messages)
+    group_notice = group_command("/my_memory", message_fields={"reply_to_message": reply_to_second})
+    delivered = dict(driver.telegram.messages[offset:])
+    if (
+        first_text not in delivered.get(first_sender, "")
+        or second_text in delivered.get(first_sender, "")
+        or first_text in group_notice
+    ):
+        raise ConformanceError("Telegram exposed personal inspection outside the private delivery")
+    driver.telegram.blocked_chat_ids.add(first_sender)
+    if "Start a private chat" not in group_command("/my_memory"):
+        raise ConformanceError("Telegram did not report failed private delivery")
+    if "your own Telegram account" not in group_command(
+        "/forget_me", message_fields={"sender_chat": {"id": group_chat}}
+    ):
+        raise ConformanceError("An anonymous group sender could erase individual memory")
+    erase_notice = group_command("/forget_me", message_fields={"reply_to_message": reply_to_second})
+    erase_update = driver.last_update
+    if "Deleted events: 1" not in erase_notice or erase_update is None:
+        raise ConformanceError("Telegram did not report authenticated subject erasure")
+    driver.reopen_engine()
+    driver.deliver_update(erase_update)
+    if driver.telegram.messages[-1] != (group_chat, erase_notice):
+        raise ConformanceError("Telegram did not replay the same erasure receipt after reopening")
+    remaining = loads(driver.engine.read_session(group_scope))["events"]
+    survivor = next(event for event in remaining if event["event_id"] == second["event_id"])
+    if first_text in dumps(remaining) or survivor.get("quoted_event_ids") != []:
+        raise ConformanceError("Telegram erasure kept the deleted text or a dangling typed quote")
+    if driver.gemini.calls != provider_calls:
+        raise ConformanceError("Telegram personal inspection or erasure called the model")
+    replacement_text = "My new note follows a deleted message."
+    driver.send_user_message(
+        replacement_text,
+        chat_id=group_chat,
+        sender_id=second_sender,
+        chat_type="group",
+        message_fields={
+            "reply_to_message": {
+                "message_id": original_message_id,
+                "chat": {"id": group_chat, "type": "group"},
+            },
+            "quote": {"text": untrusted_quote},
+        },
+    )
+    new_events = loads(driver.engine.read_session(group_scope))["events"]
+    replacement = next(event for event in new_events if event.get("memory_text") == replacement_text)
+    if replacement.get("quoted_event_ids") != [] or untrusted_quote in dumps(replacement):
+        raise ConformanceError("Telegram revived quote content through a stale host event reference")
 
 
 def run_telegram_distant_gate(keep_runtime: bool) -> DriverResult:
@@ -1859,6 +2225,7 @@ def main() -> int:
             "direct-vectors",
             "direct-forced-recall",
             "direct-multispeaker",
+            "direct-reflection",
             "telegram-local",
             "telegram-distant-gate",
             "godot-headless",
@@ -1882,6 +2249,8 @@ def main() -> int:
             result = run_direct_forced_recall(args.keep_runtime)
         elif args.host == "direct-multispeaker":
             result = run_direct_multispeaker(args.keep_runtime)
+        elif args.host == "direct-reflection":
+            result = run_direct_reflection(args.keep_runtime)
         elif args.host == "telegram-local":
             result = run_telegram_local(args.keep_runtime)
         elif args.host == "telegram-distant-gate":

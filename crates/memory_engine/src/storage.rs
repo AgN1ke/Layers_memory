@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use crate::archive::{ArchiveEntry, ArchiveFilters, MemoryUnit};
 use crate::core_store::{CandidateBelief, CoreStoreCategory};
-use crate::erasure::MemoryErasurePlan;
+use crate::erasure::{MemoryErasurePlan, SubjectErasurePlan};
 use crate::event::StoredEvent;
 use crate::hypothesis::{HypothesisEvidenceLink, HypothesisNode, HypothesisRelation};
 use crate::journal::JournalOperation;
@@ -11,8 +13,19 @@ use crate::session::{SessionMetadata, SessionRecord};
 use crate::tasks::PendingTask;
 use crate::vector::{VectorAppendRecord, VectorIndexData, VectorIndexManifest, VectorTombstone};
 use crate::Result;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) fn memory_unit_publication_key(archive_id: &str) -> String {
+    format!(
+        "memory_unit_publish_{:x}",
+        Sha256::digest(archive_id.as_bytes())
+    )
+}
+
+pub(crate) const MEMORY_UNIT_TASK_OUTCOME_SCHEMA: &str = "memory_unit_task_outcome.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StorageReadWarning {
     pub collection: String,
     pub path: String,
@@ -48,6 +61,24 @@ impl<T> StorageCollection<T> {
 }
 
 pub trait Storage {
+    fn apply_subject_erasure_plan(&self, _plan: &SubjectErasurePlan) -> Result<()> {
+        Err(crate::MemoryEngineError::Storage(
+            "subject erasure is unavailable on this storage".into(),
+        ))
+    }
+
+    fn read_subject_erasure_receipt(&self, _key: &str) -> Result<Option<Value>> {
+        Err(crate::MemoryEngineError::Storage(
+            "subject erasure is unavailable on this storage".into(),
+        ))
+    }
+
+    fn write_subject_erasure_receipt(&self, _key: &str, _receipt: &Value) -> Result<()> {
+        Err(crate::MemoryEngineError::Storage(
+            "subject erasure is unavailable on this storage".into(),
+        ))
+    }
+
     fn manifest_exists(&self) -> Result<bool>;
     fn read_manifest(&self) -> Result<Manifest>;
     fn write_manifest(&self, manifest: &Manifest) -> Result<()>;
@@ -68,13 +99,89 @@ pub trait Storage {
     fn update_archive_entry(&self, archive_id: &str, entry: &ArchiveEntry) -> Result<()>;
     fn read_archive_entry_by_id(&self, archive_id: &str) -> Result<ArchiveEntry>;
     fn read_archive(&self, filters: &ArchiveFilters) -> Result<StorageCollection<ArchiveEntry>>;
+    fn read_archive_scoped(
+        &self,
+        filters: &ArchiveFilters,
+        scope: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<StorageCollection<ArchiveEntry>> {
+        let mut collection = self.read_archive(filters)?;
+        if scope.is_some() || session_id.is_some() {
+            collection
+                .items
+                .retain(|entry| archive_in_scope(entry, scope, session_id));
+            collection.warnings.clear();
+        }
+        Ok(collection)
+    }
+    /// Return a scoped projection and its owned warnings if the parent Archive
+    /// can be attributed to the requested scope.
+    fn read_archive_detail_scoped(
+        &self,
+        scope_id: &str,
+        archive_id: &str,
+    ) -> Result<Option<StorageCollection<ArchiveEntry>>> {
+        let mut collection =
+            self.read_archive_scoped(&ArchiveFilters::default(), Some(scope_id), None)?;
+        collection
+            .items
+            .retain(|entry| entry.archive_id == archive_id);
+        collection.warnings.clear();
+        Ok((!collection.items.is_empty()).then_some(collection))
+    }
+    /// Internal publication view of the persisted Archive before unit hydration.
+    fn read_archive_entry_raw(&self, archive_id: &str) -> Result<ArchiveEntry> {
+        self.read_archive_entry_by_id(archive_id)
+    }
+    /// Physical Archive inventory for erasure, including unfinished publications.
+    fn read_archive_inventory(&self) -> Result<StorageCollection<ArchiveEntry>> {
+        self.read_archive(&ArchiveFilters::default())
+    }
+    /// Read the persisted Archive entries needed to recover Sleep for a session.
+    /// Coverage and publication status do not require hydrating memory units.
+    fn read_sleep_archives(&self, session_id: &str) -> Result<Vec<ArchiveEntry>> {
+        Ok(self
+            .read_archive(&ArchiveFilters::default())?
+            .into_items()
+            .into_iter()
+            .filter(|entry| entry.source_session_id == session_id)
+            .collect())
+    }
     fn write_memory_unit(&self, unit: &MemoryUnit) -> Result<()>;
     fn read_memory_unit_by_id(&self, memory_unit_id: &str) -> Result<MemoryUnit>;
+    fn read_memory_units_by_id(&self, ids: &[&str]) -> Result<HashMap<String, MemoryUnit>> {
+        Ok(ids
+            .iter()
+            .filter_map(|id| self.read_memory_unit_by_id(id).ok())
+            .map(|unit| (unit.memory_unit_id.clone(), unit))
+            .collect())
+    }
     fn read_memory_units(&self) -> Result<StorageCollection<MemoryUnit>>;
     fn read_memory_units_for_archive(
         &self,
         archive_id: &str,
     ) -> Result<StorageCollection<MemoryUnit>>;
+    /// Physical canonical-unit inventory for erasure.
+    fn read_memory_unit_inventory(&self) -> Result<StorageCollection<MemoryUnit>> {
+        self.read_memory_units()
+    }
+    /// Internal publication view, including legacy partial units.
+    fn read_memory_units_for_archive_raw(
+        &self,
+        archive_id: &str,
+    ) -> Result<StorageCollection<MemoryUnit>> {
+        self.read_memory_units_for_archive(archive_id)
+    }
+    fn read_memory_unit_publication_receipt(&self, _archive_id: &str) -> Result<Option<Value>> {
+        Ok(None)
+    }
+    fn write_memory_unit_publication_receipt(
+        &self,
+        _archive_id: &str,
+        _receipt: &Value,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn read_core_store_category(&self, category: &str) -> Result<CoreStoreCategory>;
     fn read_core_store_categories(&self) -> Result<StorageCollection<CoreStoreCategory>>;
@@ -136,8 +243,45 @@ pub trait Storage {
     fn load_journaled_operations(&self) -> Result<StorageCollection<JournalOperation>>;
     fn delete_journaled_operation(&self, op_id: &str) -> Result<()>;
 
+    fn recover_journaled_ingest(&self, _operation: &JournalOperation) -> Result<()> {
+        Err(crate::MemoryEngineError::Storage(
+            "storage does not support journaled ingest recovery".to_string(),
+        ))
+    }
+
+    fn discard_journaled_ingest(&self, operation_id: &str, _session_id: &str) -> Result<()> {
+        self.delete_journaled_operation(operation_id)
+    }
+
+    fn has_erasure_intent(&self, key: &str) -> Result<bool> {
+        Ok(self.load_journaled_operation(key)?.is_some())
+    }
+
+    fn read_erasure_generation(&self, _key: &str) -> Result<u64> {
+        Ok(0)
+    }
+
+    fn write_erasure_generation(&self, _key: &str, _generation: u64) -> Result<()> {
+        Ok(())
+    }
+
+    fn was_erased_task(&self, _task_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Apply an engine-prepared deletion plan idempotently. The plan is
     /// journaled before this method is called and may be replayed after a
     /// process crash.
     fn apply_memory_erasure_plan(&self, plan: &MemoryErasurePlan) -> Result<()>;
+}
+
+pub(crate) fn archive_in_scope(
+    entry: &ArchiveEntry,
+    scope: Option<&str>,
+    session_id: Option<&str>,
+) -> bool {
+    match scope {
+        Some(scope) => entry.effective_personality_scope_id() == scope,
+        None => session_id.is_none_or(|id| entry.source_session_id == id),
+    }
 }

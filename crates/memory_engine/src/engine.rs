@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use crate::archive::render_compact_memory_from_units;
 use crate::archive::{
     archive_has_prompt_eligible_memory, memory_unit_is_prompt_eligible, ArchiveEntry,
     ArchiveFilters, ArchiveStatus, FidelityReview, FidelityStatus, ForgetDecision,
@@ -66,7 +67,9 @@ use crate::sleep::{
     render_sleep_prompt_context, resolve_attributed_subject, AttributionEvent,
     MemoryUnitPassResult, SleepCompressionResult, SleepInputEvent, SleepInputReference,
 };
-use crate::storage::{Storage, StorageCollection, StorageReadWarning};
+use crate::storage::{
+    Storage, StorageCollection, StorageReadWarning, MEMORY_UNIT_TASK_OUTCOME_SCHEMA,
+};
 use crate::tasks::{AttemptStatus, PendingTask, TaskAttempt, TaskState, TaskType};
 use crate::types::{
     ImportanceHint, Link, ModelRole, Quote, RecallStage, Speaker, TimeRange, WeightedFact,
@@ -102,19 +105,30 @@ use crate::vector::{
 use crate::{MemoryEngineError, Result};
 
 mod context_budget;
+mod context_quotes;
+mod core_attribution;
 mod core_context;
 mod core_policy;
 mod erasure_flow;
 mod fidelity_flow;
 mod forgetting_flow;
+mod generation;
 mod hypothesis_flow;
+mod idempotent_ingest;
+mod memory_unit_publication;
 mod options;
 mod recall_api;
 mod recall_stage1;
 mod reflection_flow;
+mod retention;
+mod scope_inspection;
+mod scope_operations;
 mod session_ops;
 mod sleep_driver;
 mod sleep_flow;
+mod subject_erasure;
+mod subject_erasure_plan;
+mod subject_inspection;
 mod transactional_core;
 mod transactional_ingest;
 mod transactional_recall;
@@ -124,6 +138,7 @@ mod validation;
 mod vector_flow;
 
 use context_budget::*;
+pub use idempotent_ingest::IdempotentIngestResult;
 use options::ForgetApplyAction;
 pub use options::{
     ContextPackageConfig, EngineOptions, EventScoringConfig, FidelityConfig, ForgetConfig,
@@ -132,6 +147,7 @@ pub use options::{
 };
 use recall_api::*;
 use recall_stage1::*;
+pub use retention::MemoryOperationPruneReport;
 use sleep_driver::*;
 use sleep_flow::session_is_multi_speaker;
 pub use transactional_core::{
@@ -148,6 +164,7 @@ pub use transactional_sleep::{
     MAX_SLEEP_MEMORY_UNITS_PER_RUN, MAX_SLEEP_SUBMIT_RESPONSE_BYTES,
     MAX_SLEEP_WORKFLOW_INPUT_BYTES,
 };
+pub(crate) use transactional_support::serializable_digest as storage_digest;
 use validation::*;
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SLEEP_RUN_SCHEMA_VERSION: &str = "sleep_run.v1";

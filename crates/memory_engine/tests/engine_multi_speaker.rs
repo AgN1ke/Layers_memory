@@ -307,6 +307,7 @@ fn ingest_speaker_text(
                 id: id.to_string(),
                 name: name.to_string(),
             }),
+            quoted_event_ids: None,
             links: vec![],
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),

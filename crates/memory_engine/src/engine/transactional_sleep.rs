@@ -1207,12 +1207,15 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                     &attribution_events,
                 );
                 apply_compression_to_archive(&mut archive, compression, &sleep_task, &finalized_at);
+                let accepted = accepted_memory_unit_result(&run)?;
+                let extraction_published = accepted.is_some();
                 let units = build_transactional_memory_units(
                     context,
-                    &run,
+                    &run.sleep_task_id,
                     &archive,
                     &input,
                     &finalized_at,
+                    accepted.unwrap_or_else(|| empty_memory_unit_result(&run.archive_id)),
                 )?;
                 archive.memory_units = units.clone();
                 archive.compact_memory = render_compact_memory_from_units(&units);
@@ -1239,11 +1242,9 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
                 memory_task.state = TaskState::Completed;
                 memory_task.updated_at = finalized_at.clone();
                 memory_task.last_error = None;
-                memory_task.outcome = Some(json!({
-                    "schema_version": "memory_unit_task_outcome.v1",
-                    "archive_id": archive.archive_id,
-                    "memory_unit_ids": units.iter().map(|unit| unit.memory_unit_id.clone()).collect::<Vec<_>>(),
-                }));
+                memory_task.outcome = extraction_published.then(|| {
+                    serde_json::to_value(MemoryUnitTaskOutcome::published(&archive.archive_id, &units))
+                }).transpose().map_err(MemoryEngineError::from)?;
                 merge_unique(&mut session.archived_to, [archive.archive_id.clone()]);
                 merge_unique(
                     &mut session.archived_event_ids,
@@ -2266,17 +2267,12 @@ fn apply_compression_to_archive(
 
 fn build_transactional_memory_units(
     context: &VaultContext,
-    run: &SleepRun,
+    sleep_task_id: &str,
     archive: &ArchiveEntry,
     input: &SleepWorkflowInput,
     now: &str,
+    result: MemoryUnitPassResult,
 ) -> Result<Vec<MemoryUnit>> {
-    let result = run
-        .memory_unit_result
-        .clone()
-        .map(serde_json::from_value::<MemoryUnitPassResult>)
-        .transpose()?
-        .unwrap_or_else(|| empty_memory_unit_result(&run.archive_id));
     if result.schema_version != MEMORY_UNITS_RESULT_SCHEMA_VERSION {
         return Err(MemoryEngineError::IncompatibleSchema {
             expected: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
@@ -2310,40 +2306,14 @@ fn build_transactional_memory_units(
         .into_iter()
         .enumerate()
         .map(|(index, draft)| {
-            let thesis = normalize_whitespace(&draft.thesis);
-            let subject = resolve_attributed_subject(
-                &draft.source_event_ids,
-                draft.subject_hint,
-                draft.speaker_id.as_deref(),
-                &attribution_events,
-            );
-            let label = format!("memory_unit:{index}:{thesis}");
-            Ok(MemoryUnit {
-                schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
-                memory_unit_id: deterministic_workflow_id(
+            materialize_memory_unit(archive, draft, &attribution_events, now, |thesis| {
+                let label = format!("memory_unit:{index}:{thesis}");
+                Ok(deterministic_workflow_id(
                     context,
-                    &run.sleep_task_id,
+                    sleep_task_id,
                     &label,
                     "mu",
-                ),
-                archive_id: archive.archive_id.clone(),
-                personality_scope_id: archive.personality_scope_id.clone(),
-                source_session_id: archive.source_session_id.clone(),
-                created_at: now.to_string(),
-                updated_at: now.to_string(),
-                thesis,
-                subject,
-                source_event_ids: draft.source_event_ids,
-                evidence: normalize_optional_string(draft.evidence.as_deref()),
-                tags: draft.tags,
-                weight: draft.weight,
-                status: MemoryUnitStatus::ActiveArchive,
-                fidelity_status: FidelityStatus::Unchecked,
-                fidelity_review: None,
-                forget_review: None,
-                reflection_count: 0,
-                last_reflected_at: None,
-                last_reflection_operation_id: None,
+                ))
             })
         })
         .collect()

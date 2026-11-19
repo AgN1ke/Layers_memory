@@ -492,6 +492,7 @@ fn ingest_event_at(
             theme: Some("integration".to_string()),
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: Vec::new(),
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),

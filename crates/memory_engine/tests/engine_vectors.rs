@@ -316,6 +316,44 @@ fn deep_recall_enforces_scope_isolation_threshold_and_model_dim() {
 }
 
 #[test]
+fn recall_ignores_vectors_for_an_outdated_thesis() {
+    let root = unique_temp_dir("vectors_outdated_thesis");
+    let engine = MemoryEngine::new(FileStorage::new(&root));
+    let scope = "vector_scope";
+    let ids = create_archive_with_units(&engine, scope, vec![("User studies astronomy.", 0.8)]);
+    let id = &ids[0];
+    engine.set_vector_scope(scope, true, false).unwrap();
+    let requests = engine.pending_embedding_backfill(scope).unwrap();
+    submit_embedding(&engine, &requests[0], 0);
+
+    let vector = unit_vector(DEFAULT_VECTOR_DIM, 0);
+    let stage2_query = recall_query(scope, Some(vector.clone()), 1, true);
+    let deep_query = deep_query(scope, vector, 1, 0.75);
+    let stage2 = engine.recall(stage2_query.clone()).unwrap();
+    assert_eq!(stage2.items[0].matched_memory_unit_id.as_ref(), Some(id));
+    assert!(engine.recall_deep(deep_query.clone()).unwrap().found);
+
+    let mut unit = engine.storage().read_memory_unit_by_id(id).unwrap();
+    unit.thesis = "User studies paleontology.".to_string();
+    engine.storage().write_memory_unit(&unit).unwrap();
+
+    let stage2 = engine.recall(stage2_query.clone()).unwrap();
+    assert_eq!(stage2.items[0].matched_memory_unit_id, None);
+    assert_eq!(stage2.items[0].gist, unit.thesis);
+    assert!(!engine.recall_deep(deep_query.clone()).unwrap().found);
+
+    let requests = engine.pending_embedding_backfill(scope).unwrap();
+    submit_embedding(&engine, &requests[0], 0);
+    let stage2 = engine.recall(stage2_query).unwrap();
+    assert_eq!(stage2.items[0].matched_memory_unit_id.as_ref(), Some(id));
+    assert_eq!(
+        engine.recall_deep(deep_query).unwrap().hits[0].thesis,
+        unit.thesis
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn deep_recall_score_uses_recency_weight_and_top_k() {
     let root = unique_temp_dir("vectors_deep_ranking");
     let storage = FileStorage::with_host_id(&root, "vector_test");
@@ -573,16 +611,16 @@ fn stage2_uses_personality_scope_across_interaction_sessions() {
         .storage()
         .read_archive_entry_by_id("archive_old_planet")
         .unwrap();
-    archive.personality_scope_id = Some(owner_scope.to_string());
-    engine
-        .storage()
-        .update_archive_entry(&archive.archive_id, &archive)
-        .unwrap();
     let mut unit = engine
         .storage()
         .read_memory_unit_by_id(&unit_ids[0])
         .unwrap();
+    archive.personality_scope_id = Some(owner_scope.to_string());
     unit.personality_scope_id = Some(owner_scope.to_string());
+    engine
+        .storage()
+        .update_archive_entry(&archive.archive_id, &archive)
+        .unwrap();
     engine.storage().write_memory_unit(&unit).unwrap();
 
     engine
@@ -1075,6 +1113,7 @@ fn ingest_user_event(
             theme: None,
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: Vec::new(),
             importance_hint: Default::default(),
             processing_mode: Default::default(),
@@ -1107,6 +1146,7 @@ fn ingest_user_event_with_speaker(
                 id: speaker_id.to_string(),
                 name: speaker_name.to_string(),
             }),
+            quoted_event_ids: None,
             links: Vec::new(),
             importance_hint: Default::default(),
             processing_mode: Default::default(),

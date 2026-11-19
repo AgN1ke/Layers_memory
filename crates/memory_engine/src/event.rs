@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -33,6 +34,10 @@ pub struct IngestEvent {
     pub emotional_tone: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<Speaker>,
+    /// Canonical source events for quoted material. An omitted list preserves
+    /// legacy unknown provenance. An explicit empty list attests no quotes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted_event_ids: Option<Vec<Id>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
     #[serde(default)]
@@ -88,7 +93,7 @@ impl IngestEvent {
                 "event memory_text must not be empty when provided".to_string(),
             ));
         }
-        Ok(())
+        validate_quote_ids(self.quoted_event_ids.as_deref())
     }
 }
 
@@ -119,6 +124,8 @@ pub struct StoredEvent {
     pub emotional_tone: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<Speaker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted_event_ids: Option<Vec<Id>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
     #[serde(default)]
@@ -176,7 +183,7 @@ impl StoredEvent {
                 "stored event admission_sequence must be at least 1".to_string(),
             ));
         }
-        Ok(())
+        validate_quote_ids(self.quoted_event_ids.as_deref())
     }
 
     pub fn from_ingest(
@@ -202,6 +209,7 @@ impl StoredEvent {
             theme: event.theme,
             emotional_tone: event.emotional_tone,
             speaker: event.speaker,
+            quoted_event_ids: event.quoted_event_ids,
             links: event.links,
             importance_hint: event.importance_hint,
             processing_mode: event.processing_mode,
@@ -215,4 +223,19 @@ impl StoredEvent {
             .as_deref()
             .unwrap_or(&self.session_id)
     }
+}
+
+fn validate_quote_ids(ids: Option<&[Id]>) -> Result<()> {
+    let mut distinct = HashSet::new();
+    if ids.into_iter().flatten().any(|id| {
+        id.trim().is_empty()
+            || id.trim() != id
+            || id.chars().any(char::is_control)
+            || !distinct.insert(id)
+    }) {
+        return Err(MemoryEngineError::Validation(
+            "quoted_event_ids must contain distinct event IDs".into(),
+        ));
+    }
+    Ok(())
 }

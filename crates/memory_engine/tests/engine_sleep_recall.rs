@@ -1,13 +1,13 @@
 use memory_engine::archive::{
-    ArchiveStatus, EmotionalMarker, FidelityReview, FidelityStatus, MemoryUnitStatus,
-    PersonalSignal, RelationalTone, TopicThreadItem,
+    ArchiveFilters, ArchiveStatus, EmotionalMarker, FidelityReview, FidelityStatus,
+    MemoryUnitStatus, PersonalSignal, RelationalTone, TopicThreadItem,
 };
 use memory_engine::core_store::{
     CoreContextRequest, CoreContextTokenBudget, CoreFactInput, CoreFactPatchInput, CoreFactStatus,
 };
 use memory_engine::event::IngestEvent;
 use memory_engine::fidelity::EvidenceEventRole;
-use memory_engine::llm::{LlmErrorKind, LlmResponse, SleepRunStage, SleepTrack};
+use memory_engine::llm::{LlmErrorKind, LlmResponse, SleepRunOptions, SleepRunStage, SleepTrack};
 use memory_engine::recall::{RecallFilters, RecallQuery};
 use memory_engine::sleep::{MemoryUnitDraft, MemoryUnitPassResult, SleepCompressionResult};
 use memory_engine::storage::Storage;
@@ -18,10 +18,13 @@ use memory_engine::types::{
     MEMORY_UNITS_RESULT_SCHEMA_VERSION, RECALL_QUERY_SCHEMA_VERSION,
     SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION,
 };
-use memory_engine::{EngineOptions, FileStorage, MemoryEngine, SleepStage1Result};
+use memory_engine::{
+    EngineOptions, FileStorage, MemoryEngine, MemoryEngineError, SleepStage1Result,
+};
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 
 #[test]
 fn engine_sleep_creates_preliminary_archive_and_pending_task() {
@@ -126,6 +129,227 @@ fn memory_unit_pass_rejects_event_outside_frozen_sleep_input() {
         .expect_err("invented provenance must fail closed");
     assert!(error.to_string().contains("outside frozen sleep input"));
 
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn completed_extraction_replay_returns_same_units_and_rejects_changed_result() {
+    let root = unique_temp_dir("completed_extraction_replay");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "The user said their cat is named Irzha.",
+        vec!["pet"],
+    );
+    let sleep = engine.sleep("live_session").expect("sleep stage1");
+    let task_id = sleep.memory_unit_task.expect("memory unit task").task_id;
+    let archive_id = sleep.archive_entry.archive_id;
+    let result = MemoryUnitPassResult {
+        schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+        archive_id: archive_id.clone(),
+        memory_units: vec![MemoryUnitDraft {
+            thesis: "The user has a cat named Irzha.".to_string(),
+            subject_hint: None,
+            speaker_id: None,
+            source_event_ids: sleep.archive_entry.source_event_ids,
+            evidence: None,
+            tags: vec!["pet".to_string()],
+            weight: 0.8,
+        }],
+    };
+    let published = engine
+        .resume_memory_unit_pass(&task_id, result.clone())
+        .expect("publish accepted result");
+    assert_eq!(published.memory_units.len(), 1);
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage);
+    let replayed = reopened
+        .resume_memory_unit_pass(&task_id, result.clone())
+        .expect("replay accepted result after restart");
+    assert_eq!(replayed.memory_units, published.memory_units);
+
+    let mut changed = result;
+    changed.memory_units[0].thesis = "The user has a cat named Lada.".to_string();
+    let error = reopened
+        .resume_memory_unit_pass(&task_id, changed)
+        .expect_err("completed extraction cannot accept different content");
+    assert!(matches!(error, MemoryEngineError::OperationConflict));
+    let archive = reopened
+        .storage()
+        .read_archive_entry_by_id(&archive_id)
+        .unwrap();
+    assert_eq!(archive.memory_units, published.memory_units);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn legacy_extraction_without_receipt_stays_unknown_and_does_not_queue_repair() {
+    let root = unique_temp_dir("legacy_extraction_unknown");
+    let storage = FileStorage::new(&root);
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00Z",
+        "A short conversation.",
+        vec![],
+    );
+    let sleep = engine.sleep("live_session").unwrap();
+    let mut archive = sleep.archive_entry;
+    archive.status = ArchiveStatus::Complete;
+    storage
+        .update_archive_entry(&archive.archive_id, &archive)
+        .unwrap();
+    let mut task = sleep.memory_unit_task.unwrap();
+    task.state = TaskState::Completed;
+    task.schema_version.clear();
+    let path = root
+        .join("tasks")
+        .join("completed")
+        .join(format!("{}.json", task.task_id));
+    storage.save_task(&task).unwrap();
+    let mut bytes = serde_json::to_value(&task).unwrap();
+    bytes.as_object_mut().unwrap().remove("schema_version");
+    fs::write(path, serde_json::to_vec(&bytes).unwrap()).unwrap();
+
+    let restarted = MemoryEngine::new(storage.clone());
+    let empty = MemoryUnitPassResult {
+        schema_version: MEMORY_UNITS_RESULT_SCHEMA_VERSION.to_string(),
+        archive_id: archive.archive_id.clone(),
+        memory_units: vec![],
+    };
+    assert!(matches!(
+        restarted.resume_memory_unit_pass(&task.task_id, empty),
+        Err(MemoryEngineError::OperationResultUnavailable)
+    ));
+    assert!(restarted
+        .pending_memory_unit_repairs("live_session")
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        storage
+            .read_archive_entry_by_id(&archive.archive_id)
+            .unwrap(),
+        archive
+    );
+    assert!(storage
+        .read_memory_unit_publication_receipt(&archive.archive_id)
+        .unwrap()
+        .is_none());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn legacy_sleep_recovers_only_from_frozen_inputs() {
+    let root = unique_temp_dir("legacy_sleep_frozen_input");
+    let storage = FileStorage::new(&root);
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00Z",
+        "The original Sleep evidence.",
+        vec![],
+    );
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:01:00Z",
+        "A second source event.",
+        vec![],
+    );
+    let mut run = engine.begin_sleep_run("live_session").unwrap();
+    let expected = run.shared_prompt_context.take().unwrap();
+    storage.save_sleep_run(&run).unwrap();
+    let original_task = storage.load_task(&run.sleep_task_id).unwrap();
+    let mut incomplete_task = original_task.clone();
+    incomplete_task.inputs["events"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    storage.save_task(&incomplete_task).unwrap();
+    drop(engine);
+
+    let restarted = MemoryEngine::new(storage.clone());
+    let pending = restarted.pending_sleep_runs().unwrap();
+    assert_eq!(pending[0].sleep_task_id, run.sleep_task_id);
+    assert!(pending[0].shared_prompt_context.is_none());
+    assert!(matches!(
+        restarted.begin_sleep_run("live_session"),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert!(matches!(
+        restarted.next_sleep_batch(run.clone()),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert!(matches!(
+        restarted.finish_sleep_run_with_available(run.clone()),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    let summary = SleepCompressionResult {
+        schema_version: SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION.to_string(),
+        archive_id: run.archive_id.clone(),
+        gist: "Unverified summary.".to_string(),
+        narrative: "A delayed response arrived.".to_string(),
+        compact_memory: None,
+        facts: vec![],
+        quotes: vec![],
+        tags: vec![],
+        theme: None,
+        weight: 0.5,
+        links: vec![],
+        emotional_markers: vec![],
+        topic_thread: vec![],
+        personal_signals: vec![],
+        relational_tone: None,
+    };
+    assert!(matches!(
+        restarted.resume_sleep_compression(&run.sleep_task_id, summary),
+        Err(MemoryEngineError::NeedsNewReview)
+    ));
+    assert_eq!(
+        storage
+            .load_sleep_run(&run.sleep_task_id)
+            .unwrap()
+            .provider_calls_issued,
+        0
+    );
+
+    storage.save_task(&original_task).unwrap();
+    assert_eq!(
+        restarted.pending_sleep_runs().unwrap()[0]
+            .shared_prompt_context
+            .as_ref(),
+        Some(&expected)
+    );
+    storage.save_task(&incomplete_task).unwrap();
+
+    run.requests[0].request.prompt_inputs["sleep_task"] = original_task.inputs;
+    storage.save_sleep_run(&run).unwrap();
+    let step = restarted.next_sleep_batch(run).unwrap();
+    let batch = step.batch.unwrap();
+    assert_eq!(batch.shared_context.unwrap(), expected);
+    assert!(batch
+        .requests
+        .iter()
+        .all(|request| request.prompt_inputs.get("sleep_task").is_none()));
+
+    let mut legacy = step.run;
+    legacy.shared_prompt_context = None;
+    storage.save_sleep_run(&legacy).unwrap();
+    let task_path = root
+        .join("tasks")
+        .join(format!("{}.json", legacy.sleep_task_id));
+    fs::remove_file(task_path).unwrap();
+    let cancelled = restarted.cancel_sleep_run(&legacy.sleep_task_id).unwrap();
+    assert_eq!(cancelled.completion_mode.as_deref(), Some("cancelled"));
+    let fresh = restarted.begin_sleep_run("live_session").unwrap();
+    assert_ne!(fresh.sleep_task_id, legacy.sleep_task_id);
+    assert_eq!(
+        fresh.shared_prompt_context.unwrap().source_event_ids,
+        expected.source_event_ids
+    );
     fs::remove_dir_all(root).ok();
 }
 
@@ -757,7 +981,7 @@ fn engine_recall_buffers_stats_until_flush_and_scores_with_pending_counts() {
 }
 
 #[test]
-fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
+fn scoped_recall_and_context_skip_unreadable_archives_with_unknown_owner() {
     let root = unique_temp_dir("engine_recall_skips_unreadable_archive_files");
     let storage = FileStorage::with_host_id(&root, "terminal");
     let mut engine = MemoryEngine::new(storage);
@@ -779,6 +1003,13 @@ fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
     let broken_dir = root.join("archive").join("2026").join("05");
     fs::create_dir_all(&broken_dir).expect("create archive dir");
     fs::write(broken_dir.join("broken.json"), "{ not valid json").expect("write broken archive");
+    assert!(engine
+        .storage()
+        .read_archive_inventory()
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|warning| warning.path.ends_with("broken.json")));
 
     let recall = engine
         .recall(make_recall_query(
@@ -788,17 +1019,8 @@ fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
         ))
         .expect("recall with broken archive");
     assert_eq!(recall.items.len(), 1);
-    assert!(recall
-        .notes
-        .iter()
-        .any(|note| note.contains("archive") && note.contains("broken.json")));
-    assert!(recall
-        .debug
-        .as_ref()
-        .expect("debug")
-        .notes
-        .iter()
-        .any(|note| note.contains("broken.json")));
+    assert!(recall.notes.is_empty());
+    assert!(recall.debug.as_ref().expect("debug").notes.is_empty());
 
     let package = engine
         .core_context_package(CoreContextRequest {
@@ -819,10 +1041,7 @@ fn engine_recall_and_context_skip_unreadable_archive_files_with_notes() {
         })
         .expect("context with broken archive");
     assert_eq!(package.archive_relevant.len(), 1);
-    assert!(package
-        .notes
-        .iter()
-        .any(|note| note.contains("broken.json")));
+    assert!(package.notes.is_empty());
 
     fs::remove_dir_all(root).ok();
 }
@@ -1765,6 +1984,151 @@ fn context_feedback_counts_only_memory_that_survives_the_final_budget() {
 }
 
 #[test]
+fn archive_recall_after_ten_passive_context_packages() {
+    const SCOPE: &str = "exposure_fixture";
+    const LIMIT: usize = 5;
+    const EXPOSURES: u64 = 10;
+    const MEMORIES: [&str; 8] = [
+        "My telescope is Orion.",
+        "My bakery is Brioche.",
+        "My bicycle is Comet.",
+        "My guitar is Maple.",
+        "My garden is Jasmine.",
+        "My sailing boat is Spray.",
+        "My painting is Sunrise.",
+        "My camera is Lumix.",
+    ];
+
+    let mut current = EngineOptions::default();
+    // Keep feedback active in scoring and local to each replay.
+    current.recall.stats_flush_interval = 0;
+    let mut without_bonus = current.clone();
+    without_bonus.recall.max_recall_boost_factor = 1.0;
+    let mut decaying = current.clone();
+    decaying.recall.recall_count_log_bonus = 0.0;
+    decaying.recall.recent_recall_bonus = 0.06;
+    decaying.recall.recent_recall_half_life_days = 7.0;
+    decaying.recall.max_recall_boost_factor = 1.06;
+    let mut stronger_query = current.clone();
+    stronger_query.recall.text_match_bonus = 2.0;
+    let policies = [
+        ("current", current.clone()),
+        ("no selection bonus", without_bonus),
+        ("bounded decay", decaying),
+        ("stronger text match", stronger_query),
+    ];
+
+    // Keep ages relative to the real context clock and scores below their ceiling.
+    let oldest = OffsetDateTime::now_utc() - Duration::days(250);
+    let histories = [
+        (None, "What is my telescope called?", [6, 1, 1, 1]),
+        (
+            Some("Please continue."),
+            "Do you happen to know what my telescope is called these days?",
+            [6, 1, 6, 6],
+        ),
+        (Some("Please continue."), "telescope", [1, 1, 1, 1]),
+    ];
+
+    for (neutral, question, expected_ranks) in histories {
+        let root = unique_temp_dir("archive_recall_passive_exposure");
+        let storage = FileStorage::with_host_id(&root, "terminal");
+        let mut seed = MemoryEngine::with_options(storage.clone(), current.clone());
+        let mut archive_ids = Vec::new();
+        for (index, text) in MEMORIES.into_iter().enumerate() {
+            let session = format!("past_session_{index}");
+            let timestamp = (oldest + Duration::minutes(index as i64))
+                .format(&Rfc3339)
+                .unwrap();
+            ingest_text_with_scope(&mut seed, &session, SCOPE, &timestamp, text, vec![]);
+            let sleep = seed.sleep(&session).unwrap();
+            resume_test_sleep(&mut seed, &sleep, text, text);
+            archive_ids.push(sleep.archive_entry.archive_id);
+        }
+        let target = &archive_ids[0];
+        let request = |query_text: Option<&str>| CoreContextRequest {
+            schema_version: CORE_CONTEXT_REQUEST_SCHEMA_VERSION.into(),
+            session_id: "current_session".into(),
+            domain_state: json!({}),
+            core_scope: Some(SCOPE.into()),
+            query_text: query_text.map(str::to_owned),
+            query_embedding: None,
+            explain_recall: true,
+            recall_limit: LIMIT,
+            session_recent_limit: 0,
+            session_trace_event_limit: 0,
+            include_core: false,
+            utc_offset_minutes: 0,
+            clock_untrusted: false,
+            token_budget: None,
+        };
+        let clean = seed.core_context_package(request(Some(question))).unwrap();
+        assert_eq!(&clean.archive_relevant[0].id, target);
+        drop(seed);
+
+        for ((policy, options), expected_rank) in policies.iter().zip(expected_ranks) {
+            // Each engine sees the same persisted archives and starts with an empty feedback buffer.
+            let engine = MemoryEngine::with_options(storage.clone(), options.clone());
+            let first = engine.core_context_package(request(neutral)).unwrap();
+            let exposed = first
+                .archive_relevant
+                .iter()
+                .map(|item| &item.id)
+                .collect::<Vec<_>>();
+            assert_eq!(exposed.len(), LIMIT);
+            assert!(!exposed.contains(&target));
+            for _ in 1..EXPOSURES {
+                let package = engine.core_context_package(request(neutral)).unwrap();
+                assert!(package
+                    .archive_relevant
+                    .iter()
+                    .map(|item| &item.id)
+                    .eq(exposed.iter().copied()));
+            }
+            let directed = engine
+                .core_context_package(request(Some(question)))
+                .unwrap();
+            let ranking = &directed.recall_debug.as_ref().unwrap().candidates;
+            let candidate = ranking
+                .iter()
+                .find(|item| &item.archive_id == target)
+                .unwrap();
+            let shown = directed
+                .archive_relevant
+                .iter()
+                .any(|item| &item.id == target);
+            let largest_boost = ranking
+                .iter()
+                .map(|item| item.components.recall_boost)
+                .fold(1.0_f64, f64::max);
+            eprintln!("{policy} | {question} | rank {} | shown {shown} | largest bonus ×{largest_boost:.3}", candidate.final_rank);
+            assert_eq!(candidate.final_rank, expected_rank, "{policy}: {question}");
+            assert_eq!(shown, expected_rank <= LIMIT, "{policy}: {question}");
+            assert!((candidate.components.recall_boost - 1.0).abs() < f64::EPSILON);
+
+            if *policy == "bounded decay" {
+                assert!((largest_boost - 1.06).abs() < 0.0001);
+                let later = (OffsetDateTime::parse(&directed.created_at, &Rfc3339).unwrap()
+                    + Duration::days(21))
+                .format(&Rfc3339)
+                .unwrap();
+                let mut query = make_recall_query(question, &later, "decay_check");
+                query.session_id = None;
+                query.personality_scope_id = Some(SCOPE.into());
+                let later = engine.recall(query).unwrap().debug.unwrap();
+                let largest_boost = later
+                    .candidates
+                    .iter()
+                    .map(|item| item.components.recall_boost)
+                    .fold(1.0_f64, f64::max);
+                assert!((largest_boost - 1.0075).abs() < 0.0001);
+            }
+        }
+        fs::remove_dir_all(root).ok();
+    }
+}
+
+#[test]
 fn engine_core_context_package_keeps_query_relevant_core_fact_under_budget() {
     let root =
         unique_temp_dir("engine_core_context_package_keeps_query_relevant_core_fact_under_budget");
@@ -2647,10 +3011,144 @@ fn engine_memory_unit_retry_escalates_final_attempt_to_reasoning() {
 }
 
 #[test]
+fn successful_empty_extraction_stays_complete_without_repair_after_restart() {
+    let root = unique_temp_dir("successful_empty_extraction");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Please pass the salt.",
+        vec!["conversation"],
+    );
+
+    let run = engine
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![SleepTrack::MemoryUnit],
+                ..SleepRunOptions::default()
+            },
+        )
+        .expect("begin extraction-only Sleep run");
+    let task_id = run.memory_unit_task_id.clone().expect("memory unit task");
+    let archive_id = run.archive_id.clone();
+    let step = engine.next_sleep_batch(run).expect("extraction batch");
+    let requests = step.batch.expect("one extraction request").requests;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].prompt_id, "memory_unit_pass");
+    let step = engine
+        .submit_sleep_batch(
+            step.run,
+            vec![LlmResponse::Ok {
+                request_id: requests[0].request_id.clone(),
+                text: json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": archive_id,
+                    "memory_units": []
+                })
+                .to_string(),
+            }],
+        )
+        .expect("submit an explicit empty result");
+    assert_eq!(step.run.stage, SleepRunStage::ReadyToFinish);
+    let outcome = engine.finish_sleep_run(step.run).expect("finish Sleep");
+    assert_eq!(outcome.archive_entry.status, ArchiveStatus::Complete);
+    assert!(outcome.archive_entry.memory_units.is_empty());
+    assert!(outcome.failed_passes.is_empty());
+    assert_eq!(
+        engine.storage().load_task(&task_id).unwrap().state,
+        TaskState::Completed
+    );
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage);
+    assert!(reopened
+        .pending_memory_unit_repairs("live_session")
+        .expect("inspect repair work after restart")
+        .is_empty());
+    let archive = reopened
+        .storage()
+        .read_archive_entry_by_id(&archive_id)
+        .unwrap();
+    assert!(archive.memory_units.is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn successful_empty_repair_stays_final_after_restart() {
+    let root = unique_temp_dir("successful_empty_repair");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "Please pass the salt.",
+        vec!["conversation"],
+    );
+    let run = engine
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![SleepTrack::MemoryUnit],
+                max_pass_attempts: Some(1),
+                ..SleepRunOptions::default()
+            },
+        )
+        .expect("begin extraction-only Sleep run");
+    let step = engine.next_sleep_batch(run).expect("extraction batch");
+    let request_id = step.batch.unwrap().requests[0].request_id.clone();
+    let step = engine
+        .submit_sleep_batch(
+            step.run,
+            vec![LlmResponse::Err {
+                request_id,
+                kind: LlmErrorKind::Transport,
+                detail: "simulated provider outage".to_string(),
+            }],
+        )
+        .expect("finish failed extraction pass");
+    let outcome = engine.finish_sleep_run(step.run).expect("finish Sleep");
+    assert!(outcome
+        .failed_passes
+        .contains(&"memory_unit_pass".to_string()));
+    let repair = engine
+        .pending_memory_unit_repairs("live_session")
+        .expect("failed extraction remains repairable");
+    assert_eq!(repair.len(), 1);
+    let repaired = engine
+        .submit_memory_unit_repair_response(
+            &repair[0].task_id,
+            LlmResponse::Ok {
+                request_id: repair[0].request_id.clone(),
+                text: json!({
+                    "schema_version": MEMORY_UNITS_RESULT_SCHEMA_VERSION,
+                    "archive_id": outcome.archive_entry.archive_id,
+                    "memory_units": []
+                })
+                .to_string(),
+            },
+        )
+        .expect("submit an explicit empty repair")
+        .expect("repaired archive");
+    assert!(repaired.memory_units.is_empty());
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage);
+    assert!(reopened
+        .pending_memory_unit_repairs("live_session")
+        .expect("inspect repair work after restart")
+        .is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_repairs_complete_archive_without_memory_units() {
     let root = unique_temp_dir("repairs_complete_archive_without_memory_units");
     let storage = FileStorage::with_host_id(&root, "terminal");
-    let mut engine = MemoryEngine::new(storage);
+    let mut engine = MemoryEngine::new(storage.clone());
 
     ingest_text(
         &mut engine,
@@ -2739,6 +3237,8 @@ fn engine_repairs_complete_archive_without_memory_units() {
         .iter()
         .any(|event| event.event_id == event_id));
 
+    drop(engine);
+    let engine = MemoryEngine::new(storage);
     let repair_requests = engine
         .pending_memory_unit_repairs("live_session")
         .expect("repair requests");
@@ -2901,6 +3401,241 @@ fn engine_repair_falls_back_to_archive_tracks_when_provider_blocks() {
 }
 
 #[test]
+fn engine_repeated_sleep_start_returns_the_persisted_run() {
+    let root = unique_temp_dir("engine_repeated_sleep_start_returns_the_persisted_run");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "A memory to consolidate.",
+        vec![],
+    );
+
+    let first = std::thread::scope(|scope| {
+        let start = || engine.begin_sleep_run("live_session").expect("begin Sleep");
+        let left = scope.spawn(start);
+        let right = scope.spawn(start);
+        let first = left.join().unwrap();
+        assert_eq!(right.join().unwrap(), first);
+        first
+    });
+    let progressed = engine.next_sleep_batch(first).expect("next batch").run;
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    let resumed = reopened
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![],
+                max_provider_calls: Some(0),
+                ..Default::default()
+            },
+        )
+        .expect("resume existing Sleep after restart");
+    assert_eq!(resumed, progressed);
+    assert!(reopened.sleep("live_session").is_err());
+    assert_eq!(reopened.pending_sleep_runs().unwrap(), vec![progressed]);
+    assert_eq!(reopened.pending_tasks().unwrap().len(), 2);
+    assert_eq!(
+        storage
+            .read_archive(&ArchiveFilters::default())
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_recovers_best_checkpoint_from_preexisting_overlapping_runs() {
+    let root = unique_temp_dir("sleep_recovers_best_checkpoint");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00.000Z",
+        "A memory to consolidate.",
+        vec![],
+    );
+    let first = engine.begin_sleep_run("live_session").unwrap();
+    let mut hidden = first.clone();
+    hidden.stage = SleepRunStage::Finished;
+    storage.save_sleep_run(&hidden).unwrap();
+    let second = engine
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ready = engine.next_sleep_batch(second).unwrap().run;
+    storage.save_sleep_run(&first).unwrap();
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    assert_eq!(reopened.pending_sleep_runs().unwrap(), vec![ready.clone()]);
+    assert_eq!(reopened.begin_sleep_run("live_session").unwrap(), ready);
+    assert_eq!(storage.load_sleep_run(&first.sleep_task_id).unwrap(), first);
+    reopened.finish_sleep_run(ready).unwrap();
+    assert!(reopened.pending_sleep_runs().unwrap().is_empty());
+    assert_eq!(
+        storage.load_task(&first.sleep_task_id).unwrap().state,
+        TaskState::Cancelled
+    );
+    assert_eq!(
+        storage
+            .read_archive_entry_by_id(&first.archive_id)
+            .unwrap()
+            .status,
+        ArchiveStatus::Superseded
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_recovers_disjoint_checkpoints_from_same_session() {
+    let root = unique_temp_dir("sleep_recovers_disjoint_checkpoints");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut options = EngineOptions::default();
+    options.sleep.max_events = 1;
+    let mut engine = MemoryEngine::with_options(storage.clone(), options);
+    ingest_text(&mut engine, "2026-05-17T16:00:00Z", "First event", vec![]);
+    let first = engine.begin_sleep_run("live_session").unwrap();
+    let mut hidden = first.clone();
+    hidden.stage = SleepRunStage::Finished;
+    storage.save_sleep_run(&hidden).unwrap();
+    ingest_text(&mut engine, "2026-05-17T16:00:01Z", "Second event", vec![]);
+    let other = engine.begin_sleep_run("live_session").unwrap();
+    storage.save_sleep_run(&first).unwrap();
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    let recovered = reopened.pending_sleep_runs().unwrap();
+    assert_eq!(recovered.len(), 2);
+    assert!(recovered.contains(&first) && recovered.contains(&other));
+    let first_archive = reopened
+        .finish_sleep_run_with_available(first)
+        .unwrap()
+        .archive_entry;
+    let other_archive = reopened
+        .finish_sleep_run_with_available(other)
+        .unwrap()
+        .archive_entry;
+    assert_eq!(first_archive.source_event_ids.len(), 1);
+    assert_eq!(other_archive.source_event_ids.len(), 1);
+    assert_ne!(
+        first_archive.source_event_ids,
+        other_archive.source_event_ids
+    );
+    assert!(reopened.pending_sleep_runs().unwrap().is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_retires_partial_overlap_and_keeps_unarchived_events_after_restart() {
+    let root = unique_temp_dir("sleep_retires_partial_overlap");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00Z",
+        "Already archived.",
+        vec![],
+    );
+    let competing = engine.sleep("live_session").unwrap();
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:01Z",
+        "Still unarchived.",
+        vec![],
+    );
+    let stale = engine.begin_sleep_run("live_session").unwrap();
+    let stale_input = stale.shared_prompt_context.as_ref().unwrap();
+    assert_eq!(stale_input.source_event_ids.len(), 2);
+
+    let before_publication = storage.read_session_metadata("live_session").unwrap();
+    resume_test_sleep(
+        &mut engine,
+        &competing,
+        "Archive first event",
+        "Archive first event.",
+    );
+    // The earlier archive write survives an interruption before its index update.
+    storage.write_session_metadata(&before_publication).unwrap();
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    assert!(reopened.pending_sleep_runs().unwrap().is_empty());
+    let retired = storage.load_sleep_run(&stale.sleep_task_id).unwrap();
+    assert_eq!(retired.stage, SleepRunStage::Finished);
+    assert_eq!(retired.completion_mode.as_deref(), Some("superseded"));
+    assert!(reopened.finish_sleep_run_with_available(stale).is_err());
+    let next = reopened.begin_sleep_run("live_session").unwrap();
+    let outcome = reopened.finish_sleep_run_with_available(next).unwrap();
+    assert_eq!(outcome.archive_entry.source_event_ids.len(), 1);
+    assert!(competing
+        .archive_entry
+        .source_event_ids
+        .iter()
+        .all(|id| !outcome.archive_entry.source_event_ids.contains(id)));
+    assert_eq!(
+        storage
+            .read_archive_entry_by_id(&retired.archive_id)
+            .unwrap()
+            .status,
+        ArchiveStatus::Superseded
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn engine_sleep_recovers_its_own_partially_finalized_run_despite_unreadable_other_run() {
+    let root = unique_temp_dir("sleep_recovers_its_own_archive");
+    let storage = FileStorage::with_host_id(&root, "terminal");
+    let mut engine = MemoryEngine::new(storage.clone());
+    ingest_text(
+        &mut engine,
+        "2026-05-17T16:00:00Z",
+        "A memory to consolidate.",
+        vec![],
+    );
+    let run = engine
+        .begin_sleep_run_with_options(
+            "live_session",
+            SleepRunOptions {
+                enabled_tracks: vec![],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ready = engine.next_sleep_batch(run).unwrap().run;
+    let mut archive = storage.read_archive_entry_by_id(&ready.archive_id).unwrap();
+    archive.status = ArchiveStatus::Complete;
+    storage
+        .update_archive_entry(&archive.archive_id, &archive)
+        .unwrap();
+    let unreadable = root.join("runs/sleep/unreadable.json");
+    fs::write(&unreadable, b"{unfinished").unwrap();
+    drop(engine);
+
+    let reopened = MemoryEngine::new(storage.clone());
+    assert_eq!(reopened.pending_sleep_runs().unwrap(), vec![ready.clone()]);
+    assert_eq!(reopened.begin_sleep_run("live_session").unwrap(), ready);
+    let outcome = reopened.finish_sleep_run(ready).unwrap();
+    assert_eq!(outcome.archive_entry.archive_id, archive.archive_id);
+    assert_eq!(fs::read(&unreadable).unwrap(), b"{unfinished");
+    assert!(reopened.pending_sleep_runs().unwrap().is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn engine_cancel_sleep_run_unblocks_unarchived_events() {
     let root = unique_temp_dir("engine_cancel_sleep_run_unblocks_unarchived_events");
     let storage = FileStorage::with_host_id(&root, "terminal");
@@ -2931,6 +3666,10 @@ fn engine_cancel_sleep_run_unblocks_unarchived_events() {
         .begin_sleep_run("live_session")
         .expect("begin sleep run after cancel");
     assert_ne!(next_run.sleep_task_id, run.sleep_task_id);
+    assert!(engine.next_sleep_batch(run.clone()).is_err());
+    assert!(engine.submit_sleep_batch(run.clone(), vec![]).is_err());
+    assert!(engine.finish_sleep_run_with_available(run).is_err());
+    assert_eq!(engine.pending_sleep_runs().unwrap(), vec![next_run.clone()]);
     assert_eq!(
         next_run
             .shared_prompt_context
@@ -3466,6 +4205,7 @@ fn ingest_text_in_session(
             theme: Some("personal_background".to_string()),
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: vec![],
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),
@@ -3495,6 +4235,7 @@ fn ingest_text_with_scope(
             theme: Some("personal_background".to_string()),
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: vec![],
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),

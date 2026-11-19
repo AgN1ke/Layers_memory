@@ -71,6 +71,16 @@ pub struct RecallResult {
     pub debug: Option<RecallDebug>,
 }
 
+impl RecallResult {
+    /// Keep the optional debug view aligned with the response diagnostics.
+    pub fn append_notes(&mut self, notes: Vec<String>) {
+        if let Some(debug) = &mut self.debug {
+            debug.notes.extend(notes.iter().cloned());
+        }
+        self.notes.extend(notes);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecallItem {
     pub source_layer: RecallSourceLayer,

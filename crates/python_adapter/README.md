@@ -14,15 +14,47 @@ result back. The engine itself never touches the network.
 From `crates/python_adapter/`, inside a Python virtual environment:
 
 ```bash
-pip install maturin pytest
+pip install maturin pytest jsonschema
 maturin develop
-pytest tests/
+pytest tests/ --require-api-contract-coverage
 ```
 
 `maturin develop` builds the Rust extension and installs it into the
 active virtual environment under the import name `memory_engine`.
 
+`memory_engine.build_info()` returns `version`, the full Git `commit`, and
+`dirty` (whether tracked files had staged or unstaged changes at build time).
+Unknown values are `None`. This function is available without creating a
+`MemoryEngine`. For builds from `git archive`, the builder can supply
+`MEMORY_ENGINE_BUILD_COMMIT` and `MEMORY_ENGINE_BUILD_DIRTY` before invoking
+Maturin. `dirty` accepts `true` or `false`.
+
 ## Public API
+
+`core_context_package()` and `recall()` report ignored request fields in the
+returned `notes`. For example, an unsupported `subject_id` produces
+`ignored unknown request field: "/subject_id"`. The note names the field
+using JSON Pointer syntax. The request still runs with the supported fields.
+Recall also includes the note in `debug.notes` when `explain` is enabled.
+
+The installed package includes `__init__.pyi` and `py.typed` for editor and
+type-checker support. [api_contracts.json](python/memory_engine/api_contracts.json)
+maps each public call to its named JSON request and result types. The Python
+methods accept and return JSON strings
+where the registry names a serialized result. Native scalars and `build_info()`
+are described by their Python types.
+
+The result name selects an entry in `$defs` of
+[response_schemas.json](python/memory_engine/response_schemas.json), which describes
+the response structures exercised by the adapter tests. CI builds and installs
+the package, compares the stubs to the
+native signatures, and validates successful responses from each documented
+call. Nested host/provider data and response variants outside the test scenarios
+require the corresponding [wire contracts](../../wiki/pages/foundation/contracts.md).
+
+After an intentional response change, rebuild the adapter and run
+`pytest tests/ --record-api-response-schemas`. Review the generated schema diff,
+rebuild the package with it, and run the coverage check again.
 
 ```python
 import json
@@ -45,6 +77,82 @@ recovered_operations = engine.recover_pending_memory_operations()
 returns host work. The explicit recovery method is available for startup
 diagnostics and returns only the number of `started` journal operations it
 completed; it does not call a provider.
+
+Call `prune_completed_memory_operations()` to apply FileStorage's retention
+policy and get a JSON report with counts of compacted tasks and Sleep runs,
+removed journals, retired ingest receipts and skipped records. Pruning runs
+locally and requires no model calls.
+
+For a queued write, capture `write_generation(session_id, personality_scope_id)`
+when accepting the event. Keep the returned JSON together with the event JSON
+and its stable operation ID. Pass all three to
+`ingest_idempotent_at_generation(operation_id, event_json, generation_json)`
+on delivery and retry. `OperationStaleError` means the session or scope was
+erased since capture. Treat that result as terminal for the queued event.
+Omit `personality_scope_id` when an event uses its session ID as its scope.
+
+## Scoped memory management
+
+Use `inspect_scope(scope_id)` for Archive and memory-unit summaries, counts,
+and unfinished operations. Use `inspect_archive(scope_id, archive_id)` and
+`inspect_memory_unit(scope_id, memory_unit_id)` for current records and their
+verified source events. These calls leave recall feedback and memory status
+alone. Restore a forgotten unit explicitly with
+`remember_back_in_scope(scope_id, memory_unit_id)`. Detail and restoration
+return JSON `null` for an unknown or out-of-scope ID.
+`begin_memory_fidelity_pass_in_scope(scope_id, memory_unit_id)` starts review
+only after the same scope check. `seed_core_from_archives_in_scope(scope_id)`
+applies eligible Archive signals within that scope.
+
+For one person, use `inspect_subject(scope_id, subject_id)` and
+`erase_subject(scope_id, subject_id, operation_id)`. The host derives scope
+and subject from authenticated identities. Use the same operation ID after an
+interruption or for an exact retry. `incomplete` reports gaps such as mixed
+evidence or opaque legacy quotes. For new events, `quoted_event_ids` lists the
+original events. The host keeps the current author's words in `memory_text`
+and keeps copies of the quoted text out of both `memory_text` and `payload`.
+Use `[]` for an event without quotes. The engine trusts this declaration.
+A copy in free text or a host payload can remain in ordinary context if the
+engine cannot link it to the original. For existing stores, the host must
+account for the quote formats it previously wrote when enabling erasure.
+
+`core_context_package` and `render_memory_prompt_plan` expose optional
+`quoted_events` on the dialogue event. An `available` entry carries the
+source `event_id`, `speaker`, `timestamp`, and budgeted `text`. Check
+`truncated` before matching an offset or digest against the original.
+An `unavailable` entry carries only status and the referenced ID. A
+reference removed by erasure is absent from newly built packages. Use the
+projection directly and fetch a fresh package for each turn.
+
+Correct a fact in place with `correct_core_fact_attribution(request_json)`.
+Send the current fact's `updated_at` as the expected version, a stable
+operation ID, the authorized scope, and a typed assign or clear action:
+
+```python
+corrected = json.loads(engine.correct_core_fact_attribution(json.dumps({
+    "schema_version": "core_fact_attribution_input.v1",
+    "scope_id": scope_id,
+    "core_fact_id": fact["core_fact_id"],
+    "operation_id": operation_id,
+    "expected_updated_at": fact["updated_at"],
+    "change": {"action": "assign", "subject": {"id": subject_id, "name": display_name}},
+})))
+```
+
+`{"action": "clear"}` removes the subject assignment. A missing or
+out-of-scope fact returns JSON `null`. A stale version raises
+`OperationStaleError`. Destination collisions and operation-ID reuse with
+different input raise `OperationConflictError`.
+
+The existing `read_session`, `list_forgotten_memory_units`, `remember_back`,
+`pending_tasks`, `pending_sleep_runs`, `begin_memory_fidelity_pass`, and
+`seed_core_from_archives` methods are trusted local inspection or work-queue
+APIs. Use the scoped methods for user-facing memory management.
+`list_local_sessions()` enumerates the host's local session IDs, and
+`read_unarchived_session(session_id)` reads events eligible for future Sleep.
+These methods support a trusted local scheduler.
+
+## Recall and Sleep
 
 Stage 2 recall tuning is optional and remains Rust-core policy:
 
@@ -81,6 +189,12 @@ forced into the prompt.
 Sleep is an explicit host decision in v0.1. A host calls `engine.sleep(session_id)`
 manually, from token-budget pressure, or from an idle schedule, then executes the
 returned tasks through its own LLM provider.
+
+For the multi-pass driver, `begin_sleep_run(session_id)` returns the current
+open run for that session, including after restart. The run keeps its original
+options and saved progress. Continue from the returned state. To abandon it,
+call `cancel_sleep_run(sleep_task_id)` before starting again. Share one engine
+instance across workers that write to the same FileStorage directory.
 
 Autonomous reflection is also an explicit host execution opportunity while
 eligibility remains Rust-core policy:

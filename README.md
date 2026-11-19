@@ -52,6 +52,10 @@ authorship, or a conflicting model hint is routed to human review. The same
 subject identity survives Archive units, fidelity, reflection and prompt
 rendering.
 
+Hosts can store a reply's quote as a source event ID. The context package
+resolves available authored text within the same scope, including events
+rotated by Sleep, and fits the quote into the existing memory budget.
+
 Local/reference storage exposes two explicit erasure operations. A product may
 delete one conversation while preserving memories already consolidated into
 the personality scope, or irreversibly purge every FileStorage record for that

@@ -131,6 +131,27 @@ impl<S: TransactionalStorage> MemoryEngine<S> {
             intent,
             DEFAULT_WORK_UNIT_MAX_ATTEMPTS,
             |work_unit| {
+                for id in stored_event_template.quoted_event_ids.iter().flatten() {
+                    let key = RecordKey::new(EVENT_COLLECTION, id.clone())?;
+                    let unavailable = || {
+                        MemoryEngineError::Validation(
+                            "quoted event is unavailable in the requested scope".into(),
+                        )
+                    };
+                    let record = work_unit.get(&key)?.ok_or_else(unavailable)?;
+                    let source: StoredEvent = serde_json::from_value(record.payload)?;
+                    if source.event_id != *id
+                        || source.effective_personality_scope_id()
+                            != stored_event_template.effective_personality_scope_id()
+                        || source
+                            .speaker
+                            .as_ref()
+                            .is_none_or(|speaker| speaker.id.trim().is_empty())
+                        || source.validate().is_err()
+                    {
+                        return Err(unavailable().into());
+                    }
+                }
                 let existing_session = work_unit.get(&session_key)?;
                 let (mut metadata, expected_session) = match existing_session {
                     Some(record) => {

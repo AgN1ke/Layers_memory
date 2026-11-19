@@ -1,4 +1,5 @@
 use memory_engine::event::IngestEvent;
+use memory_engine::storage::Storage;
 use memory_engine::types::{
     EVENT_SCHEMA_VERSION, INGEST_RESULT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION,
 };
@@ -27,6 +28,7 @@ fn engine_ingest_stores_event_and_updates_session_files() {
             theme: Some("personal_background".to_string()),
             emotional_tone: Some("neutral".to_string()),
             speaker: None,
+            quoted_event_ids: None,
             links: vec![],
             importance_hint: memory_engine::types::ImportanceHint::High,
             processing_mode: Default::default(),
@@ -81,6 +83,7 @@ fn engine_ingest_rejects_wrong_schema_version() {
             theme: None,
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: vec![],
             importance_hint: Default::default(),
             processing_mode: Default::default(),
@@ -113,6 +116,7 @@ fn engine_rejects_personality_scope_drift_before_appending_event() {
         theme: None,
         emotional_tone: None,
         speaker: None,
+        quoted_event_ids: None,
         links: vec![],
         importance_hint: Default::default(),
         processing_mode: Default::default(),
@@ -139,6 +143,67 @@ fn engine_rejects_personality_scope_drift_before_appending_event() {
     assert!(!events.contains("must not append"));
 
     fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn legacy_ingest_appends_a_repeated_delivery_after_restart() {
+    let root = unique_temp_dir("legacy_ingest_repeated_delivery");
+    let event = queued_legacy_event();
+    let open = || MemoryEngine::new(FileStorage::with_host_id(&root, "telegram_bot"));
+
+    let first = open().ingest(event.clone()).expect("first delivery");
+    let restarted = open();
+    let retry = restarted.ingest(event).expect("repeat after restart");
+    let session = restarted.storage().read_session("queued_session").unwrap();
+    assert_ne!(first.stored_event.event_id, retry.stored_event.event_id);
+    assert_eq!(session.events.len(), 2);
+    assert_eq!(session.metadata.event_count, 2);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn legacy_ingest_accepts_a_delayed_delivery_after_purge_and_restart() {
+    let root = unique_temp_dir("legacy_ingest_delayed_after_purge");
+    let event = queued_legacy_event();
+    let open = || MemoryEngine::new(FileStorage::with_host_id(&root, "telegram_bot"));
+
+    let engine = open();
+    engine.ingest(event.clone()).expect("initial delivery");
+    engine.purge_scope("queued_scope").expect("purge scope");
+    assert!(engine
+        .storage()
+        .read_session("queued_session")
+        .unwrap()
+        .events
+        .is_empty());
+    drop(engine);
+
+    let restarted = open();
+    restarted
+        .ingest(event)
+        .expect("legacy delivery from before the purge");
+    let recreated = restarted.storage().read_session("queued_session").unwrap();
+    assert_eq!(recreated.events.len(), 1);
+    assert_eq!(
+        recreated.metadata.effective_personality_scope_id(),
+        "queued_scope"
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+fn queued_legacy_event() -> IngestEvent {
+    serde_json::from_value(json!({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "queued_user",
+        "timestamp": "2026-05-17T16:00:00Z",
+        "session_id": "queued_session",
+        "personality_scope_id": "queued_scope",
+        "payload": {"text": "A queued message."}
+    }))
+    .expect("queued event fixture")
 }
 
 #[test]
@@ -182,6 +247,7 @@ fn engine_ingest_appends_session_markdown_without_rewriting_header() {
                 theme: Some("telegram_conversation".to_string()),
                 emotional_tone: None,
                 speaker: None,
+                quoted_event_ids: None,
                 links: vec![],
                 importance_hint: Default::default(),
                 processing_mode: Default::default(),
@@ -222,6 +288,7 @@ fn ingest_numbered_event(
             theme: Some("telegram_conversation".to_string()),
             emotional_tone: None,
             speaker: None,
+            quoted_event_ids: None,
             links: vec![],
             importance_hint: Default::default(),
             processing_mode: Default::default(),

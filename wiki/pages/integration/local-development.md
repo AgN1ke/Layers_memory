@@ -7,6 +7,7 @@
 - [LLM integration resources](llm-integration-resources.md) - model resources an embedding application must provide.
 - [v0.3 acceptance](../releases/v0.3-acceptance.md) - conformance checks this setup supports.
 - [Chibigochi LLM Bridge](chibigochi-llm-bridge.md) - local bridge/proxy path used by the Godot product loop.
+- [Integration Hardening Plan](../planning/integration-hardening-plan-2026-11-15.md) - work order and acceptance gates for the current integration.
 
 Цей документ потрібен для моделей або розробників, які відкривають проєкт без історії чату. Тут зафіксовано, що вже встановлено на цій машині, де воно лежить і якими командами перевіряти локальний цикл.
 
@@ -462,10 +463,144 @@ $env:VIRTUAL_ENV = $venv
 $env:Path = "$venv\Scripts;C:\Users\AgNike\.cargo\bin;" + $env:Path
 Set-Location C:\Python_projects\Layers_memory\crates\python_adapter
 maturin develop
-pytest tests/ -v
+pytest tests/ --require-api-contract-coverage
 ```
 
 `maturin develop` компілює Rust extension і ставить його в активний venv як editable wheel під ім'ям `memory_engine`. Імпорт у Python - `import memory_engine`.
+
+Для цих тестів потрібен `jsonschema`. У wheel є підказки типів, реєстр
+`api_contracts.json` і схеми перевірюваних відповідей. Повний прогін звіряє
+сигнатури встановленого модуля та перевіряє відповіді всіх публічних викликів.
+
+### Як звірити джерело збірки
+
+У Python `memory_engine.build_info()` повертає словник із полями `version`,
+`commit` і `dirty`. У Godot `MemoryEngineGodot.new().build_info()` повертає
+ті самі поля як JSON. Обидва виклики доступні до відкриття сховища.
+`commit` містить повний SHA, а `dirty` враховує індексовані та локальні зміни
+файлів під контролем Git. Невідоме значення повертається як `None` або `null`.
+
+Під час збірки з `git archive` передайте повний SHA саме архівованого коміту
+через `MEMORY_ENGINE_BUILD_COMMIT`, а стан джерел через
+`MEMORY_ENGINE_BUILD_DIRTY` (`false` для незміненого знімка коміту, `true`
+для змінених джерел). Передані поля мають пріоритет, а пропущене поле в такій
+збірці лишається невідомим. Значення вбудовуються під час збірки.
+
+### Встановлення релізного wheel
+
+Workflow [Python wheels](../../../.github/workflows/python-wheels.yml)
+збирає `SHA256SUMS` і готові wheels для CPython 3.12 на x86_64 під Windows
+(`win_amd64`) і Linux (`manylinux_2_28_x86_64`, glibc 2.28 або новіша).
+Після перевірок прийнятого тегу `vX.Y.Z` він публікує їх у GitHub Releases.
+Встановлення wheel у середовище хоста не потребує Rust. Перший тег і приймання
+релізу відстежуються в
+[плані інтеграції](../planning/integration-hardening-plan-2026-11-15.md).
+
+1. Завантажте відповідний wheel і `SHA256SUMS` з одного релізу. Порівняйте
+   SHA-256 wheel із рядком для його імені. Наприклад, у команді замініть
+   `WHEEL_FILE.whl` фактичним іменем:
+
+   ```console
+   python -c "import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())" WHEEL_FILE.whl
+   ```
+
+2. Після збігу хешу встановіть пакет у середовище бота. `python` має бути
+   інтерпретатором цього середовища.
+
+   ```console
+   python -m pip install --no-index --no-deps WHEEL_FILE.whl
+   python -c "import memory_engine; print(memory_engine.build_info())"
+   ```
+
+3. Звірте `version` з номером релізу, а `commit` з повним SHA коміту тегу.
+   Для чистої релізної збірки `dirty` дорівнює `False`. Запишіть версію, SHA
+   і хеш wheel у конфігурацію розгортання.
+
+Запуск workflow вручну або через pull request із відповідними змінами дає
+тестовий артефакт `python-wheels-cp312` у GitHub Actions. Для розгортання
+беріть assets прийнятого релізу та закріпіть його версію і хеш пакета.
+
+### Відновлення Sleep і межі операцій із памʼяттю
+
+- Після перезапуску викличте `pending_sleep_runs()` і продовжте кожен потрібний
+  запуск від збереженого стану. `begin_sleep_run(session_id)` повертає наявний
+  придатний багатопрохідний запуск для сесії. Рушій закриває старий запуск,
+  якщо частину його вхідних подій уже охопив інший архів. Решта подій
+  доступна для наступного Sleep. Придатні запуски з різними вхідними подіями
+  можна відновити після рестарту.
+  `cancel_sleep_run(sleep_task_id)` скасовує запуск і дозволяє почати новий.
+  Ці виклики мають іти через один
+  спільний рушій для каталогу FileStorage. Старий API `sleep()` має окремий
+  [контракт](../foundation/contracts.md#94-multi-pass-sleep-provider-contract).
+- Зберігайте `tasks/completed`. Ці записи потрібні для розпізнавання повторів
+  і міграції. `pending_tasks()` читає окрему чергу. `delete_session` і
+  `purge_scope` очищають дані відповідної сесії або області в межах своїх
+  контрактів. Для прибирання старих службових копій у FileStorage викликайте
+  `prune_completed_memory_operations()`. Воно працює локально й повертає
+  лічильники. Завершені операції стають придатними до прибирання через
+  30 днів, коли збережені залежності дозволяють прибрати повний ввід.
+- Для FileStorage викликайте `ingest_idempotent(operation_id, event_json)`
+  із власним стабільним ID. Після втрати відповіді використовуйте той самий
+  ID, логічний `host_id` і подію. `already_applied: true` означає, що рушій
+  повернув раніше записану подію. Зміну payload або scope під тим самим ID
+  рушій відхиляє. Повтор доступний 30 днів, поки оригінал є в сховищі.
+  Старий `ingest` продовжує дописувати подію на кожен виклик.
+  [Контракт FileStorage](../foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage).
+  У Python конфлікт, недоступний результат і незавершена операція мають
+  окремі типи помилок зі спільним базовим типом `RuntimeError`.
+- Для події, яку хост ставить у чергу, викличте `write_generation` перед
+  постановкою й збережіть відповідь разом із подією. Передайте її у
+  `ingest_idempotent_at_generation` і використовуйте ту саму на кожному
+  повторі. Якщо область або сесію вже стерто, зупиніть доставку цієї події
+  після `OperationStaleError` (`operation_stale` у Godot).
+- Для fidelity і forgetting `NeedsNewReviewError` (`needs_new_review` у
+  Godot) означає, що попередня відповідь втратила актуальність. За потреби
+  почніть нову задачу з актуальними даними. Точний повтор завершеного review
+  повертає результат тієї операції.
+- Якщо `core_context_package` повертає в `notes` `ignored unknown request
+  field: "/subject_id"`, запит оброблено без фільтра за людиною.
+  Для таких операцій викликайте `inspect_subject(scope_id, subject_id)`
+  або `erase_subject(scope_id, subject_id, operation_id)`. Хост бере
+  область і людину з автентифікованого контексту. Повтор стирання отримує
+  той самий `operation_id`. [Контракт перегляду й стирання](../foundation/contracts.md#145-перегляд-і-стирання-памяті-за-людиною).
+- Для огляду області викликайте `inspect_scope`, для деталей — `inspect_archive`
+  та `inspect_memory_unit` із тією самою областю. Забуту одиницю можна
+  явно відновити через `remember_back_in_scope`.
+  [Контракт перегляду](../foundation/contracts.md#144-перегляд-і-відновлення-в-межах-scope).
+- Щоб виправити субʼєкта факту Core, передайте в
+  `correct_core_fact_attribution` поточний `updated_at`, точний scope,
+  ID факту, стабільний ID операції та дію `assign` або `clear`.
+  Кандидат рефлексії потрапляє в Core після явного прийняття через
+  `review_candidate`. [Контракт атрибуції](../foundation/contracts.md#виправлення-атрибуції-факту-core).
+- Нові виклики FileStorage доступні в Python і Godot. Для деталей,
+  відновлення та виправлення атрибуції невідомий або чужий ID повертає
+  JSON `null`. Старі виклики за одним ID, зокрема `build_evidence_pack`,
+  `begin_memory_fidelity_pass`, `remember_back`, і глобальний
+  `pending_tasks` належать довіреному локальному інтегратору.
+  Клієнту чату показуйте проєкції з API перегляду в межах scope.
+- Передавайте `utc_offset_minutes`, щоб відносні дати враховували місцевий
+  час чату. Статус серпневих вимірювань Smartest звіряйте зі
+  [сторінкою приймання](../planning/smartest-v2-checkpoint-a-review-2026-08-26.md).
+
+### Перегляд і стирання в Telegram
+
+У Telegram область походить від поточного чату. `/archives`,
+`/archive_last`, `/archive id`, `/tasks`, `/forgotten` і
+`/remember_back id` користуються API цієї області. `/memory_stats`
+показує її лічильники. `/evidence`, `/fidelity` і `/core_seed` також
+обмежені областю чату. Планувальник користується `list_local_sessions`
+і `read_unarchived_session` як довірений локальний хост.
+
+`/my_memory` і `/forget_me` беруть ID людини з Telegram-відправника.
+Команди приймають відправника-людину, який пише від свого імені.
+Особистий перегляд, ініційований у групі, надсилається у приватний чат,
+якщо Telegram дозволяє доставку. У групі залишається статус.
+Стирання охоплює пам'ять рушія. Повідомлення Telegram та історичні
+журнали хоста зберігаються окремо.
+
+Для цитат хост веде локальну відповідність ID повідомлення Telegram
+та ID події рушія. Цитату записує посиланням. Коли джерело старої
+відповіді не знаходиться, зберігається лише її новий авторський текст.
 
 ### Свіже Розгортання
 
@@ -475,24 +610,18 @@ pytest tests/ -v
 py -3.13 -m venv crates\python_adapter\.venv
 $venv = "C:\Python_projects\Layers_memory\crates\python_adapter\.venv"
 & "$venv\Scripts\python.exe" -m pip install --upgrade pip
-& "$venv\Scripts\python.exe" -m pip install maturin pytest
+& "$venv\Scripts\python.exe" -m pip install maturin pytest jsonschema
 ```
 
 Потім - команда збірки і pytest з попереднього блока.
 
-### Поточний Очікуваний Результат Pytest
+### Що перевіряє Pytest
 
-9 тестів у `tests/test_basic.py`, усі проходять:
-
-- `test_ingest_creates_stored_event`;
-- `test_read_session_returns_stored_events`;
-- `test_explicit_sleep_preserves_active_tail`;
-- `test_full_cycle_ingest_sleep_resume_recall`;
-- `test_core_context_package_combines_session_and_archive`;
-- `test_upsert_core_fact_is_returned_in_context_package`;
-- `test_core_context_package_does_not_leak_facts_between_scopes`;
-- `test_ingest_rejects_wrong_schema`;
-- `test_recall_zero_limit_uses_engine_default`.
+Набір тестів звіряє відповіді всіх публічних викликів Python-адаптера,
+відновлення Sleep після повторного відкриття сховища й примітки про невідомі
+поля. Для перевірки конкретного релізного wheel задайте
+`MEMORY_ENGINE_EXPECTED_VERSION` і `MEMORY_ENGINE_EXPECTED_COMMIT` перед
+запуском. Workflow задає ці значення за маніфестом і комітом збірки.
 
 ## Що Не Треба Шукати Вручну
 

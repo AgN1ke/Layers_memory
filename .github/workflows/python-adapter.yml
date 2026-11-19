@@ -1,0 +1,27 @@
+name: Python adapter contracts
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+      - "feature/**"
+      - "codex/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and install the adapter
+        run: python -m pip install "./crates/python_adapter[test]"
+      - name: Check the installed API and responses
+        run: python -m pytest crates/python_adapter/tests --require-api-contract-coverage

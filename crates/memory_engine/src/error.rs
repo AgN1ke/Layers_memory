@@ -10,6 +10,21 @@ pub enum MemoryEngineError {
     #[error("storage error: {0}")]
     Storage(String),
 
+    #[error("operation ID was already used with different input")]
+    OperationConflict,
+
+    #[error("the stored result of this operation is no longer available")]
+    OperationResultUnavailable,
+
+    #[error("a journaled operation is incomplete")]
+    OperationIncomplete,
+
+    #[error("the operation belongs to an erased memory generation")]
+    OperationStale,
+
+    #[error("review basis changed or could not be verified; start a new review")]
+    NeedsNewReview,
+
     #[error("incompatible schema version: expected {expected}, got {actual}")]
     IncompatibleSchema { expected: String, actual: String },
 

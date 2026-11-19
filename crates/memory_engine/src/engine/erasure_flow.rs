@@ -1,4 +1,13 @@
 use super::*;
+use crate::erasure::erasure_key;
+
+#[derive(Serialize, Deserialize)]
+struct GenerationErasureIntent {
+    #[serde(flatten)]
+    erasure: MemoryErasureOperationIntent,
+    #[serde(default)]
+    generation: Option<u64>,
+}
 
 impl<S: Storage> MemoryEngine<S> {
     /// Remove the live conversation record while preserving memories already
@@ -6,7 +15,7 @@ impl<S: Storage> MemoryEngine<S> {
     pub fn delete_session(&self, session_id: &str) -> Result<MemoryErasureReport> {
         validate_erasure_target("session_id", session_id)?;
         self.ensure_manifest()?;
-        self.with_resource_lock(session_lock_key(session_id), || {
+        self.with_session_memory_write(session_id, || {
             let (plan, counts) = self.build_delete_session_plan_unlocked(session_id)?;
             self.begin_memory_erasure_unlocked(plan, counts, true)
         })
@@ -18,13 +27,11 @@ impl<S: Storage> MemoryEngine<S> {
     pub fn purge_scope(&self, personality_scope_id: &str) -> Result<MemoryErasureReport> {
         validate_erasure_target("personality_scope_id", personality_scope_id)?;
         self.ensure_manifest()?;
-        self.with_resource_lock(
-            format!("memory_erasure:scope:{personality_scope_id}"),
-            || {
-                let (plan, counts) = self.build_purge_scope_plan_unlocked(personality_scope_id)?;
-                self.begin_memory_erasure_unlocked(plan, counts, false)
-            },
-        )
+        self.with_resource_lock(scope_erasure_lock_key(personality_scope_id), || {
+            self.require_erasure_complete(MemoryErasureKind::PurgeScope, personality_scope_id)?;
+            let (plan, counts) = self.build_purge_scope_plan_unlocked(personality_scope_id)?;
+            self.begin_memory_erasure_unlocked(plan, counts, false)
+        })
     }
 
     fn begin_memory_erasure_unlocked(
@@ -33,35 +40,29 @@ impl<S: Storage> MemoryEngine<S> {
         planned_counts: MemoryErasureCounts,
         archived_memory_preserved: bool,
     ) -> Result<MemoryErasureReport> {
-        if planned_counts.is_empty() {
-            return Ok(MemoryErasureReport {
-                schema_version: MEMORY_ERASURE_REPORT_SCHEMA_VERSION.to_string(),
-                operation: plan.operation,
-                target_id: plan.target_id,
-                completed_at: now_rfc3339()?,
-                deleted: planned_counts,
-                archived_memory_preserved,
-            });
-        }
-
+        let key = erasure_key(plan.operation, &plan.target_id);
+        let generation = self.next_erasure_generation(&key)?;
         let now = now_rfc3339()?;
-        let intent = MemoryErasureOperationIntent {
-            schema_version: MEMORY_ERASURE_OPERATION_SCHEMA_VERSION.to_string(),
-            plan: plan.clone(),
-            planned_counts,
-            archived_memory_preserved,
+        let intent = GenerationErasureIntent {
+            erasure: MemoryErasureOperationIntent {
+                schema_version: MEMORY_ERASURE_OPERATION_SCHEMA_VERSION.to_string(),
+                plan,
+                planned_counts,
+                archived_memory_preserved,
+            },
+            generation: Some(generation),
         };
         let operation = JournalOperation {
             schema_version: JOURNAL_OPERATION_SCHEMA_VERSION.to_string(),
-            op_id: new_id("memory_erasure")?,
-            op_type: match plan.operation {
+            op_id: key,
+            op_type: match intent.erasure.plan.operation {
                 MemoryErasureKind::DeleteSession => JournalOperationType::DeleteSession,
                 MemoryErasureKind::PurgeScope => JournalOperationType::PurgeScope,
             },
             state: JournalState::Started,
             created_at: now.clone(),
             updated_at: now,
-            target_files: vec![plan.target_id.clone()],
+            target_files: vec![intent.erasure.plan.target_id.clone()],
             intent: serde_json::to_value(intent)?,
             recovery_policy: RecoveryPolicy::Retry,
             completed_at: None,
@@ -71,6 +72,13 @@ impl<S: Storage> MemoryEngine<S> {
         self.execute_memory_erasure_operation_unlocked(operation)
     }
 
+    fn next_erasure_generation(&self, key: &str) -> Result<u64> {
+        self.storage
+            .read_erasure_generation(key)?
+            .checked_add(1)
+            .ok_or_else(|| MemoryEngineError::Storage("erasure generation exhausted".into()))
+    }
+
     pub(super) fn execute_memory_erasure_operation_unlocked(
         &self,
         operation: JournalOperation,
@@ -78,6 +86,8 @@ impl<S: Storage> MemoryEngine<S> {
         let operation_id = operation.op_id.clone();
         let result = self.execute_memory_erasure_operation_inner(operation);
         if let Err(error) = &result {
+            self.memory_operations_recovered
+                .store(false, Ordering::Release);
             self.record_memory_operation_error_best_effort(&operation_id, error);
         }
         result
@@ -85,7 +95,7 @@ impl<S: Storage> MemoryEngine<S> {
 
     fn execute_memory_erasure_operation_inner(
         &self,
-        operation: JournalOperation,
+        mut operation: JournalOperation,
     ) -> Result<MemoryErasureReport> {
         if operation.state != JournalState::Started {
             return Err(MemoryEngineError::Validation(format!(
@@ -93,12 +103,13 @@ impl<S: Storage> MemoryEngine<S> {
                 operation.op_id
             )));
         }
-        let intent: MemoryErasureOperationIntent =
+        let mut journal: GenerationErasureIntent =
             serde_json::from_value(operation.intent.clone())?;
+        let intent = &journal.erasure;
         if intent.schema_version != MEMORY_ERASURE_OPERATION_SCHEMA_VERSION {
             return Err(MemoryEngineError::IncompatibleSchema {
                 expected: MEMORY_ERASURE_OPERATION_SCHEMA_VERSION.to_string(),
-                actual: intent.schema_version,
+                actual: intent.schema_version.clone(),
             });
         }
         let expected_type = match intent.plan.operation {
@@ -112,6 +123,29 @@ impl<S: Storage> MemoryEngine<S> {
             )));
         }
 
+        let key = erasure_key(intent.plan.operation, &intent.plan.target_id);
+        let generation = match journal.generation {
+            Some(generation) => generation,
+            None => {
+                // Older journal records did not carry a generation. Freeze it
+                // first so another restart repeats the very same transition.
+                let generation = self.next_erasure_generation(&key)?;
+                journal.generation = Some(generation);
+                operation.intent = serde_json::to_value(&journal)?;
+                self.storage.begin_journaled_operation(&operation)?;
+                generation
+            }
+        };
+        let current = self.storage.read_erasure_generation(&key)?;
+        if current > generation {
+            return Err(MemoryEngineError::Storage(
+                "erasure journal trails its saved generation".into(),
+            ));
+        }
+        if current < generation {
+            self.storage.write_erasure_generation(&key, generation)?;
+        }
+        let intent = journal.erasure;
         self.storage.apply_memory_erasure_plan(&intent.plan)?;
         if !intent.plan.archive_ids.is_empty() {
             let archive_ids = intent
@@ -181,12 +215,32 @@ impl<S: Storage> MemoryEngine<S> {
             .collect::<BTreeSet<_>>();
         identifiers.extend(task_ids.iter().cloned());
 
-        let journal_operation_ids =
+        let journal_operations =
             clean_storage_collection(self.storage.load_journaled_operations()?)?
                 .into_iter()
-                .filter(|operation| journal_operation_references_any(operation, &identifiers))
-                .map(|operation| operation.op_id)
-                .collect::<BTreeSet<_>>();
+                .filter(|operation| {
+                    journal_operation_matches_erasure(
+                        operation,
+                        MemoryErasureKind::DeleteSession,
+                        session_id,
+                        &identifiers,
+                    )
+                })
+                .collect::<Vec<_>>();
+        // This operation keeps derived memory. Let recovery finish an
+        // accepted batch before removing the session or its journal entries.
+        if journal_operations.iter().any(|operation| {
+            operation.op_type == JournalOperationType::MemoryUnitPublish
+                && operation.state == JournalState::Started
+        }) {
+            self.memory_operations_recovered
+                .store(false, Ordering::Release);
+            return Err(MemoryEngineError::OperationIncomplete);
+        }
+        let journal_operation_ids = journal_operations
+            .into_iter()
+            .map(|operation| operation.op_id)
+            .collect::<BTreeSet<_>>();
 
         counts.tasks = task_ids.len();
         counts.sleep_runs = sleep_task_ids.len();
@@ -235,16 +289,15 @@ impl<S: Storage> MemoryEngine<S> {
             counts.archived_events += self.storage.read_session_archived_events(session_id)?.len();
         }
 
-        let archives =
-            clean_storage_collection(self.storage.read_archive(&ArchiveFilters::default())?)?
-                .into_iter()
-                .filter(|archive| archive.effective_personality_scope_id() == scope)
-                .collect::<Vec<_>>();
+        let archives = clean_storage_collection(self.storage.read_archive_inventory()?)?
+            .into_iter()
+            .filter(|archive| archive.effective_personality_scope_id() == scope)
+            .collect::<Vec<_>>();
         let archive_ids = archives
             .iter()
             .map(|archive| archive.archive_id.clone())
             .collect::<BTreeSet<_>>();
-        let memory_unit_ids = clean_storage_collection(self.storage.read_memory_units()?)?
+        let memory_unit_ids = clean_storage_collection(self.storage.read_memory_unit_inventory()?)?
             .into_iter()
             .filter(|unit| {
                 unit.effective_personality_scope_id() == scope
@@ -366,7 +419,14 @@ impl<S: Storage> MemoryEngine<S> {
         let journal_operation_ids =
             clean_storage_collection(self.storage.load_journaled_operations()?)?
                 .into_iter()
-                .filter(|operation| journal_operation_references_any(operation, &identifiers))
+                .filter(|operation| {
+                    journal_operation_matches_erasure(
+                        operation,
+                        MemoryErasureKind::PurgeScope,
+                        scope,
+                        &identifiers,
+                    )
+                })
                 .map(|operation| operation.op_id)
                 .collect::<BTreeSet<_>>();
 
@@ -412,6 +472,10 @@ impl<S: Storage> MemoryEngine<S> {
     }
 }
 
+pub(super) fn scope_erasure_lock_key(scope: &str) -> String {
+    format!("memory_erasure:scope:{scope}")
+}
+
 fn clean_storage_collection<T>(collection: StorageCollection<T>) -> Result<Vec<T>> {
     if let Some(warning) = collection.warnings.first() {
         return Err(MemoryEngineError::Storage(warning.note()));
@@ -419,7 +483,7 @@ fn clean_storage_collection<T>(collection: StorageCollection<T>) -> Result<Vec<T
     Ok(collection.items)
 }
 
-fn sleep_run_task_ids(run: &SleepRun) -> Vec<String> {
+pub(super) fn sleep_run_task_ids(run: &SleepRun) -> Vec<String> {
     let mut ids = vec![run.sleep_task_id.clone()];
     ids.extend(run.memory_unit_task_id.iter().cloned());
     ids.extend(
@@ -440,10 +504,28 @@ fn pending_task_references_any(task: &PendingTask, identifiers: &BTreeSet<String
             .is_some_and(|outcome| json_references_any(outcome, identifiers))
 }
 
-fn journal_operation_references_any(
+fn journal_operation_matches_erasure(
     operation: &JournalOperation,
+    kind: MemoryErasureKind,
+    target: &str,
     identifiers: &BTreeSet<String>,
 ) -> bool {
+    if operation.op_type == JournalOperationType::MemoryUnitPublish {
+        let field = match kind {
+            MemoryErasureKind::DeleteSession => "source_session_id",
+            MemoryErasureKind::PurgeScope => "scope",
+        };
+        return operation.intent[field].as_str() == Some(target);
+    }
+    if operation.op_type == JournalOperationType::IngestEvent {
+        let event = &operation.intent["event"];
+        let session = event["session_id"].as_str();
+        let origin = match kind {
+            MemoryErasureKind::DeleteSession => session,
+            MemoryErasureKind::PurgeScope => event["personality_scope_id"].as_str().or(session),
+        };
+        return origin == Some(target);
+    }
     json_references_any(&operation.intent, identifiers)
         || operation.target_files.iter().any(|target| {
             identifiers
@@ -452,7 +534,7 @@ fn journal_operation_references_any(
         })
 }
 
-fn json_references_any(value: &Value, identifiers: &BTreeSet<String>) -> bool {
+pub(super) fn json_references_any(value: &Value, identifiers: &BTreeSet<String>) -> bool {
     match value {
         Value::String(value) => identifiers.contains(value),
         Value::Array(values) => values
@@ -465,7 +547,7 @@ fn json_references_any(value: &Value, identifiers: &BTreeSet<String>) -> bool {
     }
 }
 
-fn validate_erasure_target(label: &str, value: &str) -> Result<()> {
+pub(super) fn validate_erasure_target(label: &str, value: &str) -> Result<()> {
     if value.trim().is_empty()
         || value.contains('/')
         || value.contains('\\')

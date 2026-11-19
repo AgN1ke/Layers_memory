@@ -178,6 +178,18 @@ pub fn archive_has_prompt_eligible_memory(entry: &ArchiveEntry) -> bool {
             .any(memory_unit_is_prompt_eligible)
 }
 
+pub(crate) fn render_compact_memory_from_units(units: &[MemoryUnit]) -> Option<String> {
+    let lines = units
+        .iter()
+        .filter(|unit| {
+            unit.status == MemoryUnitStatus::ActiveArchive && memory_unit_is_prompt_eligible(unit)
+        })
+        .map(|unit| unit.thesis.trim())
+        .filter(|thesis| !thesis.is_empty())
+        .collect::<Vec<_>>();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmotionalMarker {
     pub target: String,

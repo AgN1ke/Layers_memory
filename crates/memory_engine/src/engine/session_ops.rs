@@ -1,5 +1,15 @@
 use super::*;
 
+pub(super) fn is_local_quote_source(event: &StoredEvent, session_id: &str, scope: &str) -> bool {
+    event.session_id == session_id
+        && event.effective_personality_scope_id() == scope
+        && event
+            .speaker
+            .as_ref()
+            .is_some_and(|speaker| !speaker.id.trim().is_empty())
+        && event.validate().is_ok()
+}
+
 impl<S: Storage> MemoryEngine<S> {
     pub(super) fn with_resource_lock<T, F>(&self, key: String, f: F) -> Result<T>
     where
@@ -15,16 +25,13 @@ impl<S: Storage> MemoryEngine<S> {
         self.ensure_manifest()?;
 
         let session_id = event.session_id.clone();
-        self.with_resource_lock(session_lock_key(&session_id), || {
-            let (initial_weight, weight_reason) =
-                self.options.event_scoring.score_ingest_event(&event);
-            let stored = StoredEvent::from_ingest(
-                event,
-                new_id("event")?,
-                now_rfc3339()?,
-                initial_weight,
-                weight_reason,
-            );
+        let scope = event
+            .personality_scope_id
+            .as_deref()
+            .unwrap_or(&session_id)
+            .to_owned();
+        self.with_memory_write(&scope, &session_id, || {
+            let stored = self.prepare_ingest_event(event)?;
 
             self.storage.append_event(&stored.session_id, &stored)?;
 
@@ -33,6 +40,59 @@ impl<S: Storage> MemoryEngine<S> {
                 stored_event: stored,
             })
         })
+    }
+
+    pub(super) fn prepare_ingest_event(&self, event: IngestEvent) -> Result<StoredEvent> {
+        self.require_local_quote_sources(&event)?;
+        let (initial_weight, weight_reason) = self.options.event_scoring.score_ingest_event(&event);
+        Ok(StoredEvent::from_ingest(
+            event,
+            new_id("event")?,
+            now_rfc3339()?,
+            initial_weight,
+            weight_reason,
+        ))
+    }
+
+    fn require_local_quote_sources(&self, event: &IngestEvent) -> Result<()> {
+        let Some(ids) = event
+            .quoted_event_ids
+            .as_ref()
+            .filter(|ids| !ids.is_empty())
+        else {
+            return Ok(());
+        };
+        let scope = event
+            .personality_scope_id
+            .as_deref()
+            .unwrap_or(&event.session_id);
+        let mut missing = ids.iter().map(String::as_str).collect::<HashSet<_>>();
+        let mut sessions = self
+            .storage
+            .read_sessions()?
+            .items
+            .into_iter()
+            .filter(|metadata| {
+                metadata.effective_personality_scope_id() == scope
+                    && metadata.session_id != event.session_id
+                    && super::scope_inspection::inspection_id_is_valid(&metadata.session_id)
+            })
+            .map(|metadata| metadata.session_id)
+            .collect::<Vec<_>>();
+        sessions.push(event.session_id.clone());
+        for session in sessions.into_iter().rev() {
+            for source in self.read_session_events_with_archived(&session)? {
+                if is_local_quote_source(&source, &session, scope) {
+                    missing.remove(source.event_id.as_str());
+                }
+            }
+            if missing.is_empty() {
+                return Ok(());
+            }
+        }
+        Err(MemoryEngineError::Validation(
+            "quoted event is unavailable in the requested scope".into(),
+        ))
     }
 
     pub(super) fn ensure_manifest(&self) -> Result<()> {
@@ -81,16 +141,79 @@ impl<S: Storage> MemoryEngine<S> {
             .into_items()
             .into_iter()
             .filter(|task| matches!(task.state, TaskState::Pending | TaskState::Submitted))
+            .filter(|task| task.schema_version == PENDING_TASK_SCHEMA_VERSION)
+            .filter(|task| match task.task_type {
+                TaskType::MemoryFidelityPass => super::fidelity_flow::fidelity_task_has_basis(task),
+                TaskType::ForgetReview => super::forgetting_flow::forget_task_has_basis(task),
+                TaskType::SleepCompression | TaskType::MemoryUnitPass => task.inputs["events"]
+                    .as_array()
+                    .is_some_and(|events| !events.is_empty()),
+                _ => true,
+            })
             .collect())
     }
 
-    pub(super) fn archived_event_ids_for_session(
-        &self,
-        session_id: &str,
-    ) -> Result<HashSet<String>> {
+    /// Read a coherent session snapshot while local writes or Sleep rotate it.
+    pub fn read_session(&self, session_id: &str) -> Result<SessionRecord> {
         self.with_resource_lock(session_lock_key(session_id), || {
-            self.archived_event_ids_for_session_unlocked(session_id)
+            self.read_local_session_unlocked(session_id)
         })
+    }
+
+    /// Enumerate local sessions for a trusted, store-wide maintenance worker.
+    pub fn list_local_sessions(&self) -> Result<Vec<String>> {
+        let mut sessions = Vec::new();
+        for metadata in self.storage.read_sessions()?.items {
+            if metadata.validate().is_err()
+                || !super::scope_inspection::inspection_id_is_valid(&metadata.session_id)
+            {
+                continue;
+            }
+            let erasure = self
+                .require_erasure_complete(
+                    MemoryErasureKind::PurgeScope,
+                    metadata.effective_personality_scope_id(),
+                )
+                .and_then(|_| {
+                    self.require_erasure_complete(
+                        MemoryErasureKind::DeleteSession,
+                        &metadata.session_id,
+                    )
+                });
+            match erasure {
+                Ok(()) => sessions.push(metadata.session_id),
+                Err(MemoryEngineError::OperationIncomplete) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        sessions.sort();
+        sessions.dedup();
+        Ok(sessions)
+    }
+
+    /// Read active events still eligible for Sleep in a trusted local session.
+    pub fn read_unarchived_session(&self, session_id: &str) -> Result<SessionRecord> {
+        if !super::scope_inspection::inspection_id_is_valid(session_id) {
+            return Err(MemoryEngineError::Validation("invalid session ID".into()));
+        }
+        self.with_session_memory_write(session_id, || {
+            let mut session = self.read_local_session_unlocked(session_id)?;
+            let covered = self.archived_event_ids_for_session_unlocked(session_id)?;
+            session
+                .events
+                .retain(|event| !covered.contains(&event.event_id));
+            Ok(session)
+        })
+    }
+
+    fn read_local_session_unlocked(&self, session_id: &str) -> Result<SessionRecord> {
+        self.require_erasure_complete(MemoryErasureKind::DeleteSession, session_id)?;
+        let session = self.storage.read_session(session_id)?;
+        self.require_erasure_complete(
+            MemoryErasureKind::PurgeScope,
+            session.metadata.effective_personality_scope_id(),
+        )?;
+        Ok(session)
     }
 
     pub(super) fn archived_event_ids_for_session_unlocked(
@@ -113,8 +236,7 @@ impl<S: Storage> MemoryEngine<S> {
 
         for entry in self
             .storage
-            .read_archive(&ArchiveFilters::default())?
-            .into_items()
+            .read_sleep_archives(session_id)?
             .into_iter()
             .filter(|entry| entry.source_session_id == session_id)
             .filter(|entry| entry.status == ArchiveStatus::Complete)
@@ -262,7 +384,7 @@ impl<S: Storage> MemoryEngine<S> {
                 continue;
             };
             let result = self.with_resource_lock(archive_lock_key(&archive_id), || {
-                let mut entry = self.storage.read_archive_entry_by_id(&archive_id)?;
+                let mut entry = self.storage.read_archive_entry_raw(&archive_id)?;
                 entry.recall_count = entry.recall_count.saturating_add(delta.added_count);
                 entry.last_recalled_at = newest_timestamp(
                     entry.last_recalled_at.as_deref(),

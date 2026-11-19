@@ -1,7 +1,7 @@
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use memory_engine::archive::{FidelityStatus, MemoryUnit, MemoryUnitStatus};
+use memory_engine::archive::{ArchiveEntry, FidelityStatus, MemoryUnit, MemoryUnitStatus};
 use memory_engine::core_store::{
     CandidateBelief, CandidateReinforcement, CandidateStatus, PromotionChecks,
 };
@@ -55,16 +55,13 @@ fn legacy_candidates_migrate_idempotently_without_inventing_relations() {
     let root = unique_temp_dir("hypothesis_graph_migration");
     let storage = FileStorage::with_host_id(&root, "hypothesis_test");
     storage.ensure_layout().expect("create storage layout");
-    storage
-        .write_memory_unit(&memory_unit("mu_initial", "archive_initial", "session_a"))
-        .expect("write initial unit");
-    storage
-        .write_memory_unit(&memory_unit(
-            "mu_reinforcement",
-            "archive_reinforcement",
-            "session_b",
-        ))
-        .expect("write reinforcement unit");
+    write_evidence_unit(&storage, "mu_initial", "archive_initial", "session_a");
+    write_evidence_unit(
+        &storage,
+        "mu_reinforcement",
+        "archive_reinforcement",
+        "session_b",
+    );
 
     let candidate = candidate_fixture();
     fs::write(
@@ -165,9 +162,7 @@ fn graph_projection_keeps_v05_candidate_api_and_graph_only_fields() {
     let root = unique_temp_dir("hypothesis_graph_projection");
     let storage = FileStorage::with_host_id(&root, "hypothesis_test");
     storage.ensure_layout().expect("create storage layout");
-    storage
-        .write_memory_unit(&memory_unit("mu_initial", "archive_initial", "session_a"))
-        .expect("write initial unit");
+    write_evidence_unit(&storage, "mu_initial", "archive_initial", "session_a");
 
     let mut candidate = candidate_fixture();
     candidate.source_memory_unit_ids = vec!["mu_initial".to_string()];
@@ -314,8 +309,13 @@ fn export_request(core_scope: Option<&str>) -> HypothesisGraphExportRequest {
     }
 }
 
-fn memory_unit(memory_unit_id: &str, archive_id: &str, session_id: &str) -> MemoryUnit {
-    MemoryUnit {
+fn write_evidence_unit(
+    storage: &FileStorage,
+    memory_unit_id: &str,
+    archive_id: &str,
+    session_id: &str,
+) {
+    let unit = MemoryUnit {
         schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
         memory_unit_id: memory_unit_id.to_string(),
         archive_id: archive_id.to_string(),
@@ -336,7 +336,30 @@ fn memory_unit(memory_unit_id: &str, archive_id: &str, session_id: &str) -> Memo
         reflection_count: 1,
         last_reflected_at: Some("2026-07-01T11:00:00Z".to_string()),
         last_reflection_operation_id: Some("reflection_apply_fixture".to_string()),
-    }
+    };
+    let archive: ArchiveEntry = serde_json::from_value(serde_json::json!({
+        "schema_version": "archive_entry.v1",
+        "archive_id": archive_id,
+        "source_session_id": session_id,
+        "created_at": unit.created_at,
+        "updated_at": unit.updated_at,
+        "source_event_ids": unit.source_event_ids,
+        "time_range": { "start": unit.created_at, "end": unit.created_at },
+        "gist": "Evidence episode",
+        "narrative": "Evidence episode",
+        "weight": 0.9,
+        "freshness": 1.0,
+        "recall_count": 0,
+        "status": "complete",
+        "llm_enhanced": true
+    }))
+    .expect("archive fixture");
+    storage
+        .write_archive_entry(&archive)
+        .expect("write parent archive");
+    storage
+        .write_memory_unit(&unit)
+        .expect("write evidence unit");
 }
 
 fn candidate_fixture() -> CandidateBelief {

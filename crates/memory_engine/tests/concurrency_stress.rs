@@ -60,6 +60,7 @@ fn run_parallel_session_and_core_stress(thread_count: usize, events_per_session:
                         theme: Some("concurrency".to_string()),
                         emotional_tone: None,
                         speaker: None,
+                        quoted_event_ids: None,
                         links: vec![],
                         importance_hint: Default::default(),
                         processing_mode: Default::default(),

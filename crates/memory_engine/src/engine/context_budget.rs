@@ -1,4 +1,5 @@
 use super::*;
+use crate::prompt_view::fit_quote_to_prompt;
 
 pub(super) fn session_context_events(
     session: &SessionRecord,
@@ -27,6 +28,7 @@ pub(super) fn session_context_events(
             source: event.source.clone(),
             speaker: event.speaker.clone(),
             text: event_text(event),
+            quoted_events: Vec::new(),
             payload: event.payload.clone(),
             tags: event.tags.clone(),
             theme: event.theme.clone(),
@@ -76,7 +78,7 @@ pub(super) fn apply_context_token_budget(
     let current_memory_budget = budget
         .current_memory_tokens
         .saturating_sub(estimated_domain_state_tokens);
-    let (session_recent, estimated_session_recent_tokens, dropped_session_recent) =
+    let (mut session_recent, estimated_session_recent_tokens, dropped_session_recent) =
         keep_recent_within_budget_by(
             session_recent,
             current_memory_budget,
@@ -84,7 +86,7 @@ pub(super) fn apply_context_token_budget(
         );
     let remaining_current_budget =
         current_memory_budget.saturating_sub(estimated_session_recent_tokens);
-    let (session_trace, estimated_session_trace_tokens, dropped_session_trace) =
+    let (mut session_trace, estimated_session_trace_tokens, dropped_session_trace) =
         keep_recent_within_budget_by(
             session_trace,
             remaining_current_budget,
@@ -119,9 +121,17 @@ pub(super) fn apply_context_token_budget(
     let estimated_compressed_memory_tokens =
         estimated_associative_memory_tokens + estimated_compressed_memory_tokens;
 
-    let estimated_current_memory_tokens = estimated_domain_state_tokens
+    let base_current_tokens = estimated_domain_state_tokens
         + estimated_session_recent_tokens
         + estimated_session_trace_tokens;
+    let quote_budget = budget
+        .current_memory_tokens
+        .saturating_sub(base_current_tokens)
+        .min(budget.total_tokens.saturating_sub(
+            base_current_tokens + estimated_compressed_memory_tokens + estimated_core_tokens,
+        ));
+    let estimated_current_memory_tokens = base_current_tokens
+        + budget_context_quotes(&mut session_recent, &mut session_trace, quote_budget);
     let estimated_total_tokens = estimated_current_memory_tokens
         + estimated_compressed_memory_tokens
         + estimated_core_tokens;
@@ -197,6 +207,60 @@ pub(super) fn apply_context_token_budget(
         },
         notes,
     }
+}
+
+fn budget_context_quotes(
+    recent: &mut [CoreContextEvent],
+    trace: &mut [CoreContextEvent],
+    budget: usize,
+) -> usize {
+    if recent
+        .iter()
+        .chain(trace.iter())
+        .all(|event| event.quoted_events.is_empty())
+    {
+        return 0;
+    }
+
+    // Preserve the authored-turn selection. Both prompt modes use one copy of
+    // a turn, even when the package includes it in both recent and trace.
+    let mut remaining = budget;
+    for event in recent.iter_mut().rev() {
+        budget_event_quotes(event, RECENT_MAX_TEXT_CHARS, &mut remaining);
+    }
+    let recent_quotes: HashMap<_, _> = recent
+        .iter()
+        .filter(|event| !event.event_id.is_empty())
+        .map(|event| (event.event_id.as_str(), &event.quoted_events))
+        .collect();
+    for event in trace.iter_mut().rev() {
+        if let Some(quotes) = recent_quotes.get(event.event_id.as_str()) {
+            event.quoted_events.clone_from(quotes);
+        } else {
+            budget_event_quotes(event, OLDER_TRACE_MAX_TEXT_CHARS, &mut remaining);
+        }
+    }
+    budget - remaining
+}
+
+fn budget_event_quotes(event: &mut CoreContextEvent, max_text_chars: usize, remaining: &mut usize) {
+    if event
+        .text
+        .as_ref()
+        .is_none_or(|text| text.trim().is_empty())
+    {
+        event.quoted_events.clear();
+        return;
+    }
+    event.quoted_events.retain_mut(|quote| {
+        let Some(used_chars) =
+            fit_quote_to_prompt(quote, max_text_chars, remaining.saturating_mul(2))
+        else {
+            return false;
+        };
+        *remaining -= used_chars.div_ceil(2);
+        true
+    });
 }
 
 pub(super) fn keep_front_within_budget_by<T: Clone>(

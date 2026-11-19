@@ -86,6 +86,20 @@ struct CandidateReviewOperationIntent {
     candidate_applied: bool,
 }
 
+impl CandidateReviewOperationIntent {
+    fn clear_attribution_histories(&mut self) {
+        for fact in self
+            .core_effects
+            .iter_mut()
+            .flat_map(|effect| &mut effect.category.facts)
+            .chain(self.result.promoted_fact.iter_mut())
+            .chain(&mut self.result.contested_facts)
+        {
+            fact.attribution_history.clear();
+        }
+    }
+}
+
 impl<S: Storage> MemoryEngine<S> {
     pub fn bind_reflection_session(
         &self,
@@ -213,6 +227,8 @@ impl<S: Storage> MemoryEngine<S> {
                 result
             }
             LlmResponse::Err { kind, detail, .. } => {
+                self.ensure_manifest()?;
+                self.load_task_for_response(task_id)?;
                 self.mark_reflection_task_failed_best_effort(
                     task_id,
                     format!("{request_id} {kind:?}: {detail}"),
@@ -319,7 +335,7 @@ impl<S: Storage> MemoryEngine<S> {
         )?;
         let operation_id = format!("reflection_apply_{task_id}");
 
-        let task = self.storage.load_task(task_id)?;
+        let task = self.load_task_for_response(task_id)?;
         if task.task_type != TaskType::ReflectionAnalyze {
             return Err(MemoryEngineError::Validation(format!(
                 "task is not reflection_analyze: {task_id}"
@@ -355,7 +371,7 @@ impl<S: Storage> MemoryEngine<S> {
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_else(|| reflection_scope_id(&source_session_id, task_scope.as_deref()));
-        self.with_resource_lock(reflection_lock_key(&reflection_scope), || {
+        self.with_reflection_task_write(&task, &reflection_scope, |task| {
             if let Some(operation) = self.storage.load_journaled_operation(&operation_id)? {
                 if operation.op_type != JournalOperationType::ReflectionApply {
                     return Err(MemoryEngineError::Validation(format!(
@@ -684,6 +700,49 @@ impl<S: Storage> MemoryEngine<S> {
         })
     }
 
+    fn with_reflection_task_write<T>(
+        &self,
+        snapshot: &PendingTask,
+        reflection_scope: &str,
+        f: impl FnOnce(PendingTask) -> Result<T>,
+    ) -> Result<T> {
+        let task_id = &snapshot.task_id;
+        let mut sessions = BTreeSet::new();
+        if let Some(session) = snapshot.inputs["source_session_id"].as_str() {
+            sessions.insert(session);
+        }
+        if let Some(inputs) = snapshot.inputs["source_session_ids"].as_array() {
+            sessions.extend(inputs.iter().filter_map(Value::as_str));
+        }
+        let mut scopes = vec![reflection_scope.to_owned()];
+        for session in &sessions {
+            scopes.push(self.with_resource_lock(session_lock_key(session), || {
+                Ok(self
+                    .storage
+                    .read_session_metadata(session)?
+                    .effective_personality_scope_id()
+                    .to_owned())
+            })?);
+        }
+        if let Some(archives) = snapshot.inputs["archives"].as_array() {
+            for archive_id in archives
+                .iter()
+                .filter_map(|archive| archive["archive_id"].as_str())
+            {
+                let archive = self
+                    .storage
+                    .read_archive_entry_by_id(archive_id)
+                    .map_err(|error| self.task_after_erasure_error(task_id, error))?;
+                scopes.push(archive.effective_personality_scope_id().to_owned());
+            }
+        }
+        self.with_memory_write_targets(&scopes, &sessions.into_iter().collect::<Vec<_>>(), || {
+            self.with_resource_lock(reflection_lock_key(reflection_scope), || {
+                f(self.load_task_for_response(task_id)?)
+            })
+        })
+    }
+
     fn execute_reflection_apply_operation_unlocked(
         &self,
         operation: JournalOperation,
@@ -719,6 +778,9 @@ impl<S: Storage> MemoryEngine<S> {
                 expected: REFLECTION_OPERATION_SCHEMA_VERSION.to_string(),
                 actual: intent.schema_version,
             });
+        }
+        if operation.state == JournalState::Completed {
+            return Ok(intent.outcome);
         }
 
         for effect in intent.prepared_actions.clone() {
@@ -1039,13 +1101,29 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn recover_pending_memory_operations_unlocked(&self) -> Result<usize> {
-        let operations = self.storage.load_journaled_operations()?;
+        let mut operations = self.storage.load_journaled_operations()?;
         if let Some(warning) = operations.warnings.first() {
             return Err(MemoryEngineError::Storage(warning.note()));
         }
+        // Finish deletion plans before replaying any of the work they retire.
+        operations.items.sort_by_key(|operation| {
+            !matches!(
+                operation.op_type,
+                JournalOperationType::DeleteSession
+                    | JournalOperationType::PurgeScope
+                    | JournalOperationType::EraseSubject
+            )
+        });
         let mut recovered = 0usize;
         for operation in operations.items {
             if operation.state == JournalState::NeedsManualReview {
+                if self
+                    .storage
+                    .load_journaled_operation(&operation.op_id)?
+                    .is_none()
+                {
+                    continue;
+                }
                 return Err(MemoryEngineError::Validation(format!(
                     "journal operation requires manual review: {} ({})",
                     operation.op_id,
@@ -1059,54 +1137,69 @@ impl<S: Storage> MemoryEngine<S> {
                 JournalOperationType::ReflectionApply => {
                     let intent: ReflectionApplyOperationIntent =
                         serde_json::from_value(operation.intent.clone())?;
-                    self.with_resource_lock(reflection_lock_key(&intent.reflection_scope), || {
-                        let current = self
-                            .storage
-                            .load_journaled_operation(&operation.op_id)?
-                            .ok_or_else(|| {
-                                MemoryEngineError::Storage(format!(
-                                    "journal operation disappeared during recovery: {}",
-                                    operation.op_id
-                                ))
-                            })?;
-                        self.execute_reflection_apply_operation_unlocked(current)
-                            .map(|_| ())
-                    })?;
-                    recovered += 1;
+                    if self
+                        .storage
+                        .load_journaled_operation(&operation.op_id)?
+                        .is_none()
+                    {
+                        continue;
+                    }
+                    let snapshot = match self.load_task_for_response(&intent.task_id) {
+                        Ok(task) => task,
+                        Err(MemoryEngineError::OperationStale) => {
+                            self.storage.delete_journaled_operation(&operation.op_id)?;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    match self.with_reflection_task_write(
+                        &snapshot,
+                        &intent.reflection_scope,
+                        |_| {
+                            let Some(current) =
+                                self.storage.load_journaled_operation(&operation.op_id)?
+                            else {
+                                return Ok(0);
+                            };
+                            self.execute_reflection_apply_operation_unlocked(current)?;
+                            Ok(1)
+                        },
+                    ) {
+                        Ok(count) => recovered += count,
+                        Err(MemoryEngineError::OperationStale) => {}
+                        Err(error) => return Err(error),
+                    }
                 }
                 JournalOperationType::CandidateReview => {
                     let intent: CandidateReviewOperationIntent =
                         serde_json::from_value(operation.intent.clone())?;
-                    self.with_resource_lock(candidate_lock_key(&intent.candidate_id), || {
-                        let current = self
-                            .storage
-                            .load_journaled_operation(&operation.op_id)?
-                            .ok_or_else(|| {
-                                MemoryEngineError::Storage(format!(
-                                    "journal operation disappeared during recovery: {}",
-                                    operation.op_id
-                                ))
-                            })?;
-                        self.execute_candidate_review_operation_unlocked(current)
-                            .map(|_| ())
-                    })?;
-                    recovered += 1;
+                    let apply = || {
+                        self.with_resource_lock(candidate_lock_key(&intent.candidate_id), || {
+                            let Some(current) =
+                                self.storage.load_journaled_operation(&operation.op_id)?
+                            else {
+                                return Ok(0);
+                            };
+                            self.execute_candidate_review_operation_unlocked(current)?;
+                            Ok(1)
+                        })
+                    };
+                    recovered += match &intent.desired_candidate.core_scope {
+                        Some(scope) => self.with_scope_memory_write(scope, apply)?,
+                        None => apply()?,
+                    };
                 }
                 JournalOperationType::Migration => {
-                    self.with_resource_lock("hypothesis_graph:migration".to_string(), || {
-                        let current = self
-                            .storage
-                            .load_journaled_operation(&operation.op_id)?
-                            .ok_or_else(|| {
-                                MemoryEngineError::Storage(format!(
-                                    "journal operation disappeared during recovery: {}",
-                                    operation.op_id
-                                ))
-                            })?;
-                        self.recover_hypothesis_graph_migration_unlocked(current)
-                            .map(|_| ())
-                    })?;
-                    recovered += 1;
+                    recovered +=
+                        self.with_resource_lock("hypothesis_graph:migration".to_string(), || {
+                            let Some(current) =
+                                self.storage.load_journaled_operation(&operation.op_id)?
+                            else {
+                                return Ok(0);
+                            };
+                            self.recover_hypothesis_graph_migration_unlocked(current)?;
+                            Ok(1)
+                        })?;
                 }
                 JournalOperationType::DeleteSession | JournalOperationType::PurgeScope => {
                     let intent: MemoryErasureOperationIntent =
@@ -1116,23 +1209,32 @@ impl<S: Storage> MemoryEngine<S> {
                             session_lock_key(&intent.plan.target_id)
                         }
                         MemoryErasureKind::PurgeScope => {
-                            format!("memory_erasure:scope:{}", intent.plan.target_id)
+                            super::erasure_flow::scope_erasure_lock_key(&intent.plan.target_id)
                         }
                     };
-                    self.with_resource_lock(lock_key, || {
-                        let current = self
-                            .storage
-                            .load_journaled_operation(&operation.op_id)?
-                            .ok_or_else(|| {
-                                MemoryEngineError::Storage(format!(
-                                    "journal operation disappeared during recovery: {}",
-                                    operation.op_id
-                                ))
-                            })?;
-                        self.execute_memory_erasure_operation_unlocked(current)
-                            .map(|_| ())
+                    recovered += self.with_resource_lock(lock_key, || {
+                        let Some(current) =
+                            self.storage.load_journaled_operation(&operation.op_id)?
+                        else {
+                            return Ok(0);
+                        };
+                        if current.op_type != operation.op_type
+                            || current.created_at != operation.created_at
+                        {
+                            return Ok(0);
+                        }
+                        self.execute_memory_erasure_operation_unlocked(current)?;
+                        Ok(1)
                     })?;
-                    recovered += 1;
+                }
+                JournalOperationType::IngestEvent => {
+                    recovered += usize::from(self.recover_ingest_operation(operation)?);
+                }
+                JournalOperationType::EraseSubject => {
+                    recovered += usize::from(self.recover_subject_erasure(operation)?);
+                }
+                JournalOperationType::MemoryUnitPublish => {
+                    recovered += usize::from(self.recover_memory_unit_publication(operation)?);
                 }
                 _ => {}
             }
@@ -1148,10 +1250,28 @@ impl<S: Storage> MemoryEngine<S> {
     pub fn review_candidate(&self, input: CandidateReviewInput) -> Result<CandidateReviewResult> {
         validate_candidate_review_input(&input)?;
         self.ensure_manifest()?;
+        let scope = self
+            .storage
+            .read_candidate_belief(&input.candidate_id)?
+            .core_scope;
+        let apply = || self.review_candidate_in_scope(input, scope.as_deref());
+        match &scope {
+            Some(scope) => self.with_scope_memory_write(scope, apply),
+            None => apply(),
+        }
+    }
 
+    fn review_candidate_in_scope(
+        &self,
+        input: CandidateReviewInput,
+        scope: Option<&str>,
+    ) -> Result<CandidateReviewResult> {
         self.with_resource_lock(candidate_lock_key(&input.candidate_id), || {
             let now = now_rfc3339()?;
             let candidate = self.storage.read_candidate_belief(&input.candidate_id)?;
+            if candidate.core_scope.as_deref() != scope {
+                return Err(MemoryEngineError::OperationStale);
+            }
             if !matches!(
                 candidate.status,
                 CandidateStatus::Draft | CandidateStatus::ReadyForReview
@@ -1225,7 +1345,7 @@ impl<S: Storage> MemoryEngine<S> {
                 promoted_fact,
                 contested_facts,
             };
-            let intent = CandidateReviewOperationIntent {
+            let mut intent = CandidateReviewOperationIntent {
                 schema_version: REFLECTION_OPERATION_SCHEMA_VERSION.to_string(),
                 candidate_id: candidate.candidate_id.clone(),
                 previous_candidate_updated_at: candidate.updated_at.clone(),
@@ -1236,6 +1356,7 @@ impl<S: Storage> MemoryEngine<S> {
                 applied_core_categories: Vec::new(),
                 candidate_applied: false,
             };
+            intent.clear_attribution_histories();
             let operation = JournalOperation {
                 schema_version: JOURNAL_OPERATION_SCHEMA_VERSION.to_string(),
                 op_id: operation_id,
@@ -1306,6 +1427,14 @@ impl<S: Storage> MemoryEngine<S> {
                 return Err(MemoryEngineError::Validation(format!(
                     "candidate Core evidence is no longer active in its scope: {fact_id}"
                 )));
+            }
+            if let Some(correction) = fact.attribution_changed_at.as_deref() {
+                let reviewed_basis = OffsetDateTime::parse(&candidate.created_at, &Rfc3339);
+                let corrected_basis = OffsetDateTime::parse(correction, &Rfc3339);
+                if !matches!((reviewed_basis, corrected_basis), (Ok(reviewed), Ok(corrected)) if reviewed > corrected)
+                {
+                    return Err(MemoryEngineError::NeedsNewReview);
+                }
             }
         }
         Ok(())
@@ -1378,12 +1507,30 @@ impl<S: Storage> MemoryEngine<S> {
                 tags.push("manual_review".to_string());
                 let tags = unique_strings(tags);
                 let source_archive_ids = unique_strings(candidate.supporting_archive_ids.clone());
+                let incoming = CoreFactInput {
+                    schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                    category: promotion_category.clone(),
+                    scope: candidate.core_scope.clone(),
+                    subject: candidate.subject.clone(),
+                    text: text.clone(),
+                    confidence: candidate.confidence,
+                    source_archive_ids: source_archive_ids.clone(),
+                    source_candidate_id: Some(candidate.candidate_id.clone()),
+                    tags: tags.clone(),
+                };
+                for fact in &desired.facts {
+                    if core_policy::would_recreate_corrected_attribution(fact, &incoming)? {
+                        return Err(MemoryEngineError::NeedsNewReview);
+                    }
+                }
                 let fact = if let Some(existing) = desired.facts.iter_mut().find(|fact| {
                     normalize_match_text(&fact.text) == needle
                         && fact.scope == candidate.core_scope
                         && same_subject(fact.subject.as_ref(), candidate.subject.as_ref())
                 }) {
-                    existing.subject = candidate.subject.clone();
+                    if existing.attribution_changed_at.is_none() {
+                        existing.subject = candidate.subject.clone();
+                    }
                     existing.text = text;
                     existing.status = CoreFactStatus::Active;
                     existing.confidence = existing
@@ -1413,6 +1560,8 @@ impl<S: Storage> MemoryEngine<S> {
                         tags,
                         links: Vec::new(),
                         review: None,
+                        attribution_history: Vec::new(),
+                        attribution_changed_at: None,
                     };
                     desired.facts.push(fact.clone());
                     fact
@@ -1476,15 +1625,36 @@ impl<S: Storage> MemoryEngine<S> {
                 actual: intent.schema_version,
             });
         }
+        intent.clear_attribution_histories();
         if operation.state == JournalState::Completed {
             return Ok(intent.result);
         }
 
         for effect in intent.core_effects.clone() {
-            let category_name = effect.category.category.clone();
+            let mut desired = effect.category;
+            let category_name = desired.category.clone();
             self.with_resource_lock(core_lock_key(&category_name), || {
                 let current = self.storage.read_core_store_category(&category_name)?;
-                if current == effect.category {
+                // Approval owns the changes it prepared. Attribution history
+                // belongs to the current fact and stays out of review journals.
+                let histories = current
+                    .facts
+                    .iter()
+                    .map(|fact| {
+                        (
+                            (fact.core_fact_id.as_str(), fact.scope.as_deref()),
+                            &fact.attribution_history,
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                for fact in &mut desired.facts {
+                    if let Some(history) =
+                        histories.get(&(fact.core_fact_id.as_str(), fact.scope.as_deref()))
+                    {
+                        fact.attribution_history = (*history).clone();
+                    }
+                }
+                if current == desired {
                     return Ok(());
                 }
                 if current.updated_at != effect.previous_updated_at {
@@ -1492,7 +1662,7 @@ impl<S: Storage> MemoryEngine<S> {
                         "Core category changed while durable candidate review was being applied: {category_name}"
                     )));
                 }
-                self.storage.write_core_store_category(&effect.category)
+                self.storage.write_core_store_category(&desired)
             })?;
             if !intent.applied_core_categories.contains(&category_name) {
                 intent.applied_core_categories.push(category_name);
@@ -1623,7 +1793,7 @@ impl<S: Storage> MemoryEngine<S> {
             let archive = if let Some(archive) = changed_archives.get_mut(&unit.archive_id) {
                 archive
             } else {
-                let archive = self.storage.read_archive_entry_by_id(&unit.archive_id)?;
+                let archive = self.storage.read_archive_entry_raw(&unit.archive_id)?;
                 changed_archives.insert(unit.archive_id.clone(), archive);
                 changed_archives
                     .get_mut(&unit.archive_id)
@@ -2151,11 +2321,7 @@ impl<S: Storage> MemoryEngine<S> {
             .collect::<Vec<_>>();
         let mut contexts = Vec::new();
         for archive in archives {
-            for unit in self
-                .storage
-                .read_memory_units_for_archive(&archive.archive_id)?
-                .into_items()
-            {
+            for unit in &archive.memory_units {
                 if unit.source_session_id != archive.source_session_id
                     || !allowed_sessions.contains(&unit.source_session_id)
                     || unit.status != MemoryUnitStatus::ActiveArchive
@@ -2164,7 +2330,7 @@ impl<S: Storage> MemoryEngine<S> {
                     continue;
                 }
                 contexts.push(ReflectionUnitContext {
-                    unit,
+                    unit: unit.clone(),
                     archive: archive.clone(),
                 });
             }
@@ -2208,16 +2374,10 @@ impl<S: Storage> MemoryEngine<S> {
             .collect::<Vec<_>>();
         let mut units = Vec::new();
         for archive in archives {
-            units.extend(
-                self.storage
-                    .read_memory_units_for_archive(&archive.archive_id)?
-                    .into_items()
-                    .into_iter()
-                    .filter(|unit| {
-                        unit.status == MemoryUnitStatus::ActiveArchive
-                            && allowed_sessions.contains(&unit.source_session_id)
-                    }),
-            );
+            units.extend(archive.memory_units.into_iter().filter(|unit| {
+                unit.status == MemoryUnitStatus::ActiveArchive
+                    && allowed_sessions.contains(&unit.source_session_id)
+            }));
         }
         Ok(units)
     }
@@ -2463,15 +2623,24 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub(super) fn mark_reflection_task_failed_best_effort(&self, task_id: &str, detail: String) {
-        if let Ok(mut task) = self.storage.load_task(task_id) {
-            if task.task_type == TaskType::ReflectionAnalyze
-                && matches!(task.state, TaskState::Pending | TaskState::Submitted)
-            {
+        if let Ok(snapshot) = self.load_task_for_response(task_id) {
+            let scope = reflection_scope_id(
+                snapshot.inputs["source_session_id"]
+                    .as_str()
+                    .unwrap_or_default(),
+                snapshot.inputs["core_scope"].as_str(),
+            );
+            let _ = self.with_reflection_task_write(&snapshot, &scope, |mut task| {
+                if task.task_type != TaskType::ReflectionAnalyze
+                    || !matches!(task.state, TaskState::Pending | TaskState::Submitted)
+                {
+                    return Ok(());
+                }
                 task.state = TaskState::Failed;
                 task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
                 task.last_error = Some(detail);
-                let _ = self.storage.save_task(&task);
-            }
+                self.storage.save_task(&task)
+            });
         }
     }
 }

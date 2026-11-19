@@ -23,6 +23,7 @@ impl<S: Storage> MemoryEngine<S> {
             .or_else(|| query.session_id.clone())
         {
             self.with_resource_lock(format!("archive_scope:{scope_id}"), || {
+                self.require_erasure_complete(MemoryErasureKind::PurgeScope, &scope_id)?;
                 self.recall_unlocked(query, record_feedback)
             })
         } else {
@@ -51,10 +52,11 @@ impl<S: Storage> MemoryEngine<S> {
                 .contains(&RecallSourceLayer::Archive);
 
         let archive_read = if archive_enabled {
-            Some(
-                self.storage
-                    .read_archive(&archive_filters_from_recall(&query.filters))?,
-            )
+            Some(self.storage.read_archive_scoped(
+                &archive_filters_from_recall(&query.filters),
+                query.personality_scope_id.as_deref(),
+                query.session_id.as_deref(),
+            )?)
         } else {
             None
         };
@@ -496,6 +498,7 @@ pub(super) fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 pub(super) fn session_lock_key(session_id: &str) -> String {
+    let session_id = crate::erasure::session_generation_id(session_id);
     format!("session:{session_id}")
 }
 

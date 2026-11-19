@@ -46,6 +46,202 @@ Context. Why this change exists.
 
 If the change involves any benchmark, performance number, or measurable claim, the entry must include a reproducibility-anchor: which tag the result was produced from, which dataset, which seed, where the result files live in the repository.
 
+## 2026-11-17 — Dialogue quotes resolve within their source scope
+
+The context package and structured prompt plan expose budgeted source
+projections for typed event references. They can resolve live and rotated
+events in sessions within the same scope. The text view renders the same
+projections on the turns it displays. Missing, hidden, foreign, and
+unverified legacy sources return an unavailable marker without source
+content when the reference remains. Completed erasure can remove the
+reference entirely. New packages reflect erasure without changing the
+reply author's words.
+
+Quote projection leaves Archive recall statistics unchanged. The optional
+`quoted_events` field is additive in the existing JSON schemas. Rust
+callers constructing a `CoreContextEvent` directly supply the new field.
+
+## 2026-11-16 — Telegram uses scope-bound memory APIs
+
+The Python and Godot adapters expose scoped inspection and restoration,
+subject inspection and erasure, and Core attribution correction.
+Telegram reads Archive, source evidence, and task metadata inside the
+current chat's scope. Its scheduler and telemetry use engine snapshots.
+
+Personal commands use the Telegram sender's identity. A group sees only
+the status of personal inspection, with details delivered privately when
+Telegram permits. Erasure applies to engine memory. Telegram messages and
+historical host logs remain outside its scope. New updates are logged
+without message text. The host stores supported quotes as references to
+source events.
+
+## 2026-11-16 — FileStorage supports explicit Core attribution correction
+
+The Rust API assigns or clears a fact's subject within the requested scope.
+It checks the expected revision and supports retry with the same operation
+ID. The fact keeps its identity, text, status, confidence, and source
+dependencies. An equivalent fact for the new subject blocks a collision.
+
+The correction history uses timestamps and scope-bound identity and
+operation digests. It stays outside model prompts. Subject erasure removes
+associated history. Automation based on stale sources or a challenge formed
+before the correction cannot undo the owner's decision.
+
+## 2026-11-16 — FileStorage supports inspection and erasure by subject
+
+The Rust API identifies people by a stable subject ID within a scope.
+Inspection returns attributable, separable records with source type and
+time. FileStorage journals subject erasure and replays a saved report for
+the same operation. The scope generation fences delayed writes.
+
+New events can identify quotes by source event ID. Removing a typed quote
+preserves the other speaker's authored text. For a known legacy reply with
+an inseparable copy, erasure removes its text and keeps author and time.
+Mixed derivatives with identified dependencies are withheld from recall.
+Reports surface detected uncertain attribution as `incomplete`. Unlinked
+copies in host text and payloads can remain in ordinary recall or context.
+
+## 2026-11-16 — FileStorage exposes scope-bound inspection and restoration
+
+The Rust API provides scope metadata, canonical Archive and unit details,
+verified source projections, and explicit restoration of forgotten units.
+Unknown IDs and IDs outside the requested scope both return an empty result.
+Inspection leaves memory status and recall statistics intact. When a cited
+source cannot be verified, the affected text is withheld. Restoration
+checks ownership again under the write lock and requires verifiable recorded
+citations. Python, Godot, and Telegram integration are scheduled in H3.5.
+
+## 2026-11-16 — FileStorage reads Archive units from canonical records
+
+A missing or corrupt unit file produces a diagnostic for its owning
+Archive. Healthy canonical units remain readable. When no expected unit
+can be read, the Archive stays out of recall. An unfinished publication
+or an invalid receipt also keeps the affected Archive out of recall.
+
+Legacy episodes without a known unit set retain their episode text. A
+receipt with an empty set keeps the episode and clears stale compact unit
+text. Scoped recall diagnostics name records owned by the requested scope
+or session. Diagnostics with an unknown owner belong to the trusted
+storage inventory.
+
+## 2026-11-16 — Legacy operations require saved evidence for recovery
+
+Existing Archives remain readable. Replaying a completed legacy operation
+without a verifiable receipt reports an unavailable result. A pending review
+without its frozen basis requires a new review initiated by the host. Sleep
+reuses inputs saved for the same run. Automatic extraction repair requires a
+recorded failure or skip and recoverable source events.
+
+Transactional Storage v2 Sleep and FileStorage share memory-unit construction
+and the published list of IDs, including `[]` for successful empty extraction.
+Storage v2 commits this outcome in its own transaction. Generation checks for
+ingest and erasure, review recovery, and payload pruning remain FileStorage
+contracts.
+
+## 2026-11-16 — FileStorage can prune expired operation payloads
+
+The explicit maintenance call removes expired copies from terminal tasks,
+Sleep checkpoints and completed journals. It respects dependencies still
+needed for recovery and preserves Archive completeness. An expired result
+can become unavailable after pruning. Expired and erased ingest receipts
+leave opaque markers, so retrying an old ID cannot append the event again.
+
+## 2026-11-16 — FileStorage recovers accepted extraction as a complete set
+
+Archive publication journals the full accepted extraction result before
+writing any units. Restart resumes the same set with the original IDs.
+Readers get an incomplete result while publication is pending. A successful
+empty result is terminal and prevents an extra provider repair call.
+Archives from older interrupted runs can reuse matching standalone IDs when
+the host redelivers the complete result.
+
+## 2026-11-16 — FileStorage checks review basis and preserves explicit restoration
+
+Fidelity checks the frozen thesis, subject and evidence before applying a
+verdict. A forgotten unit stays forgotten until explicitly restored. Forgetting
+checks availability and an intervening review before applying changes. Exact
+replays of completed reviews with receipts return their original results.
+Pending fidelity tasks without a stored basis require a fresh review, and old
+completed reviews without receipts report an unavailable result.
+
+## 2026-11-16 — FileStorage fences delayed writes across erasure
+
+Local hosts can capture a scope and session generation before queuing an
+event. The protected ingest API rejects stale generations even after an
+empty erasure and restart. Erasure recovery repeats the same generation
+transition, and responses for erased task IDs return a stale operation
+error. The existing ingest calls keep their delivery-time semantics.
+
+## 2026-11-16 — FileStorage checks archive coverage before resuming Sleep
+
+Sleep recovery checks completed Archives before returning older runs to the
+host. Runs with input already covered by another Archive are closed as
+superseded. Viable legacy checkpoints with disjoint input remain eligible
+on restart. An unreadable run file stays available for diagnosis while
+valid runs in other sessions can proceed.
+
+## 2026-11-16 — FileStorage keeps session access isolated during ingest
+
+Python `read_session` and context packaging take the session lock while
+reading local data. A write to another scope can proceed during scope
+enumeration for erasure. Python exposes distinct exceptions for ingest
+conflicts, unavailable results and incomplete operations. The exceptions
+inherit from `RuntimeError`.
+
+## 2026-11-16 — FileStorage accepts stable IDs for retryable ingest
+
+`ingest_idempotent` is available in Rust, Python and Godot. Replaying the
+same operation within 30 days returns the original event, including after
+restart or raw event rotation. A changed request under the same ID is
+rejected. An interrupted append is repaired from the journal before it
+can be acknowledged. Legacy `ingest` retains its append behavior.
+Generation checks for events first delivered after erasure belong to H2.2.
+
+## 2026-11-15 — Release workflow for installed Python wheels
+
+The repository can build Linux and Windows x86-64 wheels for CPython 3.12 in
+GitHub Actions. It validates the installed build identity and Python API on
+each platform and records the SHA-256 of each wheel. Publication requires an
+existing version tag and accepted release evidence. See the
+[integrator guide](wiki/pages/integration/local-development.md#встановлення-релізного-wheel).
+
+## 2026-11-15 — Context and recall report ignored JSON request fields
+
+Python and Godot add a note for each ignored field in `core_context_package`
+and `recall`. Notes carry JSON Pointer paths. Recall includes them in the
+optional debug output as well. Existing validation and query behavior remain
+in force. Host-owned `domain_state` and `context` accept arbitrary keys.
+
+## 2026-11-15 — Python wheel includes API types and response contracts
+
+The Python package includes `__init__.pyi`, `py.typed`, a registry of public
+calls with their JSON request and result type names, and JSON Schemas for the
+response structures exercised by the adapter tests. CI installs the package
+and checks its signatures and responses. `import memory_engine` continues to
+expose the same native methods and JSON string interface.
+
+## 2026-11-15 — Adapters report the source of their build
+
+Python exposes `memory_engine.build_info()` and Godot exposes
+`MemoryEngineGodot.build_info()` before opening storage. The result reports the
+package version, full Git commit and tracked changes at build time. Builders
+can supply the source identity for archives without `.git`. Unknown fields
+are `None` in Python and `null` in Godot. See the
+[build identity instructions](wiki/pages/integration/local-development.md#як-звірити-джерело-збірки).
+
+## 2026-11-15 — FileStorage resumes an existing multi-pass Sleep run
+
+`begin_sleep_run` and `begin_sleep_run_with_options` return an existing open
+run for the session with its original options and progress. Reopening the
+engine preserves this behavior. The multi-pass driver rejects stale requests
+to continue a cancelled or finished run. Cancelling a terminal run returns its
+stored state.
+
+If a session already has multiple open runs, the host can list their IDs and
+resolve them explicitly. Existing preliminary archives without an attached
+run stay available for diagnosis. See the
+[Sleep contract](wiki/pages/foundation/contracts.md#94-multi-pass-sleep-provider-contract).
+
 ## 2026-11-15 — Smartest2 archive and Core rendering fixes merged into `main`
 
 Merge `bfbfd9f` brings the source of the Smartest2 `0.1.2` wheel into local

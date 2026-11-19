@@ -3,7 +3,8 @@ use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, UtcOffset};
 
 use crate::core_store::{
-    AssociativeMemoryItem, CoreContextEvent, CoreContextFact, CoreContextPackage, CoreFactStatus,
+    AssociativeMemoryItem, CoreContextEvent, CoreContextFact, CoreContextPackage, CoreContextQuote,
+    CoreContextQuoteStatus, CoreFactStatus,
 };
 use crate::recall::RecallItem;
 
@@ -13,6 +14,7 @@ pub const OLDER_TRACE_MAX_TEXT_CHARS: usize = 180;
 pub const RECENT_MAX_TEXT_CHARS: usize = 900;
 pub const CORE_FACT_MAX_TEXT_CHARS: usize = 260;
 pub const MEMORY_PROMPT_PLAN_SCHEMA_VERSION: &str = "memory_prompt_plan.v1";
+const TRUNCATED_QUOTE_ATTRIBUTE: &str = " truncated=\"true\"";
 
 /// Provider-neutral prompt plan for chat APIs that carry dialogue roles
 /// natively. Memory sections remain rendered by the core; dialogue remains a
@@ -379,15 +381,16 @@ fn render_named_section(name: &str, mut lines: Vec<String>) -> String {
     rendered.join("\n")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DialogueEvent {
+#[derive(Debug, Clone)]
+struct DialogueEvent<'a> {
     event_id: String,
     timestamp: String,
     role: String,
     text: String,
+    quoted_events: &'a [CoreContextQuote],
 }
 
-fn normalized_context_events(events: &[CoreContextEvent]) -> Vec<DialogueEvent> {
+fn normalized_context_events(events: &[CoreContextEvent]) -> Vec<DialogueEvent<'_>> {
     events
         .iter()
         .filter_map(|event| {
@@ -397,6 +400,7 @@ fn normalized_context_events(events: &[CoreContextEvent]) -> Vec<DialogueEvent> 
                 timestamp: clean_string(&event.timestamp).to_string(),
                 role: dialogue_role(event),
                 text: text.to_string(),
+                quoted_events: &event.quoted_events,
             })
         })
         .collect()
@@ -418,10 +422,10 @@ fn dialogue_role(event: &CoreContextEvent) -> String {
         .unwrap_or_else(|| "user".to_string())
 }
 
-fn drop_current_user_message(
-    mut events: Vec<DialogueEvent>,
+fn drop_current_user_message<'a>(
+    mut events: Vec<DialogueEvent<'a>>,
     current_user_message: &str,
-) -> Vec<DialogueEvent> {
+) -> Vec<DialogueEvent<'a>> {
     let current = clean_string(current_user_message);
     if events
         .last()
@@ -457,21 +461,22 @@ fn render_associative_memories(
         .collect()
 }
 
-fn render_dialogue_lines(events: &[DialogueEvent], max_text_chars: usize) -> Vec<String> {
-    events
-        .iter()
-        .filter_map(|event| {
-            let text = truncate_text(&event.text, max_text_chars);
-            (!text.is_empty()).then(|| format!("{}: {}", event.role, xml_escape(&text)))
-        })
-        .collect()
+fn render_dialogue_lines(events: &[DialogueEvent<'_>], max_text_chars: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for event in events {
+        let text = truncate_text(&event.text, max_text_chars);
+        if !text.is_empty() {
+            append_dialogue_lines(&mut lines, event, &text);
+        }
+    }
+    lines
 }
 
 /// Older-trace rendering with day markers: one `[yesterday]`-style line per
 /// calendar-day group instead of a label on every line. Without a trusted
 /// clock this renders exactly like `render_dialogue_lines`.
 fn render_dialogue_lines_with_day_markers(
-    events: &[DialogueEvent],
+    events: &[DialogueEvent<'_>],
     max_text_chars: usize,
     time: &TimeLabelContext,
 ) -> Vec<String> {
@@ -488,9 +493,94 @@ fn render_dialogue_lines_with_day_markers(
                 current_marker = Some(label);
             }
         }
-        lines.push(format!("{}: {}", event.role, xml_escape(&text)));
+        append_dialogue_lines(&mut lines, event, &text);
     }
     lines
+}
+
+fn append_dialogue_lines(lines: &mut Vec<String>, event: &DialogueEvent<'_>, text: &str) {
+    lines.push(format!("{}: {}", event.role, xml_escape(text)));
+    lines.extend(
+        event
+            .quoted_events
+            .iter()
+            .map(render_context_quote_prompt_line),
+    );
+}
+
+pub(crate) fn render_context_quote_prompt_line(quote: &CoreContextQuote) -> String {
+    let event_id = xml_escape_attribute(&quote.event_id);
+    if quote.status == CoreContextQuoteStatus::Unavailable {
+        return format!("  <quote event_id=\"{event_id}\" status=\"unavailable\" />");
+    }
+
+    let mut line = format!("  <quote event_id=\"{event_id}\" status=\"available\"");
+    if let Some(speaker) = &quote.speaker {
+        line.push_str(&format!(
+            " speaker=\"{}\" speaker_id=\"{}\"",
+            xml_escape_attribute(&speaker.name),
+            xml_escape_attribute(&speaker.id),
+        ));
+    }
+    if let Some(timestamp) = &quote.timestamp {
+        line.push_str(&format!(
+            " timestamp=\"{}\"",
+            xml_escape_attribute(timestamp)
+        ));
+    }
+    if quote.truncated {
+        line.push_str(TRUNCATED_QUOTE_ATTRIBUTE);
+    }
+    line.push('>');
+    line.push_str(&xml_escape(quote.text.as_deref().unwrap_or_default()));
+    line.push_str("</quote>");
+    line
+}
+
+/// Fit a projection using the same escaped character accounting as the text
+/// renderer. The stored string is kept byte-for-byte when it fits.
+pub(crate) fn fit_quote_to_prompt(
+    quote: &mut CoreContextQuote,
+    max_text_chars: usize,
+    max_prompt_chars: usize,
+) -> Option<usize> {
+    let text = quote.text.take();
+    let rendered_overhead = render_context_quote_prompt_line(quote).chars().count() + 1;
+    let escaped_text_limit = max_prompt_chars.checked_sub(rendered_overhead)?;
+    if quote.status == CoreContextQuoteStatus::Unavailable {
+        return Some(rendered_overhead);
+    }
+    let text = text?;
+    if text.chars().take(max_text_chars + 1).count() <= max_text_chars {
+        let escaped_width = text.chars().map(xml_escaped_char_width).sum::<usize>();
+        if escaped_width <= escaped_text_limit {
+            quote.text = Some(text);
+            return Some(rendered_overhead + escaped_width);
+        }
+    }
+
+    let truncation_overhead = if quote.truncated {
+        0
+    } else {
+        TRUNCATED_QUOTE_ATTRIBUTE.len()
+    };
+    let mut escaped_remaining = escaped_text_limit.checked_sub(truncation_overhead + 3)?;
+    let raw_prefix_limit = max_text_chars.checked_sub(3)?;
+    let (last_index, last_char) = text
+        .char_indices()
+        .take(raw_prefix_limit)
+        .take_while(|&(_, ch)| {
+            if let Some(remaining) = escaped_remaining.checked_sub(xml_escaped_char_width(ch)) {
+                escaped_remaining = remaining;
+                true
+            } else {
+                false
+            }
+        })
+        .last()?;
+    quote.text = Some(format!("{}...", &text[..last_index + last_char.len_utf8()]));
+    quote.truncated = true;
+    Some(max_prompt_chars - escaped_remaining)
 }
 
 pub fn render_core_fact_prompt_line(fact: &CoreContextFact) -> Option<String> {
@@ -665,25 +755,80 @@ fn format_score(value: f64) -> String {
 fn xml_escape(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
-        match ch {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            _ => escaped.push(ch),
+        if let Some(entity) = xml_entity(ch) {
+            escaped.push_str(entity);
+        } else {
+            escaped.push(ch);
         }
     }
     escaped
 }
 
+fn xml_entity(ch: char) -> Option<&'static str> {
+    match ch {
+        '&' => Some("&amp;"),
+        '<' => Some("&lt;"),
+        '>' => Some("&gt;"),
+        _ => None,
+    }
+}
+
+fn xml_escaped_char_width(ch: char) -> usize {
+    xml_entity(ch).map_or(1, str::len)
+}
+
+fn xml_escape_attribute(value: &str) -> String {
+    xml_escape(value).replace('"', "&quot;")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{render_core_fact_prompt_line, render_memory_view, TimeLabelContext};
+    use super::{
+        fit_quote_to_prompt, render_context_quote_prompt_line, render_core_fact_prompt_line,
+        render_memory_view, TimeLabelContext,
+    };
     use crate::core_store::{
         AssociativeMemoryActivation, AssociativeMemoryItem, CoreContextEvent, CoreContextFact,
-        CoreContextPackage, CoreFactStatus,
+        CoreContextPackage, CoreContextQuote, CoreContextQuoteStatus, CoreFactStatus,
     };
     use crate::recall::{RecallItem, RecallSourceLayer};
     use crate::types::{Speaker, TimeRange};
+
+    #[test]
+    fn quote_budget_keeps_exact_text_or_an_escaped_prefix_with_a_truncation_marker() {
+        let mut quote = CoreContextQuote {
+            event_id: "source".into(),
+            status: CoreContextQuoteStatus::Available,
+            speaker: Some(Speaker {
+                id: "olena_1".into(),
+                name: "Олена \"А\"".into(),
+            }),
+            timestamp: Some("2026-11-17T12:00:00Z".into()),
+            text: Some(" <&Привіт\n ".into()),
+            truncated: false,
+        };
+        let full_size = render_context_quote_prompt_line(&quote).chars().count() + 1;
+        assert_eq!(
+            fit_quote_to_prompt(&mut quote, 900, full_size),
+            Some(full_size)
+        );
+        assert_eq!(quote.text.as_deref(), Some(" <&Привіт\n "));
+        assert!(!quote.truncated);
+
+        quote.text = Some(format!("<&{}", "щ".repeat(200)));
+        let mut marker = quote.clone();
+        marker.text = None;
+        marker.truncated = true;
+        let limit =
+            render_context_quote_prompt_line(&marker).chars().count() + 1 + "&lt;&amp;...".len();
+        assert_eq!(fit_quote_to_prompt(&mut quote, 180, limit), Some(limit));
+        assert!(quote.truncated);
+        assert_eq!(quote.text.as_deref(), Some("<&..."));
+        let clipped = render_context_quote_prompt_line(&quote);
+        assert_eq!(clipped.chars().count() + 1, limit);
+        assert!(clipped.contains("speaker=\"Олена &quot;А&quot;\""));
+        assert!(clipped.ends_with("&lt;&amp;...</quote>"));
+    }
 
     fn fact_with_subject(id: &str, name: &str) -> CoreContextFact {
         CoreContextFact {
@@ -756,6 +901,7 @@ mod tests {
                     source: "bot".to_string(),
                     speaker: None,
                     text: Some("We talked about the cat Irzha.".to_string()),
+                    quoted_events: Vec::new(),
                     payload: serde_json::json!({}),
                     tags: vec![],
                     theme: None,
@@ -767,6 +913,7 @@ mod tests {
                     source: "user".to_string(),
                     speaker: None,
                     text: Some("Do you remember Irzha?".to_string()),
+                    quoted_events: Vec::new(),
                     payload: serde_json::json!({}),
                     tags: vec![],
                     theme: None,
@@ -871,6 +1018,7 @@ mod tests {
                 source: "user".to_string(),
                 speaker: None,
                 text: Some("Fresh line.".to_string()),
+                quoted_events: Vec::new(),
                 payload: serde_json::json!({}),
                 tags: vec![],
                 theme: None,
@@ -883,6 +1031,7 @@ mod tests {
                     source: "user".to_string(),
                     speaker: None,
                     text: Some("Older line.".to_string()),
+                    quoted_events: Vec::new(),
                     payload: serde_json::json!({}),
                     tags: vec![],
                     theme: None,
@@ -894,6 +1043,7 @@ mod tests {
                     source: "user".to_string(),
                     speaker: None,
                     text: Some("Fresh line.".to_string()),
+                    quoted_events: Vec::new(),
                     payload: serde_json::json!({}),
                     tags: vec![],
                     theme: None,
@@ -1023,6 +1173,7 @@ mod tests {
                     name: "Жека".to_string(),
                 }),
                 text: Some("Купив мотоцикл!".to_string()),
+                quoted_events: Vec::new(),
                 payload: serde_json::json!({}),
                 tags: vec![],
                 theme: None,
@@ -1034,6 +1185,7 @@ mod tests {
                 source: "bot".to_string(),
                 speaker: None,
                 text: Some("Вітаю з покупкою!".to_string()),
+                quoted_events: Vec::new(),
                 payload: serde_json::json!({}),
                 tags: vec![],
                 theme: None,
@@ -1048,6 +1200,7 @@ mod tests {
                     name: "Антон".to_string(),
                 }),
                 text: Some("А клюло сьогодні на світанку?".to_string()),
+                quoted_events: Vec::new(),
                 payload: serde_json::json!({}),
                 tags: vec![],
                 theme: None,

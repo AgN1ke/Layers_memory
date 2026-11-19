@@ -304,6 +304,7 @@ fn event(text: &str) -> IngestEvent {
         theme: None,
         emotional_tone: None,
         speaker: None,
+        quoted_event_ids: None,
         links: Vec::new(),
         importance_hint: Default::default(),
         processing_mode: Default::default(),

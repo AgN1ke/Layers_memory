@@ -1,3 +1,4 @@
+use super::transactional_support::serializable_digest;
 use super::*;
 
 impl<S: Storage> MemoryEngine<S> {
@@ -9,7 +10,12 @@ impl<S: Storage> MemoryEngine<S> {
         }
         self.ensure_manifest()?;
 
-        self.with_resource_lock(session_lock_key(session_id), || {
+        self.with_session_memory_write(session_id, || {
+            if self.open_sleep_run_for_session(session_id)?.is_some() {
+                return Err(MemoryEngineError::Validation(format!(
+                    "session already has an open Sleep run; resume it with begin_sleep_run: {session_id}"
+                )));
+            }
             self.sleep_stage1_unlocked(session_id)
         })
     }
@@ -30,12 +36,169 @@ impl<S: Storage> MemoryEngine<S> {
         }
         self.ensure_manifest()?;
 
-        self.with_resource_lock(session_lock_key(session_id), || {
+        self.with_session_memory_write(session_id, || {
+            if let Some(mut run) = self.open_sleep_run_for_session(session_id)? {
+                self.recover_sleep_prompt_context(&mut run)?;
+                return Ok(run);
+            }
             let sleep_result = self.sleep_stage1_unlocked(session_id)?;
             let run = sleep_run_from_stage1_with_options(sleep_result, options)?;
             self.storage.save_sleep_run(&run)?;
             Ok(run)
         })
+    }
+
+    fn open_sleep_run_for_session(&self, session_id: &str) -> Result<Option<SleepRun>> {
+        let runs = self
+            .storage
+            .load_sleep_runs()?
+            .into_items()
+            .into_iter()
+            .filter(|run| run.session_id == session_id && run.stage != SleepRunStage::Finished)
+            .collect();
+        Ok(self
+            .reconcile_sleep_runs_unlocked(session_id, runs)?
+            .into_iter()
+            .next())
+    }
+
+    fn reconcile_sleep_runs_unlocked(
+        &self,
+        session_id: &str,
+        runs: Vec<SleepRun>,
+    ) -> Result<Vec<SleepRun>> {
+        if runs.is_empty() {
+            return Ok(runs);
+        }
+        let (archives, covered) = self.sleep_archive_coverage_unlocked(session_id)?;
+        let mut viable = Vec::new();
+        for mut run in runs {
+            validate_sleep_run(&run)?;
+            let archive = sleep_run_archive(&run, &archives)?;
+            if sleep_run_is_superseded(archive, &covered) {
+                self.retire_superseded_sleep_run(&run, archive)?;
+            } else {
+                let recoverable = match self.recover_sleep_prompt_context(&mut run) {
+                    Ok(()) => true,
+                    Err(MemoryEngineError::NeedsNewReview) => false,
+                    Err(error) => return Err(error),
+                };
+                viable.push((run, archive, recoverable));
+            }
+        }
+        viable.sort_by(
+            |(left, left_archive, left_recoverable), (right, right_archive, right_recoverable)| {
+                right_recoverable
+                    .cmp(left_recoverable)
+                    .then_with(|| {
+                        sleep_recovery_priority(right, right_archive)
+                            .cmp(&sleep_recovery_priority(left, left_archive))
+                    })
+                    .then_with(|| left.sleep_task_id.cmp(&right.sleep_task_id))
+            },
+        );
+
+        // Preserve disjoint legacy checkpoints so the host can finish already
+        // paid work. Only the best progressed run of overlapping inputs goes
+        // to the provider. An unverifiable run stays visible for explicit
+        // cancellation, but next_sleep_batch will not issue a request for it.
+        let mut claimed = HashSet::new();
+        let mut selected = Vec::new();
+        for (run, archive, _) in viable {
+            if archive
+                .source_event_ids
+                .iter()
+                .all(|id| !claimed.contains(id))
+            {
+                claimed.extend(archive.source_event_ids.iter().cloned());
+                selected.push(run);
+            }
+        }
+        Ok(selected)
+    }
+
+    fn sleep_archive_coverage_unlocked(
+        &self,
+        session_id: &str,
+    ) -> Result<(Vec<ArchiveEntry>, HashSet<String>)> {
+        let archives = self.storage.read_sleep_archives(session_id)?;
+        let mut metadata = self.storage.read_session_metadata(session_id)?;
+        let mut covered = metadata
+            .archived_event_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut archive_ids = metadata
+            .archived_to
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        // The Archive may already be durable after an interruption before the
+        // session index was saved. The canonical records repair that gap.
+        for archive in archives
+            .iter()
+            .filter(|entry| entry.status == ArchiveStatus::Complete)
+        {
+            covered.extend(archive.source_event_ids.iter().cloned());
+            archive_ids.insert(archive.archive_id.clone());
+        }
+        let indexed_events = covered.iter().cloned().collect::<Vec<_>>();
+        let indexed_archives = archive_ids.into_iter().collect::<Vec<_>>();
+        if !metadata.archived_event_index_complete
+            || metadata.archived_event_ids != indexed_events
+            || metadata.archived_to != indexed_archives
+        {
+            metadata.archived_event_ids = indexed_events;
+            metadata.archived_to = indexed_archives;
+            metadata.archived_event_index_complete = true;
+            self.storage.write_session_metadata(&metadata)?;
+        }
+        Ok((archives, covered.into_iter().collect()))
+    }
+
+    fn retire_superseded_sleep_run(&self, run: &SleepRun, archive: &ArchiveEntry) -> Result<()> {
+        let reason = "sleep inputs are already covered in part or in full by another archive";
+        if archive.status == ArchiveStatus::Preliminary {
+            let mut superseded = archive.clone();
+            superseded.status = ArchiveStatus::Superseded;
+            superseded.updated_at = now_rfc3339()?;
+            self.storage
+                .update_archive_entry(&archive.archive_id, &superseded)?;
+        }
+        for task_id in
+            std::iter::once(run.sleep_task_id.as_str()).chain(run.memory_unit_task_id.as_deref())
+        {
+            cancel_task_if_active(&self.storage, task_id, reason)?;
+        }
+        let mut finished = run.clone();
+        finished.stage = SleepRunStage::Finished;
+        finished.completion_mode = Some("superseded".to_string());
+        self.storage.save_sleep_run(&finished)
+    }
+
+    fn require_current_sleep_coverage(&self, run: &SleepRun, verify_archive: bool) -> Result<()> {
+        if !verify_archive {
+            let covered = self.archived_event_ids_for_session_unlocked(&run.session_id)?;
+            if run.shared_prompt_context.as_ref().is_some_and(|context| {
+                !context.source_event_ids.is_empty()
+                    && context
+                        .source_event_ids
+                        .iter()
+                        .all(|id| !covered.contains(id))
+            }) {
+                return Ok(());
+            }
+        }
+        let (archives, covered) = self.sleep_archive_coverage_unlocked(&run.session_id)?;
+        let archive = sleep_run_archive(run, &archives)?;
+        if sleep_run_is_superseded(archive, &covered) {
+            self.retire_superseded_sleep_run(run, archive)?;
+            return Err(MemoryEngineError::Validation(format!(
+                "sleep run was superseded by committed archive coverage: {}",
+                run.sleep_task_id
+            )));
+        }
+        Ok(())
     }
 
     pub(super) fn sleep_stage1_unlocked(&self, session_id: &str) -> Result<SleepStage1Result> {
@@ -79,9 +242,77 @@ impl<S: Storage> MemoryEngine<S> {
         Ok(result)
     }
 
+    fn current_sleep_run(&self, run: &SleepRun) -> Result<SleepRun> {
+        let current = self.load_sleep_run_for_response(&run.sleep_task_id)?;
+        validate_sleep_run(&current)?;
+        if current.session_id != run.session_id
+            || current.archive_id != run.archive_id
+            || current.sleep_task_id != run.sleep_task_id
+            || current.memory_unit_task_id != run.memory_unit_task_id
+        {
+            return Err(MemoryEngineError::Validation(
+                "sleep run does not match its persisted identity".to_string(),
+            ));
+        }
+        Ok(current)
+    }
+
+    fn require_open_sleep_run(&self, run: &SleepRun) -> Result<()> {
+        if run.stage == SleepRunStage::Finished {
+            return Err(MemoryEngineError::Validation(format!(
+                "sleep run is already finished: {}",
+                run.sleep_task_id
+            )));
+        }
+        Ok(())
+    }
+
+    fn recover_sleep_prompt_context(&self, run: &mut SleepRun) -> Result<()> {
+        match migrate_legacy_sleep_prompt_context(run, None, None) {
+            Err(MemoryEngineError::NeedsNewReview) => {}
+            result => return result,
+        }
+
+        let archive = self.storage.read_archive_entry_raw(&run.archive_id)?;
+        match migrate_legacy_sleep_prompt_context(run, Some(&archive), None) {
+            Err(MemoryEngineError::NeedsNewReview) => {}
+            result => return result,
+        }
+        let task = match self.load_task_for_response(&run.sleep_task_id) {
+            Ok(task) if task.task_type == TaskType::SleepCompression => task,
+            Ok(_)
+            | Err(MemoryEngineError::TaskNotFound(_))
+            | Err(MemoryEngineError::OperationResultUnavailable) => {
+                return Err(MemoryEngineError::NeedsNewReview);
+            }
+            Err(error) => return Err(error),
+        };
+        migrate_legacy_sleep_prompt_context(run, Some(&archive), Some(&task.inputs))
+    }
+
     pub fn next_sleep_batch(&self, mut run: SleepRun) -> Result<SleepRunStep> {
         validate_sleep_run(&run)?;
-        migrate_legacy_sleep_prompt_context(&mut run)?;
+        self.ensure_manifest()?;
+        let session_id = run.session_id.clone();
+        self.with_session_memory_write(&session_id, || {
+            let mut current = self.current_sleep_run(&run)?;
+            if current.stage == SleepRunStage::Finished && run.stage == SleepRunStage::Finished {
+                return Ok(SleepRunStep {
+                    run: current,
+                    batch: None,
+                });
+            }
+            self.require_open_sleep_run(&current)?;
+            self.require_open_sleep_run(&run)?;
+            self.require_current_sleep_coverage(&current, false)?;
+            self.recover_sleep_prompt_context(&mut current)?;
+            run.shared_prompt_context = current.shared_prompt_context;
+            self.next_sleep_batch_unlocked(run)
+        })
+    }
+
+    fn next_sleep_batch_unlocked(&self, mut run: SleepRun) -> Result<SleepRunStep> {
+        migrate_legacy_sleep_prompt_context(&mut run, None, None)?;
 
         let batch = loop {
             advance_sleep_run_stage(&mut run)?;
@@ -131,7 +362,25 @@ impl<S: Storage> MemoryEngine<S> {
         responses: Vec<LlmResponse>,
     ) -> Result<SleepRunStep> {
         validate_sleep_run(&run)?;
+        self.ensure_manifest()?;
+        let session_id = run.session_id.clone();
+        self.with_session_memory_write(&session_id, || {
+            let mut current = self.current_sleep_run(&run)?;
+            self.require_open_sleep_run(&current)?;
+            self.require_open_sleep_run(&run)?;
+            self.require_current_sleep_coverage(&current, false)?;
+            self.recover_sleep_prompt_context(&mut current)?;
+            run.shared_prompt_context = current.shared_prompt_context;
+            migrate_legacy_sleep_prompt_context(&mut run, None, None)?;
+            self.submit_sleep_batch_unlocked(run, responses)
+        })
+    }
 
+    fn submit_sleep_batch_unlocked(
+        &self,
+        mut run: SleepRun,
+        responses: Vec<LlmResponse>,
+    ) -> Result<SleepRunStep> {
         for response in responses {
             let request_id = llm_response_request_id(&response).to_string();
             let Some(index) = run
@@ -154,13 +403,12 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         self.storage.save_sleep_run(&run)?;
-        self.next_sleep_batch(run)
+        self.next_sleep_batch_unlocked(run)
     }
 
     pub fn finish_sleep_run(&self, mut run: SleepRun) -> Result<SleepOutcome> {
         validate_sleep_run(&run)?;
         advance_sleep_run_stage(&mut run)?;
-        self.storage.save_sleep_run(&run)?;
         if run.stage != SleepRunStage::ReadyToFinish {
             return Err(MemoryEngineError::Validation(
                 "sleep run is not ready to finish".to_string(),
@@ -168,7 +416,15 @@ impl<S: Storage> MemoryEngine<S> {
         }
 
         let session_id = run.session_id.clone();
-        self.with_resource_lock(session_lock_key(&session_id), || {
+        self.ensure_manifest()?;
+        self.with_session_memory_write(&session_id, || {
+            let mut current = self.current_sleep_run(&run)?;
+            self.require_open_sleep_run(&current)?;
+            self.require_current_sleep_coverage(&current, true)?;
+            self.recover_sleep_prompt_context(&mut current)?;
+            run.shared_prompt_context = current.shared_prompt_context;
+            migrate_legacy_sleep_prompt_context(&mut run, None, None)?;
+            self.storage.save_sleep_run(&run)?;
             let mut sleep_result = assemble_sleep_compression_from_tracks(&run)?;
             if let Some(gist) = run
                 .consolidator_gist
@@ -189,17 +445,26 @@ impl<S: Storage> MemoryEngine<S> {
             apply_sleep_run_tags(&mut sleep_result, &run);
 
             let mut archive_entry =
-                self.resume_sleep_compression_unlocked(&run.sleep_task_id, sleep_result)?;
+                self.resume_sleep_compression_unlocked(&run.sleep_task_id, sleep_result, false)?;
 
             if let Some(memory_unit_task_id) = run.memory_unit_task_id.clone() {
-                let memory_unit_result = run
-                    .memory_unit_result
-                    .clone()
-                    .map(serde_json::from_value::<MemoryUnitPassResult>)
-                    .transpose()?
-                    .unwrap_or_else(|| empty_memory_unit_result(&run.archive_id));
-                archive_entry =
-                    self.resume_memory_unit_pass(&memory_unit_task_id, memory_unit_result)?;
+                let memory_unit_result = accepted_memory_unit_result(&run)?;
+                let mut task = self.load_task_for_response(&memory_unit_task_id)?;
+                let legacy_completion = task.state == TaskState::Completed
+                    && task.outcome.is_none()
+                    && !self.memory_unit_publication_exists(&run.archive_id)?;
+                // Continue an interrupted legacy run from its existing
+                // Archive without claiming to replay its unknown extraction.
+                let accepted = memory_unit_result.filter(|_| !legacy_completion);
+                if let Some(result) = accepted {
+                    archive_entry = self.resume_memory_unit_pass_unlocked(&mut task, result)?;
+                } else if task.state != TaskState::Completed {
+                    // A failed or skipped pass has no accepted result. Keep
+                    // repair available even if its local fallback was empty.
+                    task.state = TaskState::Completed;
+                    task.updated_at = now_rfc3339()?;
+                    self.storage.save_task(&task)?;
+                }
             }
 
             let core_summary = self.apply_archive_personal_signal_bridge(&archive_entry)?;
@@ -247,7 +512,6 @@ impl<S: Storage> MemoryEngine<S> {
     /// paid work is retained and selected events still become archived.
     pub fn finish_sleep_run_with_available(&self, mut run: SleepRun) -> Result<SleepOutcome> {
         validate_sleep_run(&run)?;
-        migrate_legacy_sleep_prompt_context(&mut run)?;
         while !matches!(
             run.stage,
             SleepRunStage::ReadyToFinish | SleepRunStage::Finished
@@ -255,19 +519,38 @@ impl<S: Storage> MemoryEngine<S> {
             fallback_unfinished_sleep_requests(&mut run, "host_budget_stop");
             advance_sleep_run_stage(&mut run)?;
         }
-        self.storage.save_sleep_run(&run)?;
         self.finish_sleep_run(run)
     }
 
     pub fn pending_sleep_runs(&self) -> Result<Vec<SleepRun>> {
         self.ensure_manifest()?;
-        let mut runs = self
-            .storage
-            .load_sleep_runs()?
-            .into_items()
-            .into_iter()
-            .filter(|run| run.stage != SleepRunStage::Finished)
-            .collect::<Vec<_>>();
+        let mut by_session = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for run in self.storage.load_sleep_runs()?.into_items() {
+            if run.stage != SleepRunStage::Finished {
+                by_session
+                    .entry(run.session_id)
+                    .or_default()
+                    .push(run.sleep_task_id);
+            }
+        }
+
+        let mut runs = Vec::new();
+        for (session_id, task_ids) in by_session {
+            runs.extend(self.with_session_memory_write(&session_id, || {
+                let mut current = Vec::new();
+                for task_id in task_ids {
+                    let run = match self.load_sleep_run_for_response(&task_id) {
+                        Ok(run) => run,
+                        Err(MemoryEngineError::OperationStale) => continue,
+                        Err(error) => return Err(error),
+                    };
+                    if run.session_id == session_id && run.stage != SleepRunStage::Finished {
+                        current.push(run);
+                    }
+                }
+                self.reconcile_sleep_runs_unlocked(&session_id, current)
+            })?);
+        }
         runs.sort_by(|left, right| left.sleep_task_id.cmp(&right.sleep_task_id));
         Ok(runs)
     }
@@ -280,7 +563,7 @@ impl<S: Storage> MemoryEngine<S> {
         }
         self.ensure_manifest()?;
 
-        self.with_resource_lock(session_lock_key(session_id), || {
+        self.with_session_memory_write(session_id, || {
             let active_repair_archive_ids = self
                 .storage
                 .load_tasks()?
@@ -298,12 +581,6 @@ impl<S: Storage> MemoryEngine<S> {
                 })
                 .collect::<HashSet<_>>();
 
-            let all_events = self.read_session_events_with_archived(session_id)?;
-            let event_by_id = all_events
-                .iter()
-                .map(|event| (event.event_id.as_str(), event))
-                .collect::<HashMap<_, _>>();
-
             let mut archives = self
                 .storage
                 .read_archive(&ArchiveFilters::default())?
@@ -317,21 +594,50 @@ impl<S: Storage> MemoryEngine<S> {
                         && !active_repair_archive_ids.contains(&archive.archive_id)
                 })
                 .collect::<Vec<_>>();
+            if archives.is_empty() {
+                return Ok(Vec::new());
+            }
+            let repairable = self
+                .storage
+                .load_sleep_runs()?
+                .into_items()
+                .into_iter()
+                .filter(|run| run.session_id == session_id && run.stage == SleepRunStage::Finished)
+                .filter(|run| {
+                    run.failed_passes
+                        .iter()
+                        .chain(&run.skipped_passes)
+                        .any(|pass| pass == "memory_unit_pass")
+                })
+                .map(|run| run.archive_id)
+                .collect::<HashSet<_>>();
+            archives.retain(|archive| repairable.contains(&archive.archive_id));
+            if archives.is_empty() {
+                return Ok(Vec::new());
+            }
             archives.sort_by(|left, right| {
                 left.created_at
                     .cmp(&right.created_at)
                     .then_with(|| left.archive_id.cmp(&right.archive_id))
             });
 
+            let all_events = self.read_session_events_with_archived(session_id)?;
+            let event_by_id = all_events
+                .iter()
+                .map(|event| (event.event_id.as_str(), event))
+                .collect::<HashMap<_, _>>();
             let now = now_rfc3339()?;
             let mut requests = Vec::new();
             for archive in archives {
+                if self.memory_unit_publication_exists(&archive.archive_id)? {
+                    continue;
+                }
                 let events = archive
                     .source_event_ids
                     .iter()
                     .filter_map(|event_id| event_by_id.get(event_id.as_str()).copied())
                     .collect::<Vec<_>>();
-                if events.is_empty() {
+                if events.len() != archive.source_event_ids.len() {
                     continue;
                 }
                 let task = build_memory_unit_repair_task(session_id, &events, &archive, &now)?;
@@ -356,24 +662,20 @@ impl<S: Storage> MemoryEngine<S> {
                 "memory unit repair task_id must not be empty".to_string(),
             ));
         }
-        self.ensure_manifest()?;
+        self.with_archive_task_response(
+            task_id,
+            "preliminary_archive_id",
+            TaskType::MemoryUnitPass,
+            |mut task| self.submit_memory_unit_repair_unlocked(&mut task, response),
+        )
+    }
 
-        let task = self.storage.load_task(task_id)?;
-        if task.task_type != TaskType::MemoryUnitPass {
-            return Err(MemoryEngineError::Validation(format!(
-                "task is not memory_unit_pass: {task_id}"
-            )));
-        }
-        let archive_id = task
-            .inputs
-            .get("preliminary_archive_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                MemoryEngineError::Validation(format!(
-                    "memory_unit_pass task has no preliminary_archive_id: {task_id}"
-                ))
-            })?
-            .to_string();
+    fn submit_memory_unit_repair_unlocked(
+        &self,
+        task: &mut PendingTask,
+        response: LlmResponse,
+    ) -> Result<Option<ArchiveEntry>> {
+        let archive_id = workflow_task_archive_id(task, "preliminary_archive_id")?.to_string();
 
         let result = match response {
             LlmResponse::Ok { text, .. } => {
@@ -393,8 +695,8 @@ impl<S: Storage> MemoryEngine<S> {
                 match parsed {
                     Ok(result) => result,
                     Err(err) => {
-                        self.mark_memory_unit_task_failed_best_effort(
-                            task_id,
+                        self.mark_workflow_task_failed_best_effort(
+                            task,
                             format!("memory unit repair parse failed: {err}"),
                         );
                         return Err(err);
@@ -403,15 +705,12 @@ impl<S: Storage> MemoryEngine<S> {
             }
             LlmResponse::Err { kind, detail, .. } => {
                 if kind == LlmErrorKind::Transport {
-                    self.mark_memory_unit_task_failed_best_effort(
-                        task_id,
-                        format!("{kind:?}: {detail}"),
-                    );
+                    self.mark_workflow_task_failed_best_effort(task, format!("{kind:?}: {detail}"));
                     return Ok(None);
                 }
                 return self
-                    .repair_memory_units_from_archive_tracks(
-                        task_id,
+                    .repair_memory_units_from_archive_tracks_unlocked(
+                        task,
                         &archive_id,
                         format!("{kind:?}: {detail}"),
                     )
@@ -419,25 +718,24 @@ impl<S: Storage> MemoryEngine<S> {
             }
         };
 
-        self.resume_memory_unit_pass(task_id, result).map(Some)
+        self.resume_memory_unit_pass_unlocked(task, result)
+            .map(Some)
     }
 
-    fn repair_memory_units_from_archive_tracks(
+    fn repair_memory_units_from_archive_tracks_unlocked(
         &self,
-        task_id: &str,
+        task: &mut PendingTask,
         archive_id: &str,
         failure_detail: String,
     ) -> Result<ArchiveEntry> {
-        let mut task = self.storage.load_task(task_id)?;
-        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
-        let now = now_rfc3339()?;
-        if task.state == TaskState::Completed || !archive_entry.memory_units.is_empty() {
-            task.state = TaskState::Completed;
-            task.updated_at = now;
-            task.last_error = None;
-            self.storage.save_task(&task)?;
-            return Ok(archive_entry);
+        let archive_entry = self.storage.read_archive_entry_raw(archive_id)?;
+        if archive_entry.status == ArchiveStatus::Superseded || task.state == TaskState::Cancelled {
+            return Err(MemoryEngineError::Validation(format!(
+                "memory unit task belongs to a retired sleep run: {}",
+                task.task_id
+            )));
         }
+        let now = now_rfc3339()?;
 
         let mut units = Vec::new();
         let mut seen = HashSet::new();
@@ -542,34 +840,23 @@ impl<S: Storage> MemoryEngine<S> {
             )?;
         }
 
-        for unit in &units {
-            self.storage.write_memory_unit(unit)?;
-        }
-
-        archive_entry.updated_at = now.clone();
-        archive_entry.memory_units = units;
-        archive_entry.compact_memory =
-            render_compact_memory_from_units(&archive_entry.memory_units);
-        self.storage
-            .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
-
-        task.state = TaskState::Completed;
-        task.updated_at = now;
-        task.last_error = Some(format!(
-            "memory unit repair used archive-track fallback after LLM failure: {failure_detail}"
-        ));
-        self.storage.save_task(&task)?;
-
-        Ok(archive_entry)
+        self.publish_memory_units(
+            task, archive_id, serializable_digest(&("repair_from_archive", archive_id))?, units,
+            Some(format!("memory unit repair used archive-track fallback after LLM failure: {failure_detail}")),
+        )
     }
 
     pub fn cancel_sleep_run(&self, sleep_task_id: &str) -> Result<SleepRun> {
-        let run = self.storage.load_sleep_run(sleep_task_id)?;
+        self.ensure_manifest()?;
+        let run = self.load_sleep_run_for_response(sleep_task_id)?;
         validate_sleep_run(&run)?;
         let session_id = run.session_id.clone();
-        self.with_resource_lock(session_lock_key(&session_id), || {
-            let mut run = self.storage.load_sleep_run(sleep_task_id)?;
+        self.with_session_memory_write(&session_id, || {
+            let mut run = self.load_sleep_run_for_response(sleep_task_id)?;
             validate_sleep_run(&run)?;
+            if run.stage == SleepRunStage::Finished {
+                return Ok(run);
+            }
             cancel_task_if_active(&self.storage, &run.sleep_task_id, "sleep run cancelled")?;
             if let Some(memory_unit_task_id) = run.memory_unit_task_id.as_deref() {
                 cancel_task_if_active(&self.storage, memory_unit_task_id, "sleep run cancelled")?;
@@ -582,20 +869,46 @@ impl<S: Storage> MemoryEngine<S> {
     }
 
     pub fn seed_core_from_archives(&self) -> Result<CoreArchiveSeedSummary> {
+        self.seed_core_from_archive_selection(None)
+    }
+
+    pub fn seed_core_from_archives_in_scope(&self, scope: &str) -> Result<CoreArchiveSeedSummary> {
+        super::scope_inspection::validate_inspection_scope(scope)?;
+        self.seed_core_from_archive_selection(Some(scope))
+    }
+
+    fn seed_core_from_archive_selection(
+        &self,
+        scope: Option<&str>,
+    ) -> Result<CoreArchiveSeedSummary> {
         self.ensure_manifest()?;
         let mut summary = CoreArchiveSeedSummary::default();
         let archives = self
             .storage
-            .read_archive(&ArchiveFilters::default())?
+            .read_archive_scoped(&ArchiveFilters::default(), scope, None)?
             .into_items();
         for archive in archives
             .into_iter()
             .filter(|archive| archive.status == ArchiveStatus::Complete)
         {
             summary.archives += 1;
-            let archive_summary = self
-                .with_resource_lock(session_lock_key(&archive.source_session_id), || {
-                    self.apply_archive_personal_signal_bridge(&archive)
+            if archive.personal_signals.is_empty() {
+                continue;
+            }
+            let scope = archive.effective_personality_scope_id();
+            let archive_summary =
+                self.with_memory_write(scope, &archive.source_session_id, || {
+                    let Some(current) = self
+                        .storage
+                        .read_archive_detail_scoped(scope, &archive.archive_id)?
+                        .and_then(|snapshot| snapshot.items.into_iter().next())
+                    else {
+                        return Ok(CoreSignalSummary::default());
+                    };
+                    if current.source_session_id != archive.source_session_id {
+                        return Ok(CoreSignalSummary::default());
+                    }
+                    self.apply_archive_personal_signal_bridge(&current)
                 })?;
             summary.created += archive_summary.created;
             summary.updated += archive_summary.updated;
@@ -609,18 +922,22 @@ impl<S: Storage> MemoryEngine<S> {
         archive: &ArchiveEntry,
     ) -> Result<CoreSignalSummary> {
         let mut summary = CoreSignalSummary::default();
-        if archive.status != ArchiveStatus::Complete {
+        if archive.status != ArchiveStatus::Complete || archive.personal_signals.is_empty() {
             return Ok(summary);
         }
 
+        let scope = archive.effective_personality_scope_id();
         let session_events = self.read_session_events_with_archived(&archive.source_session_id)?;
         let attribution_events = session_events
             .iter()
+            .filter(|event| {
+                event.session_id == archive.source_session_id
+                    && event.effective_personality_scope_id() == scope
+            })
             .map(AttributionEvent::from)
             .collect::<Vec<_>>();
         let mut signals = archive.personal_signals.clone();
         attribute_personal_signals(&mut signals, &attribution_events);
-        let scope = Some(archive.effective_personality_scope_id());
 
         for signal in &signals {
             let text = normalize_whitespace(&signal.text);
@@ -650,37 +967,30 @@ impl<S: Storage> MemoryEngine<S> {
                 continue;
             }
 
+            let incoming = CoreFactInput {
+                schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
+                category: category.clone(),
+                scope: Some(scope.to_string()),
+                subject: signal.subject.clone(),
+                text,
+                confidence: signal.confidence,
+                tags: vec![
+                    "archive_signal".to_string(),
+                    "signal_category".to_string(),
+                    format!("signal_category:{category}"),
+                ],
+                source_archive_ids: vec![archive.archive_id.clone()],
+                source_candidate_id: None,
+            };
             let result = self.with_resource_lock(core_lock_key(&category), || {
-                if self.is_near_duplicate_core_fact(
-                    &category,
-                    scope,
-                    signal.subject.as_ref(),
-                    &text,
-                )? {
+                if let Some(reason) = self.core_signal_conflict(&incoming)? {
+                    record_core_signal_skip(&mut summary, reason);
                     return Ok(None);
                 }
-                self.upsert_core_fact_unlocked(
-                    CoreFactInput {
-                        schema_version: CORE_FACT_INPUT_SCHEMA_VERSION.to_string(),
-                        category: category.clone(),
-                        scope: scope.map(str::to_string),
-                        subject: signal.subject.clone(),
-                        text,
-                        confidence: signal.confidence,
-                        tags: vec![
-                            "archive_signal".to_string(),
-                            "signal_category".to_string(),
-                            format!("signal_category:{category}"),
-                        ],
-                        source_archive_ids: vec![archive.archive_id.clone()],
-                        source_candidate_id: None,
-                    },
-                    category.clone(),
-                )
-                .map(Some)
+                self.upsert_core_fact_unlocked(incoming, category.clone())
+                    .map(Some)
             })?;
             let Some(result) = result else {
-                record_core_signal_skip(&mut summary, "near_duplicate");
                 continue;
             };
             if result.created {
@@ -874,34 +1184,32 @@ impl<S: Storage> MemoryEngine<S> {
         }))
     }
 
-    pub(super) fn is_near_duplicate_core_fact(
-        &self,
-        category_name: &str,
-        scope: Option<&str>,
-        subject: Option<&Speaker>,
-        text: &str,
-    ) -> Result<bool> {
-        let normalized_scope = normalize_optional_string(scope);
-        let needle = normalize_match_text(text);
-        let needle_tokens = meaningful_tokens(text);
-        let category = self.storage.read_core_store_category(category_name)?;
-
+    fn core_signal_conflict(&self, incoming: &CoreFactInput) -> Result<Option<&'static str>> {
+        let normalized_scope = normalize_optional_string(incoming.scope.as_deref());
+        let needle = normalize_match_text(&incoming.text);
+        let needle_tokens = meaningful_tokens(&incoming.text);
+        let category = self.storage.read_core_store_category(&incoming.category)?;
+        for fact in &category.facts {
+            if core_policy::would_recreate_corrected_attribution(fact, incoming)? {
+                return Ok(Some("corrected_attribution"));
+            }
+        }
         for fact in category.facts {
             if fact.status != CoreFactStatus::Active
                 || fact.scope != normalized_scope
-                || !same_subject(fact.subject.as_ref(), subject)
+                || !same_subject(fact.subject.as_ref(), incoming.subject.as_ref())
             {
                 continue;
             }
             if normalize_match_text(&fact.text) == needle {
-                return Ok(false);
+                return Ok(None);
             }
             if token_overlap_sets(&needle_tokens, &meaningful_tokens(&fact.text)) >= 0.55 {
-                return Ok(true);
+                return Ok(Some("near_duplicate"));
             }
         }
 
-        Ok(false)
+        Ok(None)
     }
 
     pub fn resume_sleep_compression(
@@ -918,17 +1226,19 @@ impl<S: Storage> MemoryEngine<S> {
         result.validate_basic()?;
         self.ensure_manifest()?;
 
-        let archive_entry = self.storage.read_archive_entry_by_id(&result.archive_id)?;
-        let session_id = archive_entry.source_session_id.clone();
-        self.with_resource_lock(session_lock_key(&session_id), || {
-            self.resume_sleep_compression_unlocked(task_id, result)
-        })
+        self.with_archive_task_response(
+            task_id,
+            "preliminary_archive_id",
+            TaskType::SleepCompression,
+            |_| self.resume_sleep_compression_unlocked(task_id, result, true),
+        )
     }
 
-    pub(super) fn resume_sleep_compression_unlocked(
+    fn resume_sleep_compression_unlocked(
         &self,
         task_id: &str,
         mut result: SleepCompressionResult,
+        refresh_archive_coverage: bool,
     ) -> Result<ArchiveEntry> {
         if result.schema_version != SLEEP_COMPRESSION_RESULT_SCHEMA_VERSION {
             return Err(MemoryEngineError::IncompatibleSchema {
@@ -937,9 +1247,8 @@ impl<S: Storage> MemoryEngine<S> {
             });
         }
         result.validate_basic()?;
-        self.ensure_manifest()?;
 
-        let mut task = self.storage.load_task(task_id)?;
+        let mut task = self.load_task_for_response(task_id)?;
 
         if task.task_type != TaskType::SleepCompression {
             return Err(MemoryEngineError::Validation(format!(
@@ -947,7 +1256,33 @@ impl<S: Storage> MemoryEngine<S> {
             )));
         }
 
-        let mut archive_entry = self.storage.read_archive_entry_by_id(&result.archive_id)?;
+        let archive_id = workflow_task_archive_id(&task, "preliminary_archive_id")?;
+        if archive_id != result.archive_id {
+            return Err(MemoryEngineError::Validation(format!(
+                "sleep compression archive_id mismatch: task={archive_id} result={}",
+                result.archive_id
+            )));
+        }
+        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
+        if archive_entry.status != ArchiveStatus::Complete {
+            if refresh_archive_coverage && !sleep_task_covers_archive(&task.inputs, &archive_entry)
+            {
+                return Err(MemoryEngineError::NeedsNewReview);
+            }
+            let session_id = &archive_entry.source_session_id;
+            let covered = if refresh_archive_coverage {
+                self.sleep_archive_coverage_unlocked(session_id)?.1
+            } else {
+                self.archived_event_ids_for_session_unlocked(session_id)?
+            };
+            if task.state == TaskState::Cancelled
+                || sleep_run_is_superseded(&archive_entry, &covered)
+            {
+                return Err(MemoryEngineError::Validation(format!(
+                    "sleep compression no longer owns unpublished events: {task_id}"
+                )));
+            }
+        }
         let attribution_events = self
             .read_session_events_with_archived(&archive_entry.source_session_id)?
             .iter()
@@ -1014,43 +1349,43 @@ impl<S: Storage> MemoryEngine<S> {
                 "compact memory pass result must not be empty".to_string(),
             )
         })?;
-        self.ensure_manifest()?;
-
-        let mut task = self.storage.load_task(task_id)?;
-        if task.task_type != TaskType::CompactMemoryPass {
-            return Err(MemoryEngineError::Validation(format!(
-                "task is not compact_memory_pass: {task_id}"
-            )));
-        }
-
-        let archive_id = task
-            .inputs
-            .get("preliminary_archive_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                MemoryEngineError::Validation(format!(
-                    "compact_memory_pass task has no preliminary_archive_id: {task_id}"
-                ))
-            })?;
-        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
-
-        let now = now_rfc3339()?;
-        archive_entry.updated_at = now.clone();
-        archive_entry.compact_memory = Some(compact_memory);
-        self.storage
-            .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
-
-        task.state = TaskState::Completed;
-        task.updated_at = now;
-        task.last_error = None;
-        self.storage.save_task(&task)?;
-
-        Ok(archive_entry)
+        self.with_archive_task_response(
+            task_id,
+            "preliminary_archive_id",
+            TaskType::CompactMemoryPass,
+            |mut task| {
+                let archive_id = workflow_task_archive_id(&task, "preliminary_archive_id")?;
+                let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
+                let now = now_rfc3339()?;
+                archive_entry.updated_at = now.clone();
+                archive_entry.compact_memory = Some(compact_memory);
+                self.storage
+                    .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
+                task.state = TaskState::Completed;
+                task.updated_at = now;
+                task.last_error = None;
+                self.storage.save_task(&task)?;
+                Ok(archive_entry)
+            },
+        )
     }
 
     pub fn resume_memory_unit_pass(
         &self,
         task_id: &str,
+        result: MemoryUnitPassResult,
+    ) -> Result<ArchiveEntry> {
+        self.with_archive_task_response(
+            task_id,
+            "preliminary_archive_id",
+            TaskType::MemoryUnitPass,
+            |mut task| self.resume_memory_unit_pass_unlocked(&mut task, result),
+        )
+    }
+
+    fn resume_memory_unit_pass_unlocked(
+        &self,
+        task: &mut PendingTask,
         result: MemoryUnitPassResult,
     ) -> Result<ArchiveEntry> {
         if result.schema_version != MEMORY_UNITS_RESULT_SCHEMA_VERSION {
@@ -1060,42 +1395,36 @@ impl<S: Storage> MemoryEngine<S> {
             });
         }
         result.validate_basic()?;
-        self.ensure_manifest()?;
-
-        let mut task = self.storage.load_task(task_id)?;
+        let task_id = &task.task_id;
         if task.task_type != TaskType::MemoryUnitPass {
             return Err(MemoryEngineError::Validation(format!(
                 "task is not memory_unit_pass: {task_id}"
             )));
         }
 
-        let archive_id = task
-            .inputs
-            .get("preliminary_archive_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                MemoryEngineError::Validation(format!(
-                    "memory_unit_pass task has no preliminary_archive_id: {task_id}"
-                ))
-            })?;
+        let archive_id = workflow_task_archive_id(task, "preliminary_archive_id")?;
         if archive_id != result.archive_id {
             return Err(MemoryEngineError::Validation(format!(
                 "memory_unit_pass archive_id mismatch: task={archive_id} result={}",
                 result.archive_id
             )));
         }
+        if task.state == TaskState::Completed
+            && task.outcome.is_none()
+            && !self.memory_unit_publication_exists(archive_id)?
+        {
+            return Err(MemoryEngineError::OperationResultUnavailable);
+        }
         let frozen_events = task
             .inputs
             .get("events")
             .and_then(Value::as_array)
-            .ok_or_else(|| {
-                MemoryEngineError::Validation(format!(
-                    "memory_unit_pass task has no frozen events: {task_id}"
-                ))
-            })?
+            .filter(|events| !events.is_empty())
+            .ok_or(MemoryEngineError::NeedsNewReview)?
             .iter()
             .map(|event| serde_json::from_value::<SleepInputEvent>(event.clone()))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| MemoryEngineError::NeedsNewReview)?;
         let allowed_event_ids = frozen_events
             .iter()
             .map(|event| event.event_id.clone())
@@ -1106,81 +1435,79 @@ impl<S: Storage> MemoryEngine<S> {
             .map(AttributionEvent::from)
             .collect::<Vec<_>>();
 
-        let mut archive_entry = self.storage.read_archive_entry_by_id(archive_id)?;
-        let now = now_rfc3339()?;
-        if task.state == TaskState::Completed || !archive_entry.memory_units.is_empty() {
-            task.state = TaskState::Completed;
-            task.updated_at = now;
-            task.last_error = None;
-            self.storage.save_task(&task)?;
-            return Ok(archive_entry);
+        let archive_entry = self.storage.read_archive_entry_raw(archive_id)?;
+        if archive_entry.status == ArchiveStatus::Superseded || task.state == TaskState::Cancelled {
+            return Err(MemoryEngineError::Validation(format!(
+                "memory unit task belongs to a retired sleep run: {task_id}"
+            )));
         }
-
+        let now = now_rfc3339()?;
+        let request_digest = serializable_digest(&result)?;
         let mut units = Vec::new();
         for draft in result.memory_units {
-            let thesis = normalize_whitespace(&draft.thesis);
-            if thesis.is_empty() {
+            if draft.thesis.trim().is_empty() {
                 continue;
             }
-            let subject = resolve_attributed_subject(
-                &draft.source_event_ids,
-                draft.subject_hint,
-                draft.speaker_id.as_deref(),
+            units.push(materialize_memory_unit(
+                &archive_entry,
+                draft,
                 &attribution_events,
-            );
-            units.push(MemoryUnit {
-                schema_version: MEMORY_UNIT_SCHEMA_VERSION.to_string(),
-                memory_unit_id: new_id("mu")?,
-                archive_id: archive_entry.archive_id.clone(),
-                personality_scope_id: archive_entry.personality_scope_id.clone(),
-                source_session_id: archive_entry.source_session_id.clone(),
-                created_at: now.clone(),
-                updated_at: now.clone(),
-                thesis,
-                subject,
-                source_event_ids: draft.source_event_ids,
-                evidence: normalize_optional_string(draft.evidence.as_deref()),
-                tags: draft.tags,
-                weight: draft.weight,
-                status: MemoryUnitStatus::ActiveArchive,
-                fidelity_status: FidelityStatus::Unchecked,
-                fidelity_review: None,
-                forget_review: None,
-                reflection_count: 0,
-                last_reflected_at: None,
-                last_reflection_operation_id: None,
-            });
+                &now,
+                |_| new_id("mu"),
+            )?);
         }
 
-        for unit in &units {
-            self.storage.write_memory_unit(unit)?;
-        }
-
-        archive_entry.updated_at = now.clone();
-        archive_entry.memory_units = units;
-        archive_entry.compact_memory =
-            render_compact_memory_from_units(&archive_entry.memory_units);
-        self.storage
-            .update_archive_entry(&archive_entry.archive_id, &archive_entry)?;
-
-        task.state = TaskState::Completed;
-        task.updated_at = now;
-        task.last_error = None;
-        self.storage.save_task(&task)?;
-
-        Ok(archive_entry)
+        self.publish_memory_units(task, archive_id, request_digest, units, None)
     }
 
-    pub(super) fn mark_memory_unit_task_failed_best_effort(&self, task_id: &str, detail: String) {
-        if let Ok(mut task) = self.storage.load_task(task_id) {
-            if task.task_type == TaskType::MemoryUnitPass {
-                task.state = TaskState::Failed;
-                task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
-                task.last_error = Some(detail);
-                let _ = self.storage.save_task(&task);
-            }
+    pub(super) fn with_archive_task_response<T>(
+        &self,
+        task_id: &str,
+        archive_field: &str,
+        task_type: TaskType,
+        f: impl FnOnce(PendingTask) -> Result<T>,
+    ) -> Result<T> {
+        self.ensure_manifest()?;
+        let snapshot = self.load_task_for_response(task_id)?;
+        if snapshot.task_type != task_type {
+            return Err(MemoryEngineError::Validation(format!(
+                "task is not {task_type:?}: {task_id}"
+            )));
         }
+        let archive_id = workflow_task_archive_id(&snapshot, archive_field)?;
+        let archive = self
+            .storage
+            .read_archive_entry_raw(archive_id)
+            .map_err(|error| self.task_after_erasure_error(task_id, error))?;
+        self.with_memory_write(
+            archive.effective_personality_scope_id(),
+            &archive.source_session_id,
+            || f(self.load_task_for_response(task_id)?),
+        )
     }
+
+    pub(super) fn mark_workflow_task_failed_best_effort(
+        &self,
+        task: &mut PendingTask,
+        detail: String,
+    ) {
+        if matches!(task.state, TaskState::Completed | TaskState::Cancelled) {
+            return;
+        }
+        task.state = TaskState::Failed;
+        task.updated_at = now_rfc3339().unwrap_or_else(|_| task.updated_at.clone());
+        task.last_error = Some(detail);
+        let _ = self.storage.save_task(task);
+    }
+}
+
+fn workflow_task_archive_id<'a>(task: &'a PendingTask, field: &str) -> Result<&'a str> {
+    task.inputs
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            MemoryEngineError::Validation(format!("task has no {field}: {}", task.task_id))
+        })
 }
 
 struct RepairMemoryUnitInput<'a> {
@@ -1189,6 +1516,38 @@ struct RepairMemoryUnitInput<'a> {
     evidence: Option<String>,
     tags: Vec<String>,
     weight: f64,
+}
+
+fn sleep_run_archive<'a>(run: &SleepRun, archives: &'a [ArchiveEntry]) -> Result<&'a ArchiveEntry> {
+    archives
+        .iter()
+        .find(|entry| entry.archive_id == run.archive_id)
+        .ok_or_else(|| {
+            MemoryEngineError::Storage(format!(
+                "Sleep run Archive is unavailable: {}",
+                run.archive_id
+            ))
+        })
+}
+
+fn sleep_run_is_superseded(archive: &ArchiveEntry, covered: &HashSet<String>) -> bool {
+    archive.status == ArchiveStatus::Superseded
+        || (archive.status == ArchiveStatus::Preliminary
+            && archive
+                .source_event_ids
+                .iter()
+                .any(|id| covered.contains(id)))
+}
+
+fn sleep_recovery_priority(run: &SleepRun, archive: &ArchiveEntry) -> (bool, bool, usize) {
+    (
+        archive.status == ArchiveStatus::Complete,
+        run.stage == SleepRunStage::ReadyToFinish,
+        run.requests
+            .iter()
+            .filter(|state| state.completed && state.last_error.is_none())
+            .count(),
+    )
 }
 
 const REPAIR_FALLBACK_MAX_UNITS: usize = 8;

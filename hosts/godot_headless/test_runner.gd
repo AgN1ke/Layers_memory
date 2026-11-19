@@ -14,7 +14,41 @@ func _init() -> void:
         return
 
     engine = MemoryEngineGodot.new()
+    var build: Variant = _loads(engine.build_info())
+    if not (build is Dictionary) or not build.has_all(["version", "commit", "dirty"]):
+        _fail("build_info must return version, commit and dirty before open")
+        return
+    if not (build.version is String) or build.version.is_empty():
+        _fail("build_info is missing the package version")
+        return
+    if build.commit != null and (not (build.commit is String) or build.commit.length() not in [40, 64]):
+        _fail("build_info must report a full SHA or null")
+        return
+    if build.dirty != null and not (build.dirty is bool):
+        _fail("build_info dirty must be a boolean or null")
+        return
+    var expected_commit := OS.get_environment("MEMORY_ENGINE_BUILD_COMMIT")
+    var expected_dirty := OS.get_environment("MEMORY_ENGINE_BUILD_DIRTY")
+    if not expected_commit.is_empty() and build.commit != expected_commit.to_lower():
+        _fail("binary commit does not match the build input")
+        return
+    if not expected_dirty.is_empty() and build.dirty != (expected_dirty == "true"):
+        _fail("binary dirty flag does not match the build input")
+        return
     _expect_ok(engine.open(runtime_dir.path_join("memory"), "godot_headless_conformance"))
+    if failed:
+        return
+
+    var pruned: Variant = _loads(engine.prune_completed_memory_operations())
+    if not (pruned is Dictionary) or pruned.get("schema_version") != "memory_operation_prune_report.v1" or pruned.get("tasks_compacted") != 0:
+        _fail("pruning a fresh FileStorage must return an empty maintenance report")
+        return
+
+    _assert_idempotent_ingest(runtime_dir.path_join("memory"))
+    if failed:
+        return
+
+    _assert_guarded_ingest(runtime_dir.path_join("memory"))
     if failed:
         return
 
@@ -48,6 +82,22 @@ func _init() -> void:
     _assert_core(package)
     if failed:
         return
+    _assert_unknown_request_fields(current_text, archive["archive_id"])
+    if failed:
+        return
+
+    _assert_scoped_memory(archive)
+    if failed:
+        return
+    _assert_subject_actions(runtime_dir.path_join("memory"))
+    if failed:
+        return
+    _assert_quoted_context(runtime_dir.path_join("memory"))
+    if failed:
+        return
+    _assert_partial_archive_publication(archive, runtime_dir.path_join("memory"))
+    if failed:
+        return
 
     print("HOST CONFORMANCE PASSED")
     print("host=godot-headless")
@@ -65,6 +115,57 @@ func _arg_value(name: String) -> String:
             return args[index + 1]
     return ""
 
+func _assert_idempotent_ingest(memory_dir: String) -> void:
+    var event := _dumps({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "godot_user",
+        "timestamp": "2026-11-16T12:00:00Z",
+        "session_id": "godot_idempotent_ingest",
+        "payload": {"text": "Записати один раз."},
+    })
+    var first: Variant = _loads(engine.ingest_idempotent("retry-1", event))
+    if not (first is Dictionary) or first.get("already_applied") != false or not first.has("event"):
+        _fail("idempotent ingest must apply a new operation")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    var replay: Variant = _loads(engine.ingest_idempotent("retry-1", event))
+    if not (replay is Dictionary) or replay.get("already_applied") != true or replay.get("event") != first["event"]:
+        _fail("idempotent ingest must return the original event after reopening")
+
+func _assert_guarded_ingest(memory_dir: String) -> void:
+    var session := "godot_guarded_ingest"
+    var generation := engine.write_generation(session, "")
+    var prior: Variant = _loads(generation)
+    if not (prior is Dictionary) or prior.get("schema_version") != "write_generation.v1":
+        _fail("write_generation must return a generation snapshot")
+        return
+    var erased: Variant = _loads(engine.delete_session(session))
+    if not (erased is Dictionary) or erased.has("error"):
+        _fail("delete_session must erase the captured generation")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    var event := _dumps({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "godot_user",
+        "timestamp": "2026-11-16T12:00:00Z",
+        "session_id": session,
+        "payload": {"text": "Затримана подія."},
+    })
+    var stale: Variant = _loads(engine.ingest_idempotent_at_generation("guarded-old", event, generation))
+    if not (stale is Dictionary) or stale.get("code") != "operation_stale":
+        _fail("guarded ingest must refuse an event from before erasure")
+        return
+    var current := engine.write_generation(session, "")
+    var accepted: Variant = _loads(engine.ingest_idempotent_at_generation("guarded-fresh", event, current))
+    if not (accepted is Dictionary) or accepted.get("already_applied") != false:
+        _fail("guarded ingest must accept a fresh event after erasure")
+
 func _send_user_message(text: String) -> String:
     turn_index += 1
     _ingest("user_message", "godot_user", text, ["host_conformance"])
@@ -80,6 +181,190 @@ func _send_user_message(text: String) -> String:
     var reply := "ACK %s: %s" % [turn_index, text.substr(0, 48)]
     _ingest("assistant_message", "godot_assistant", reply, ["host_conformance_reply"])
     return reply
+
+func _assert_scoped_memory(archive: Dictionary) -> void:
+    var archive_id: String = archive["archive_id"]
+    var memory_unit_id: String = archive["memory_units"][0]["memory_unit_id"]
+    var other_scope := "godot_idempotent_ingest"
+    var summary: Dictionary = _loads(engine.inspect_scope(CORE_SCOPE))
+    if failed:
+        return
+    var counts: Dictionary = summary.get("counts", {})
+    if summary.get("schema_version") != "scoped_memory_summary.v1" or counts.get("sessions") != 1 or counts.get("complete_archives") != 1:
+        _fail("scoped memory summary must describe only its own session and archive")
+        return
+    var episode: Dictionary = _loads(engine.inspect_archive(CORE_SCOPE, archive_id))
+    var unit: Dictionary = _loads(engine.inspect_memory_unit(CORE_SCOPE, memory_unit_id))
+    if failed:
+        return
+    if episode.get("archive", {}).get("archive_id") != archive_id or episode.get("sources", []).is_empty():
+        _fail("scoped archive detail must include its verified sources")
+        return
+    if unit.get("unit", {}).get("memory_unit_id") != memory_unit_id or unit.get("sources", []).is_empty():
+        _fail("scoped unit detail must include its verified sources")
+        return
+    if engine.inspect_archive(other_scope, archive_id) != "null" or engine.inspect_archive(other_scope, "unknown_archive") != "null":
+        _fail("a foreign archive ID must be indistinguishable from an unknown archive ID")
+        return
+    if engine.inspect_memory_unit(other_scope, memory_unit_id) != "null" or engine.remember_back_in_scope(other_scope, memory_unit_id) != "null":
+        _fail("a foreign unit ID must be invisible to scoped reads and writes")
+
+func _assert_subject_actions(memory_dir: String) -> void:
+    var scope := "godot_subject_conformance"
+    var previous_subject := {"id": "alex_first", "name": "Alex"}
+    var corrected_subject := {"id": "alex_second", "name": "Alex"}
+    var stored: Dictionary = _loads(engine.upsert_core_fact(_dumps({
+        "schema_version": "core_fact_input.v1",
+        "category": "godot_scoped_subjects",
+        "scope": scope,
+        "subject": previous_subject,
+        "text": "Alex collects postcards.",
+        "confidence": 1.0,
+    })))
+    if failed:
+        return
+    var fact: Dictionary = stored.get("fact", {})
+    if not fact.has_all(["core_fact_id", "updated_at"]):
+        _fail("Core fact fixture must exist before attribution correction")
+        return
+    var correction := {
+        "schema_version": "core_fact_attribution_input.v1",
+        "scope_id": scope,
+        "core_fact_id": fact["core_fact_id"],
+        "operation_id": "godot_correct_alex",
+        "expected_updated_at": "2000-01-01T00:00:00Z",
+        "change": {"action": "assign", "subject": corrected_subject},
+    }
+    var stale: Dictionary = _loads(engine.correct_core_fact_attribution(_dumps(correction)))
+    if stale.get("code") != "operation_stale":
+        _fail("stale attribution must return a typed Godot error")
+        return
+    correction["expected_updated_at"] = fact["updated_at"]
+    var applied: Dictionary = _loads(engine.correct_core_fact_attribution(_dumps(correction)))
+    if applied.get("fact", {}).get("subject") != corrected_subject:
+        _fail("attribution must accept a stable subject ID")
+        return
+    var view: Dictionary = _loads(engine.inspect_subject(scope, corrected_subject["id"]))
+    if view.get("items", []).size() != 1:
+        _fail("subject view must expose the corrected fact")
+        return
+    var operation := "godot_erase_alex"
+    var erased: Dictionary = _loads(engine.erase_subject(scope, corrected_subject["id"], operation))
+    if erased.get("deleted_core_facts") != 1:
+        _fail("subject erasure must remove the selected fact")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    if _loads(engine.erase_subject(scope, corrected_subject["id"], operation)) != erased:
+        _fail("subject erasure must replay its original receipt after reopening")
+        return
+    view = _loads(engine.inspect_subject(scope, corrected_subject["id"]))
+    if not view.get("items", []).is_empty():
+        _fail("erased Core fact must disappear from the subject view")
+
+func _assert_quoted_context(memory_dir: String) -> void:
+    var scope := "godot_quote_scope"
+    var session_id := "godot_quote_reply"
+    var timestamp := "2026-06-10T10:00:00Z"
+    var source_text := "The <Orion> telescope is packed."
+    var reply_text := "I can bring the stand."
+    var author := {"id": "alex_source", "name": "Alex"}
+    var source: Dictionary = _loads(engine.ingest(_dumps({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "godot_user",
+        "timestamp": timestamp,
+        "session_id": "godot_quote_previous",
+        "personality_scope_id": scope,
+        "memory_text": source_text,
+        "payload": {"text": "untrusted_quote_payload"},
+        "speaker": author,
+        "quoted_event_ids": [],
+    }))).get("stored_event", {})
+    if not source.has("event_id"):
+        _fail("could not ingest a quote source in the same scope")
+        return
+    var reply: Dictionary = _loads(engine.ingest(_dumps({
+        "schema_version": "event.v1",
+        "type": "user_message",
+        "source": "godot_user",
+        "timestamp": "2026-06-10T10:01:00Z",
+        "session_id": session_id,
+        "personality_scope_id": scope,
+        "memory_text": reply_text,
+        "payload": {},
+        "speaker": {"id": "alex_reply", "name": "Alex"},
+        "quoted_event_ids": [source["event_id"]],
+    }))).get("stored_event", {})
+    if not reply.has("event_id"):
+        _fail("could not ingest a reply quoting another session")
+        return
+    var request := _dumps({"schema_version": "core_context_request.v1", "session_id": session_id})
+    var package_json := engine.core_context_package(request)
+    var package: Dictionary = _loads(package_json)
+    var current := "What did we discuss?"
+    var plan: Dictionary = _loads(engine.render_memory_prompt_plan(package_json, current))
+    var expected := [{
+        "event_id": source["event_id"],
+        "status": "available",
+        "speaker": author,
+        "timestamp": timestamp,
+        "text": source_text,
+    }]
+    for layer in [package.get("session_recent", []), package.get("session_trace", []), plan.get("dialogue_events", [])]:
+        if layer.size() != 1 or layer[0].get("event_id") != reply["event_id"] or layer[0].get("quoted_events") != expected:
+            _fail("the Godot context package and plan must project the same verified quote")
+            return
+    var view := engine.render_memory_view(package_json, current)
+    if "<quote " not in view or "The &lt;Orion&gt; telescope is packed." not in view or "untrusted_quote_payload" in view:
+        _fail("the text view must render the escaped authored quote")
+        return
+    var erased: Dictionary = _loads(engine.erase_subject(scope, author["id"], "godot_erase_quote_source"))
+    if erased.get("deleted_events") != 1 or erased.get("detached_quotes") != 1:
+        _fail("erasure must delete the source and detach its quote")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    package_json = engine.core_context_package(request)
+    plan = _loads(engine.render_memory_prompt_plan(package_json, current))
+    var dialogue: Array = plan.get("dialogue_events", [])
+    view = engine.render_memory_view(package_json, current)
+    if dialogue.size() != 1 or dialogue[0].get("event_id") != reply["event_id"] or dialogue[0].get("text") != reply_text or dialogue[0].has("quoted_events"):
+        _fail("reopened storage must retain the reply without the erased quote")
+        return
+    if "Orion" in view or reply_text not in view:
+        _fail("the reopened text view must retain only the reply's authored text")
+
+func _assert_partial_archive_publication(archive: Dictionary, memory_dir: String) -> void:
+    var archive_id: String = archive["archive_id"]
+    var removed: Dictionary = archive["memory_units"][0]
+    var survivor: Dictionary = archive["memory_units"][1]
+    # Fault injection in the disposable conformance fixture.
+    var unit_path := memory_dir.path_join("archive/units").path_join(removed["memory_unit_id"] + ".json")
+    if DirAccess.remove_absolute(unit_path) != OK:
+        _fail("could not remove the canonical unit for the fault fixture")
+        return
+    _expect_ok(engine.open(memory_dir, "godot_headless_conformance"))
+    if failed:
+        return
+    var detail: Dictionary = _loads(engine.inspect_archive(CORE_SCOPE, archive_id))
+    if failed:
+        return
+    var canonical: Array = detail.get("archive", {}).get("memory_units", [])
+    var unit_ids := []
+    for unit in canonical:
+        unit_ids.append(unit["memory_unit_id"])
+    if removed["memory_unit_id"] in unit_ids or survivor["memory_unit_id"] not in unit_ids or detail.get("warnings", []).is_empty():
+        _fail("scoped Archive API must expose partial loss and retain healthy canonical units")
+        return
+    if engine.inspect_memory_unit(CORE_SCOPE, removed["memory_unit_id"]) != "null":
+        _fail("missing canonical unit must stay unavailable despite the embedded copy")
+        return
+    var other_scope := "godot_idempotent_ingest"
+    if engine.inspect_archive(other_scope, archive_id) != "null":
+        _fail("a foreign scope must not discover damaged archive details")
 
 func _run_sleep() -> Dictionary:
     var run: Dictionary = _loads(engine.begin_sleep_run(SESSION_ID))
@@ -359,6 +644,57 @@ func _assert_core(package: Dictionary) -> void:
         _fail("core facts do not include user name:\n%s" % texts)
     if not texts.contains("Іржа"):
         _fail("core facts do not include Irzha:\n%s" % texts)
+
+func _assert_unknown_request_fields(current_text: String, archive_id: String) -> void:
+    var domain_state := {"subject_id": "host-owned", "nested": {"custom_key": true}}
+    var package: Dictionary = _loads(engine.core_context_package(_dumps({
+        "schema_version": "core_context_request.v1",
+        "session_id": SESSION_ID,
+        "core_scope": CORE_SCOPE,
+        "query_text": current_text,
+        "include_core": true,
+        "recall_limit": 5.0,
+        "subject_id": "ignored",
+        "domain_state": domain_state,
+    })))
+    if failed:
+        return
+    if package.get("notes", []) != ['ignored unknown request field: "/subject_id"']:
+        _fail("context must report only the unknown request field: %s" % str(package.get("notes")))
+        return
+    if package.get("domain_state") != domain_state:
+        _fail("context must preserve the host's domain_state")
+        return
+    _assert_core(package)
+    if failed:
+        return
+
+    var recall: Dictionary = _loads(engine.recall(_dumps({
+        "schema_version": "recall_query.v1",
+        "session_id": SESSION_ID,
+        "query_text": current_text,
+        "context": {"host_data": {"custom_key": true}},
+        "filters": {
+            "source_layers": ["archive"],
+            "time_range": {
+                "start": "2026-01-01T00:00:00Z",
+                "end": "2099-01-01T00:00:00Z",
+                "unexpected": true,
+            },
+        },
+        "limit": 1.0,
+        "include_core": false,
+        "explain": true,
+    })))
+    if failed:
+        return
+    var expected := ['ignored unknown request field: "/filters/time_range/unexpected"']
+    if recall.get("notes", []) != expected or recall.get("debug", {}).get("notes", []) != expected:
+        _fail("recall must report the nested unknown field in notes and debug.notes: %s" % str(recall.get("notes")))
+        return
+    var items: Array = recall.get("items", [])
+    if items.size() != 1 or items[0].get("id") != archive_id:
+        _fail("recall must still return the expected archive")
 
 func _event_text(event: Dictionary) -> String:
     var text = event.get("text")

@@ -8,6 +8,147 @@
 
 This is the chronological maintenance log for the project wiki.
 
+## [2026-11-19] update | Авторство висновків після Sleep
+
+До [H5.2 та рядка 16 матриці](pages/planning/integration-hardening-plan-2026-11-15.md#h5--живе-приймання-і-повернення-до-когнітивної-дороги)
+додано відкриту правку за живим випадком Smartest і перевірку того, яку частину
+пропозиції асистента підтримала людина.
+
+## [2026-11-17] update | Scoped dialogue quote projection
+
+Documented source visibility, prompt budget, and the Smartest follow-up in
+the [context contract](pages/foundation/contracts.md#64-corecontextrequest)
+and [integration plan](pages/planning/integration-hardening-plan-2026-11-15.md#h3--канонічне-читання-і-перегляд-у-межах-scope-та-людини).
+
+## [2026-11-16] update | H5 replay scenarios
+
+Recorded the [local reflection and memory-quality scenarios](pages/planning/integration-hardening-plan-2026-11-15.md#h5--живе-приймання-і-повернення-до-когнітивної-дороги)
+and their evidence boundaries in the roadmap.
+
+## [2026-11-16] update | Quote handling in subject erasure
+
+Clarified the [subject erasure contract](pages/foundation/contracts.md#145-перегляд-і-стирання-памяті-за-людиною)
+and recorded Smartest's remaining integration work in the
+[H3 plan](pages/planning/integration-hardening-plan-2026-11-15.md#h3--канонічне-читання-і-перегляд-у-межах-scope-та-людини).
+
+## [2026-11-16] update | Archive recall after repeated context exposure
+
+Recorded the [H4.1 test and four scoring variants](pages/planning/integration-hardening-plan-2026-11-15.md#h4--якість-пригадування-і-час)
+and marked the owner decision pending in the roadmap.
+
+## [2026-11-16] update | H3 conformance evidence
+
+Mapped the FileStorage matrix and Smartest2 host criteria to the
+[local H3.6 acceptance checks](pages/planning/integration-hardening-plan-2026-11-15.md#h3--канонічне-читання-і-перегляд-у-межах-scope-та-людини).
+Recorded completion of all seven H3 steps in the roadmap.
+
+## [2026-11-16] update | Scoped memory adapters and Telegram integration
+
+Recorded [scope-bound host calls and Telegram subject commands](pages/integration/local-development.md#перегляд-і-стирання-в-telegram)
+and updated H3 progress in the plan and roadmap.
+
+## [2026-11-16] update | Core fact attribution correction
+
+Recorded the [Core attribution contract](pages/foundation/contracts.md#виправлення-атрибуції-факту-core)
+and updated H3 progress in the plan and roadmap.
+
+## [2026-11-16] update | Subject memory and quote provenance
+
+Recorded the [subject inspection and erasure contract](pages/foundation/contracts.md#145-перегляд-і-стирання-памяті-за-людиною)
+and the additive event quote reference in the FileStorage contracts.
+Updated H3 progress in the plan and roadmap.
+
+## [2026-11-16] update | Scope-bound memory inspection
+
+Recorded the [Rust inspection and restoration contract](pages/foundation/contracts.md#144-перегляд-і-відновлення-в-межах-scope)
+and updated H3 progress in the roadmap.
+
+## [2026-11-16] update | Canonical FileStorage Archive reads
+
+Recorded the [canonical reading contract](pages/foundation/contracts.md#143-канонічне-читання-archive-у-filestorage)
+and the [decision on quote sources](pages/planning/integration-hardening-plan-2026-11-15.md#h3--канонічне-читання-і-перегляд-у-межах-scope-та-людини).
+Updated H3 progress in the roadmap.
+
+## [2026-11-16] update | Legacy recovery and Storage v2 extraction outcomes
+
+Recorded the rules for recovering saved FileStorage operations and the
+publication behavior shared with Storage v2 in the
+[operation contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage).
+Recorded H2 completion in the integration plan and roadmap.
+
+## [2026-11-16] update | FileStorage lifecycle for completed operations
+
+Recorded replay expiration and recovery dependencies in the
+[FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and [host guide](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю).
+Updated H2 progress.
+
+## [2026-11-16] update | Recoverable FileStorage extraction publication
+
+Recorded completeness and accepted empty results in the
+[FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and [architecture](pages/foundation/architecture.md). Updated H2 progress.
+
+## [2026-11-16] update | Fidelity basis and replay-safe forgetting
+
+Updated the [FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and [host guide](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю)
+with review errors and replay behavior. Recorded H2.3–H2.4 in the existing plan.
+
+## [2026-11-16] update | FileStorage generations for erasure
+
+Recorded the [generation contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and the [host delivery rules](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю).
+Updated the integration plan and roadmap.
+
+## [2026-11-16] update | FileStorage recovery and concurrent reads
+
+Updated the [integrator guide](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю)
+with Sleep recovery after archive publication and typed Python exceptions.
+Recorded synchronized session reads in the FileStorage architecture.
+
+## [2026-11-16] update | H2.1 idempotent FileStorage ingest
+
+Recorded `ingest_idempotent` in the [FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and [integrator guide](pages/integration/local-development.md#відновлення-sleep-і-межі-операцій-із-памʼяттю).
+Updated the integration plan and roadmap.
+
+## [2026-11-15] update | H2 FileStorage operation contract
+
+Recorded the target [FileStorage contract](pages/foundation/contracts.md#142-контракт-приймання-h2-для-операцій-filestorage)
+and its [recovery architecture](pages/foundation/architecture.md). Updated
+the plan and roadmap with the restart reproductions for H2.
+
+## [2026-11-15] update | H1 Python wheel delivery
+
+Added the [wheel installation and verification guide](pages/integration/local-development.md#встановлення-релізного-wheel)
+and moved the current host integration guidance there. Recorded implementation
+of H1.5–H1.7 in the integration plan and roadmap. The first tagged release
+remains a separate acceptance step.
+
+## [2026-11-15] update | H1.4 ignored query fields
+
+Documented response notes for ignored fields in the
+[context and recall contracts](pages/foundation/contracts.md). Updated the H1
+status in the integration plan and roadmap.
+
+## [2026-11-15] update | H1.3 Python adapter contracts
+
+Updated [local development](pages/integration/local-development.md) with the
+installed adapter contract checks and recorded H1.3 in the plan and roadmap.
+
+## [2026-11-15] update | H1.2 build identity
+
+Documented [build identity](pages/integration/local-development.md#як-звірити-джерело-збірки)
+for Python and Godot. Updated the H1 status in the integration plan and roadmap.
+
+## [2026-11-15] update | H1.1 Sleep resume contract
+
+Documented the [FileStorage Sleep driver contract](pages/foundation/contracts.md#94-multi-pass-sleep-provider-contract)
+for repeated starts, restart, and explicit handling of duplicate legacy runs.
+Recorded branch progress in the [integration plan](pages/planning/integration-hardening-plan-2026-11-15.md)
+and [roadmap](pages/planning/roadmap.md).
+
 ## [2026-11-15] update | Local H0 integration checks
 
 Recorded merge `bfbfd9f` in the [integration plan](pages/planning/integration-hardening-plan-2026-11-15.md)
